@@ -1604,7 +1604,7 @@ def run_megakernel_audit(
         except (RuntimeError, OSError, TimeoutError, ValueError, PolicyViolation) as exc:
             blockers.append(f"NSYS_CAPTURE_FAILED: {exc}"[:200])
 
-    # Reclaim shadow workspace inodes immediately (keep only the single instrumented entry file + dump for seal).
+    # Reclaim duplicated shadow workspace trees immediately after bench/nsys (prevents inode bloat).
     shadow_root_str = shadow_info.get("shadow")
     if shadow_root_str and os.environ.get("WEAVEPROF_KEEP_SHADOW") != "1":
         shadow_root = Path(shadow_root_str).resolve()
@@ -1617,28 +1617,15 @@ def run_megakernel_audit(
                 kept_dump = out / dump.name
                 shutil.copy2(dump, kept_dump)
                 dump = kept_dump
+            if rm_path is not None and rm_path.is_file() and rm_path.resolve().is_relative_to(shadow_root):
+                kept_rm = out / rm_path.name
+                shutil.copy2(rm_path, kept_rm)
+                rm_path = kept_rm
+            if names_src is not None and names_src.is_file() and names_src.resolve().is_relative_to(shadow_root):
+                names_src = names_path
             shutil.rmtree(shadow_root, ignore_errors=True)
         except OSError:
             pass
-
-    # Release duplicated shadow workspace trees immediately after bench/nsys (prevents inode bloat).
-    if shadow_info.get("shadow") and os.environ.get("WEAVEPROF_KEEP_SHADOW") != "1":
-        shadow_root = Path(shadow_info["shadow"]).resolve()
-        if instrumented_path is not None and instrumented_path.is_file() and instrumented_path.resolve().is_relative_to(shadow_root):
-            preserved = out / f"instrumented_{instrumented_path.name}"
-            shutil.copy2(instrumented_path, preserved)
-            instrumented_path = preserved
-        if dump.is_file() and dump.resolve().is_relative_to(shadow_root):
-            preserved_dump = out / dump.name
-            shutil.copy2(dump, preserved_dump)
-            dump = preserved_dump
-        if rm_path is not None and rm_path.is_file() and rm_path.resolve().is_relative_to(shadow_root):
-            preserved_rm = out / rm_path.name
-            shutil.copy2(rm_path, preserved_rm)
-            rm_path = preserved_rm
-        if names_src is not None and names_src.is_file() and names_src.resolve().is_relative_to(shadow_root):
-            names_src = names_path
-        shutil.rmtree(shadow_root, ignore_errors=True)
 
     # Optional hardware curves.
     hw: Dict[str, Any] = {}
