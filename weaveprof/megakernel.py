@@ -1243,9 +1243,11 @@ def _capture_nsys_sqlite(
             chk = subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if chk.returncode == 0:
                 pass_keys = (
-                    "CUDA_VISIBLE_DEVICES", "PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "CPATH",
-                    "WEAVEPROF_ROOT", "WEAVEPROF_L0_DIR", "WEAVEPROF_INST_DIR", "WEAVEPROF_OUT_DIR",
-                    "WEAVEPROF_L0_CACHE_DIR", "WEAVEPROF_NSYS_CAPTURE", "PYTHONDONTWRITEBYTECODE",
+                    "HOME", "XDG_CACHE_HOME", "FLASHINFER_WORKSPACE_BASE", "TRITON_CACHE_DIR",
+                    "TORCH_EXTENSIONS_DIR", "CUDA_VISIBLE_DEVICES", "PATH", "LD_LIBRARY_PATH",
+                    "PYTHONPATH", "CPATH", "WEAVEPROF_ROOT", "WEAVEPROF_L0_DIR", "WEAVEPROF_INST_DIR",
+                    "WEAVEPROF_OUT_DIR", "WEAVEPROF_L0_CACHE_DIR", "WEAVEPROF_NSYS_CAPTURE",
+                    "PYTHONDONTWRITEBYTECODE",
                 )
                 env_pairs = [f"{k}={env_nsys[k]}" for k in pass_keys if k in env_nsys]
                 sudo_argv = ["sudo", "-n", "env", *env_pairs, *prof_argv]
@@ -1307,6 +1309,42 @@ def _compact_skew(skew: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _compact_hw_quartiles(hw: Mapping[str, Any]) -> Dict[str, List[float]]:
+    """4-quartile hardware utilization trajectory [Q1, Q2, Q3, Q4] for text-only LLMs."""
+    series = hw.get("hw_series") or {}
+    dur = float((hw.get("kernel") or {}).get("duration_us") or 0.0)
+    if not series or dur <= 0.0:
+        return {}
+    out: Dict[str, List[float]] = {}
+    for key in ("tensor_active", "sm_active", "warp_issue", "dram_read", "dram_write"):
+        curve = series.get(key)
+        if not curve:
+            continue
+        bins: List[List[float]] = [[], [], [], []]
+        for t, v in zip(curve.get("t_us") or [], curve.get("val") or []):
+            tf = float(t)
+            if 0.0 <= tf <= dur:
+                idx = min(3, max(0, int(4.0 * tf / dur)))
+                bins[idx].append(float(v))
+        if any(bins):
+            out[key] = [round(statistics.fmean(b), 1) if b else 0.0 for b in bins]
+    return out
+
+
+def _compact_stages(summary: Mapping[str, Any]) -> Dict[str, List[Any]]:
+    """Compact {stage: [n, mean_us, share_pct]} table for text-only LLMs."""
+    events = summary.get("events") or {}
+    tot = sum(float(v.get("total_us") or 0.0) for v in events.values())
+    if tot <= 0.0:
+        return {}
+    ranked = sorted(events.items(), key=lambda kv: -float(kv[1].get("total_us") or 0.0))[:6]
+    return {
+        k: [int(v.get("n") or 0), round(float(v.get("mean_us") or 0.0), 2),
+            round(100.0 * float(v.get("total_us") or 0.0) / tot, 1)]
+        for k, v in ranked
+    }
+
+
 def _fit_report(report: Dict[str, Any]) -> Dict[str, Any]:
     def size() -> int:
         return len(json.dumps(report, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
@@ -1314,6 +1352,8 @@ def _fit_report(report: Dict[str, Any]) -> Dict[str, Any]:
     trims = (
         lambda: report.__setitem__("causal_opportunities", report["causal_opportunities"][:2]),
         lambda: report.__setitem__("structural_blockers", report["structural_blockers"][:3]),
+        lambda: report.pop("hw_quartiles", None),
+        lambda: report.pop("stage_summary", None),
         lambda: report.__setitem__("causal_opportunities", [
             {"category": o.get("category"), "upper_bound_pct": o.get("upper_bound_pct")} for o in report["causal_opportunities"]]),
         lambda: report.__setitem__("structural_blockers", [b[:60] for b in report["structural_blockers"]][:2]),
@@ -1345,6 +1385,7 @@ def run_megakernel_audit(
     nsys_freq_hz: int = 200000,
     nsys_gpu_device: str | None = None,
     nsys_capture_range: str = "cudaProfilerApi",
+    render_overview_png: bool = False,
     card: str = "auto",
     arch: str | None = None,
     total_sms: int | None = None,
@@ -1633,6 +1674,13 @@ def run_megakernel_audit(
     })
     trace_doc = _merge_hw_trace(trace, hw)
     wp.write_json(trace_doc, str(trace_path))
+    overview_png_path: Optional[Path] = None
+    if render_overview_png:
+        try:
+            from .viz import render_swhw_overview_png
+            overview_png_path = render_swhw_overview_png(trace_doc, out / "overview.png")
+        except Exception as exc:
+            blockers.append(f"OVERVIEW_PNG_FAILED: {type(exc).__name__}: {exc}"[:160])
 
     result = {"status": status, "checks": checks, "failed": failed + (["structural"] if hard_fail else []),
               "metrics": {"overhead_ratio": g_overhead.get("overhead_ratio"), "region_lock": region_lock}}
@@ -1690,6 +1738,8 @@ def run_megakernel_audit(
         "overhead_pct": round(100.0 * float(ratio), 3) if ratio is not None else None,
         "kernel_us": (hw.get("kernel") or {}).get("duration_us") or (skew.get("kernel_us") if skew else None),
         "megakernel_skew": _compact_skew(skew),
+        "stage_summary": _compact_stages(summary) if summary else {},
+        "hw_quartiles": _compact_hw_quartiles(hw) if hw else {},
         "causal_opportunities": _compact_opportunities(causal),
         "structural_blockers": [str(b)[:140] for b in blockers][:6],
         "round_diff": round_diff,

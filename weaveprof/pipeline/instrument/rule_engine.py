@@ -676,6 +676,23 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
             b_stmt = f"{indent}FI_B({ev_id}u, {aux});\n"
             e_stmt = f"\n{indent}FI_E({ev_id}u, {aux});\n"
 
+        # SM100 field lesson: if begin_line sits directly under a braceless
+        # `if (...)` / `else` / `for (...)` / `while (...)` header, wrap the
+        # instrumented body in `{ ... }` so stmt and WP_E stay guarded by the header.
+        prev_idx = b_ln - 2
+        while prev_idx >= 0 and not lines[prev_idx].strip():
+            prev_idx -= 1
+        prev_clean = re.sub(r"//[^\n]*$", "", lines[prev_idx]).strip() if prev_idx >= 0 else ""
+        braceless_parent = bool(
+            int(pr.get("begin_role_id", 0)) == int(pr.get("end_role_id", 0))
+            and prev_clean
+            and not prev_clean.endswith(("{", ";", "}"))
+            and re.match(r"^(?:(?:else\s+)?if|for|while)\s*\(.*\)$|^else$", prev_clean)
+        )
+        if braceless_parent:
+            b_stmt = f"\n{indent}{{\n" + b_stmt.lstrip("\n")
+            e_stmt = e_stmt + f"{indent}}}\n"
+
         stage_edits.append((b_off, 1, -e_off, b_stmt))
         stage_edits.append((e_off, 0, -b_off, e_stmt))
 

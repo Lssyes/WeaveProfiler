@@ -525,6 +525,15 @@ class MegakernelAuditTest(_TmpCase):
         self.assertEqual((hw_kernels[0]["pid"], hw_kernels[0]["ts"], hw_kernels[0]["dur"]), (1, 0.0, 374.0))
         sw_pids = {e["pid"] for e in tevs if isinstance(e.get("pid"), int) and e["pid"] != 1}
         self.assertTrue(sw_pids and all(p >= 100 for p in sw_pids), sw_pids)
+        try:
+            import matplotlib  # noqa: F401
+            from weaveprof.viz import render_swhw_overview_png
+            png = render_swhw_overview_png(out / "trace.perfetto.json.gz", out / "overview.png", dpi=110)
+            raw_png = png.read_bytes()
+            self.assertTrue(raw_png.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertGreater(len(raw_png), 20_000)
+        except ImportError:
+            pass
         # Round-to-round diff against the sealed causal report.
         rep2 = self._audit("pass-r2", prev_causal_report=fb)
         self.assertEqual(rep2["status"], "PASS")
@@ -551,6 +560,20 @@ class MegakernelAuditTest(_TmpCase):
         fb = {"status": "FAIL", "fires": {"load": 64, "mma": 1}, "enclosing_loop": [2, 5]}
         revised = revise_probe_spec(doc, fb, src)
         self.assertEqual([p["id"] for p in revised["probes"]], ["mma"])
+        # Verify weak-LLM tolerance: inline comments & trailing ';' in role expressions + numeric stage suffixes
+        from weaveprof.contract import normalize_probe_spec
+        norm = normalize_probe_spec(
+            {
+                "roles": {"dma": "warp_group_idx == 0 /* producer */;"},
+                "probes": [
+                    {"id": "dma_issue", "begin": {"role": "dma", "line": 3}, "end": {"role": "dma", "line": 3}},
+                    {"id": "softmax0", "begin": {"role": "dma", "line": 4}, "end": {"role": "dma", "line": 4}},
+                ],
+            },
+            src,
+        )
+        self.assertEqual(norm["warp_roles"][0]["predicate"], "warp_group_idx == 0")
+        self.assertEqual([p["semantic_id"] for p in norm["probes"]], ["load", "softmax"])
 
     def test_single_stage_loop_collapse_fails_gate(self):
         # 99.5% of active time collapsed into 1 single compute slab/lane MUST fail the event gate.

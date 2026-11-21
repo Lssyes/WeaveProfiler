@@ -64,7 +64,13 @@ def _expression(value, field, *, language="cuda_cpp"):
             except SyntaxError as exc:
                 raise ValueError(f"{field} must be a single expression") from exc
         return expr
-    if re.search(r"[;{}#\r\n]|//|/\*|\*/", expr):
+    # Tolerate harmless inline comments / trailing semicolon emitted by weaker LLMs on a single line.
+    if "\n" not in expr and "\r" not in expr:
+        expr = re.sub(r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/", "", expr)
+        expr = re.sub(r"//[^\n]*$", "", expr).strip()
+        if expr.endswith(";") and expr.count(";") == 1:
+            expr = expr[:-1].strip()
+    if not expr or re.search(r"[;{}#\r\n]|//|/\*|\*/", expr):
         raise ValueError(f"{field} must be a single expression")
     return expr
 
@@ -157,7 +163,10 @@ def normalize_probe_spec(doc, source_text=None, *, language=None):
                 p["aux_expr"] = _expression(str(raw_slot) if type(raw_slot) is int else raw_slot, "slot", language=language)
         else:
             p.setdefault("aux_expr", "")
-        sem = p.get("semantic_id") or next((s for s in STAGES if pid == s or pid.startswith(s + "_")), None)
+        sem = p.get("semantic_id") or next(
+            (s for s in STAGES if pid == s or pid.startswith(s + "_") or re.fullmatch(rf"{s}\d+", pid)),
+            None,
+        )
         if sem is None:
             low_pid = pid.lower()
             if low_pid.startswith(("dma", "tma", "prefetch", "copy", "cp_async")):

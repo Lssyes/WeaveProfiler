@@ -49,6 +49,14 @@ def main(argv=None):
     causal_sub.add_argument("--arch", default=None, help="Override GPU arch (sm_90a, sm_103a, gfx942)")
     causal_sub.add_argument("--sms", type=int, default=None, help="Override total physical SM/CU count")
 
+    render_sub = subs.add_parser("render", help="Render a 3-panel SW+HW overview PNG from trace.perfetto.json[.gz]")
+    render_sub.add_argument("trace", help="Path to trace.perfetto.json[.gz]")
+    render_sub.add_argument("-o", "--out", required=True, help="Output PNG path")
+    render_sub.add_argument("--title", default=None, help="Optional figure title")
+    render_sub.add_argument("--subtitle", default=None, help="Optional figure subtitle")
+    render_sub.add_argument("--sm", type=int, default=None, help="Physical SM id to feature in Panel (C)")
+    render_sub.add_argument("--dpi", type=int, default=220, help="Output PNG DPI (default: 220)")
+
     args = vars(parser.parse_args(argv))
     action = args.pop("action")
     if action == "seal-check":
@@ -71,6 +79,14 @@ def main(argv=None):
             data = json.loads(inp.read_text(encoding="utf-8"))
         rep = analyze_sw_hw_causality(data, arch=args["arch"], total_sms=args["sms"])
         print(json.dumps(rep, ensure_ascii=False, indent=2))
+        return 0
+    if action == "render":
+        from .viz import render_swhw_overview_png
+        out = render_swhw_overview_png(
+            args["trace"], args["out"], title=args["title"], subtitle=args["subtitle"],
+            focus_sm=args["sm"], dpi=args["dpi"],
+        )
+        print(str(out))
         return 0
     pos = args.pop("target_pos", None)
     if action in ("verify", "validate"):
