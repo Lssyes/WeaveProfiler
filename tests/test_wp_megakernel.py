@@ -580,6 +580,19 @@ class MegakernelAuditTest(_TmpCase):
         )
         self.assertEqual(norm["warp_roles"][0]["predicate"], "warp_group_idx == 0")
         self.assertEqual([p["semantic_id"] for p in norm["probes"]], ["load", "softmax"])
+        # Verify weak-LLM half-open touching boundary repair (a.end == b.begin -> trim a.end by 1)
+        norm_ho = normalize_probe_spec(
+            {
+                "roles": {"cta": "all"},
+                "probes": [
+                    {"id": "load_w", "begin": {"role": "cta", "line": 2}, "end": {"role": "cta", "line": 4}},
+                    {"id": "mma_wh", "begin": {"role": "cta", "line": 4}, "end": {"role": "cta", "line": 5}},
+                ],
+            },
+            src,
+        )
+        self.assertEqual((norm_ho["probes"][0]["begin_line"], norm_ho["probes"][0]["end_line"]), (2, 3))
+        self.assertEqual((norm_ho["probes"][1]["begin_line"], norm_ho["probes"][1]["end_line"]), (4, 5))
 
     def test_single_stage_loop_collapse_fails_gate(self):
         # 99.5% of active time collapsed into 1 single compute slab/lane MUST fail the event gate.
@@ -638,6 +651,23 @@ class MegakernelAuditTest(_TmpCase):
         self.assertFalse(rep["fidelity_gates"]["warps"]["ok"])
         self.assertEqual(rep["fidelity_gates"]["warps"]["code"], "WARP_COVERAGE_INCOMPLETE")
         self.assertTrue(any("WARP_COVERAGE_INCOMPLETE" in b for b in rep["structural_blockers"]), rep)
+
+        # When ALL 12 warps open/close (even if warps 1..3 are idle OPEN+CLOSE-only producer warps), warp gate PASSES.
+        for cta in range(n_ctas):
+            for w in range(wpc):
+                s = cta * wpc + w
+                if s not in slots:
+                    slots[s] = [(BASE_NS, OPEN | 0, cta), (BASE_NS + 500, CLOSE, 0)]
+        dump_full = self.tmp / "all12_warps.wp02.bin"
+        dump_full.write_bytes(WPD.build_dump_bytes(slots, n_slots=n_ctas * wpc, cap=16, wpc=wpc,
+                                                   meta={"arch": "sm_90", "gran": 0, "kernel": "all12_warps"}))
+        rep_ok = mk.run_megakernel_audit(
+            ws, entry_source="sparse_mla.cu", dump_path=dump_full, names=NAMES,
+            runtime_metrics=runtime_metrics(), card="h20", limit=0.10, out_dir=self.tmp / "out-all12-warps",
+            render_overview_png=False,
+        )
+        self.assertEqual(rep_ok["status"], "PASS", rep_ok)
+        self.assertTrue(rep_ok["fidelity_gates"]["warps"]["ok"])
 
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})

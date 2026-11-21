@@ -800,6 +800,9 @@ def _patch_python_signature(fn_lines: List[str], extra_params: str) -> List[str]
 
 def _endpoint_statements(fn, pr):
     """Each endpoint has its own AST boundary and indentation (warp branches can differ)."""
+    if pr.get("begin_role_id") == pr.get("end_role_id"):
+        b, e, ind = _snap_python_probe_lines(fn, int(pr["begin_line"]), int(pr["end_line"]))
+        return b, e, ind, ind
     b, _, bi = _snap_python_probe_lines(fn, pr["begin_line"], pr["begin_line"])
     _, e, ei = _snap_python_probe_lines(fn, pr["end_line"], pr["end_line"])
     # A hoisted endpoint on the final body line must follow the whole loop.

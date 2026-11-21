@@ -212,8 +212,11 @@ def normalize_probe_spec(doc, source_text=None, *, language=None):
                     a["end"]["line"] = bb - 1
     # Also trim a probe whose end_line lands exactly on the start line of a following loop header.
     if source_text is not None:
+        eff_lang = language or doc.get("language")
+        if not eff_lang:
+            eff_lang = "triton" if ("@triton" in source_text or "def " in source_text) else "cuda_cpp"
         try:
-            l_starts = {s for s, _e in loop_spans(source_text, language or "cuda_cpp")}
+            l_starts = {s for s, _e in loop_spans(source_text, eff_lang)}
         except Exception:
             l_starts = set()
         if l_starts:
@@ -222,7 +225,9 @@ def normalize_probe_spec(doc, source_text=None, *, language=None):
                 pb, pe = int(p["begin_line"]), int(p["end_line"])
                 if pb < pe and pe in l_starts:
                     ne = pe - 1
-                    while ne > pb and (ne - 1) < len(src_lines) and not src_lines[ne - 1].strip():
+                    while ne > pb and (ne - 1) < len(src_lines) and (
+                        not src_lines[ne - 1].strip() or src_lines[ne - 1].lstrip().startswith(("#", "//"))
+                    ):
                         ne -= 1
                     p["end_line"] = ne
                     if isinstance(p.get("end"), dict):
