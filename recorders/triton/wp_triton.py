@@ -73,6 +73,7 @@ _DEVICE_EXPORTS = {
     "wp_b": "fi_b",
     "wp_e": "fi_e",
     "wp_m": "fi_m",
+    "wp_trans": "fi_trans",
     "wp_bg": "fi_bg",
     "wp_eg": "fi_eg",
     "wp_mg": "fi_mg",
@@ -89,6 +90,7 @@ _DEVICE_EXPORTS = {
     "WP_B": "fi_b",
     "WP_E": "fi_e",
     "WP_M": "fi_m",
+    "WP_TRANS": "fi_trans",
     "WP_CLOSE": "fi_close",
 }
 

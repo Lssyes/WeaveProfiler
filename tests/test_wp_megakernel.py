@@ -312,7 +312,7 @@ class FrontendFacadeTest(unittest.TestCase):
 
     def test_wp_triton_facades(self):
         self._env(WP_LEVEL=1, WP_TIMER=1)
-        nv_targets = ("FiBuffer", "fi_open", "fi_open_by", "fi_b", "fi_e", "fi_m", "fi_bg", "fi_eg", "fi_mg",
+        nv_targets = ("FiBuffer", "fi_open", "fi_open_by", "fi_b", "fi_e", "fi_m", "fi_trans", "fi_bg", "fi_eg", "fi_mg",
                       "fi_close", "fi_b_by", "fi_e_by", "fi_m_by", "fi_close_by", "fi_attach", "fi_get_attached",
                       "_FiTritonProxy", "write_names")
         fake = self._fake("fi_triton", nv_targets)
