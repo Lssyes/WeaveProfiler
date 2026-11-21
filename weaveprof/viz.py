@@ -267,14 +267,30 @@ def render_swhw_overview_png(
     for sm_id, wmap in (parsed.get("meta_warps_by_sm") or {}).items():
         for w_id, r_lbl in wmap.items():
             sm_warp_role[int(sm_id)][int(w_id)] = str(r_lbl)
+    # Include all opened warp lanes recorded in otherData.sm_warps / otherData.warp_roles (e.g. OPEN/CLOSE-only idle warps)
+    other_sm_warps = parsed["other"].get("sm_warps") or {}
+    if isinstance(other_sm_warps, Mapping):
+        for sm_k, wmap in other_sm_warps.items():
+            if isinstance(wmap, Mapping):
+                for w_k, r_lbl in wmap.items():
+                    try:
+                        sm_warp_role[int(sm_k)][int(w_k)] = str(r_lbl)
+                    except (ValueError, TypeError):
+                        pass
     for sp in sw_spans:
         sm_warp_role[sp["sm"]][sp["warp"]] = sp["role"]
-    # Ensure every warp 0..wpc-1 exists on observed SMs if wpc > 1 (even if idle/unspanned)
-    wpc_meta = int((parsed["other"].get("meta") or {}).get("wpc") or (parsed["other"].get("summary") or {}).get("wpc") or 0)
+    # Ensure every warp 0..wpc-1 exists on observed SMs if wpc > 1 (using otherData.warp_roles when available)
+    wpc_meta = int(
+        parsed["other"].get("wpc")
+        or (parsed["other"].get("meta") or {}).get("wpc")
+        or (parsed["other"].get("summary") or {}).get("wpc")
+        or 0
+    )
+    global_warp_roles = parsed["other"].get("warp_roles") or {}
     if wpc_meta > 1:
         for sm_id in list(sm_warp_role.keys()):
             for w_id in range(wpc_meta):
-                sm_warp_role[sm_id].setdefault(w_id, "idle")
+                sm_warp_role[sm_id].setdefault(w_id, str(global_warp_roles.get(str(w_id), "idle")))
     sm_roles: Dict[int, List[Tuple[int, str]]] = {
         sm_id: sorted(wmap.items()) for sm_id, wmap in sm_warp_role.items()
     }

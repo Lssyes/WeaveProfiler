@@ -1639,6 +1639,15 @@ def verify_warp_completeness(
     gran = int(summary.get("gran") or 0)
     wpc = int(expected_warps or summary.get("wpc") or 1)
     warps_seen: set = set()
+    # 1) Authoritative opened warp lanes from decoder lane_bounds_ns (includes OPEN/CLOSE-only idle warps)
+    lb = summary.get("lane_bounds_ns") or {}
+    if isinstance(lb, Mapping) and wpc > 0:
+        for slot_k in lb:
+            try:
+                warps_seen.add(int(slot_k) % wpc)
+            except (ValueError, TypeError):
+                pass
+    # 2) Also union with spans / thread_name metadata in case lane_bounds_ns is absent
     for ev in (trace.get("traceEvents") or []):
         ph = ev.get("ph")
         if ph == "X" and ev.get("cat") not in ("nsys_kernel", "info"):

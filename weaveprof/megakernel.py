@@ -1180,10 +1180,44 @@ def _hw_counter_events(hw: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return tev
 
 
-def _merge_hw_trace(trace: Mapping[str, Any], hw: Mapping[str, Any]) -> Dict[str, Any]:
+def _merge_hw_trace(
+    trace: Mapping[str, Any],
+    hw: Mapping[str, Any],
+    *,
+    summary: Optional[Mapping[str, Any]] = None,
+    names: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """Shift software PIDs by +100 and prepend topmost nsys hardware timeline events."""
     trace_doc = dict(trace)
+    other = dict(trace_doc.get("otherData") or {})
+    if summary:
+        wpc = int(summary.get("wpc") or 0)
+        if wpc > 0:
+            other["wpc"] = wpc
+        role_names = {str(k): str(v) for k, v in ((names or {}).get("roles") or {}).items()}
+        cta_sm = summary.get("cta_sm") or {}
+        lb = summary.get("lane_bounds_ns") or {}
+        if isinstance(lb, Mapping) and wpc > 0:
+            warp_roles: Dict[str, str] = {}
+            sm_warps: Dict[str, Dict[str, str]] = {}
+            for slot_k, bounds in lb.items():
+                try:
+                    slot_i = int(slot_k)
+                    cta_i, w_i = divmod(slot_i, wpc)
+                    rid = str(bounds[2]) if isinstance(bounds, (list, tuple)) and len(bounds) >= 3 else "0"
+                    rname = role_names.get(rid, f"role{rid}")
+                    warp_roles.setdefault(str(w_i), rname)
+                    sm_v = cta_sm.get(str(cta_i))
+                    if sm_v is not None:
+                        sm_warps.setdefault(str(int(sm_v)), {}).setdefault(str(w_i), rname)
+                except (ValueError, TypeError):
+                    continue
+            if warp_roles:
+                other["warp_roles"] = warp_roles
+            if sm_warps:
+                other["sm_warps"] = sm_warps
     if not (hw and (hw.get("hw_series") or hw.get("kernel"))):
+        trace_doc["otherData"] = other
         return trace_doc
     sw_events: List[Dict[str, Any]] = []
     for raw_ev in (trace.get("traceEvents") or []):
@@ -1197,7 +1231,6 @@ def _merge_hw_trace(trace: Mapping[str, Any], hw: Mapping[str, Any]) -> Dict[str
                 ev["args"] = args_m
         sw_events.append(ev)
     trace_doc["traceEvents"] = _hw_counter_events(hw) + sw_events
-    other = dict(trace_doc.get("otherData") or {})
     other["nsys_hw"] = {k: v for k, v in hw.items() if k != "hw_series"}
     trace_doc["otherData"] = other
     return trace_doc
@@ -1725,7 +1758,7 @@ def run_megakernel_audit(
         "overhead_ratio": g_overhead.get("overhead_ratio"), "source_sha256": source_sha,
         "fidelity_gates": gates, "region_lock": region_lock,
     })
-    trace_doc = _merge_hw_trace(trace, hw)
+    trace_doc = _merge_hw_trace(trace, hw, summary=summary, names=names_doc)
     wrote_gz = False
     if write_perfetto_gz:
         wp.write_json(trace_doc, str(trace_path))
