@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weaveprof"
+version = "0.3.0"
+description = "Semantic GPU profiling with deterministic verification"
+requires-python = ">=3.10"
+
+[project.scripts]
+weaveprof = "weaveprof.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["weaveprof*", "1_scan*", "2_instrument*", "3_capture*", "4_validate*", "knowledge*"]
+
+[tool.setuptools]
+py-modules = ["weaveprof_cli", "registry", "semantics"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.cu", "*.cuh", "*.h", "*.config"]

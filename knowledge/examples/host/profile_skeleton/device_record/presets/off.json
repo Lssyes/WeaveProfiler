@@ -1,0 +1,19 @@
+{
+  "_PROJECT_HOOK": "===== PROJECT HOOK: map these preset knobs to YOUR device build flags/macros =====",
+  "_how_to_fill": "The three presets (off / entry_only / full) are the canonical profiler build modes. Fill compile_defines/compile_flags with the actual preprocessor macros or build args your kernel uses to gate profiling. run_profile.py passes the selected preset name; validate_overhead.py times off vs entry_only vs full using these. Keep the names and semantics; only the flag values are project-specific.",
+  "schema": "profiler-preset/v1",
+  "name": "off",
+  "description": "Profiler fully compiled out. Zero device-side recording, zero buffer traffic. This is the timing baseline for overhead measurement and the correctness reference build.",
+  "enable_profiler": false,
+  "record_entry_anchor": false,
+  "record_all_events": false,
+  "buffer_required": false,
+  "compile_defines": {
+    "REPLACE_WITH_YOUR_PROFILER_ENABLE_MACRO": 0
+  },
+  "_compile_defines_note": "The KEY is a project hook, not just the value. A macro name that does not exist in your device source still compiles cleanly — it simply gates nothing — so a copied-verbatim name produces a build that looks fine and records nothing (or records everything in the 'off' baseline, which silently deflates the measured overhead). Grep your device source for the real `#ifdef` / `if constexpr` guard names and use those exact spellings.",
+  "compile_flags": [],
+  "_compile_flags_note": "Empty is only correct if your 'off' build needs no extra compiler/build args beyond the defines above. Verify by building with this preset and confirming the profiler symbols are absent; do not assume.",
+  "expected_overhead_vs_off": 0.0,
+  "_expected_overhead_note": "0.0 here is definitional, not measured: 'off' IS the baseline this ratio is measured against. The other two presets must carry a real measured number from validate_overhead.py, never a guess."
+}

@@ -1,0 +1,21 @@
+{
+  "_PROJECT_HOOK": "===== PROJECT HOOK: map these preset knobs to YOUR device build flags/macros =====",
+  "_how_to_fill": "full compiles in every event id declared in the ABI (all tasks + phases on all observer tracks). This is the build used for the real capture/decode/perfetto run. Fill compile_defines/compile_flags to enable full recording. validate_overhead.py compares full vs off and enforces the overhead budget from the contract (default max 0.10).",
+  "schema": "profiler-preset/v1",
+  "name": "full",
+  "description": "All declared events recorded on all observer tracks. This is the build the capture -> decode -> perfetto pipeline consumes. Must stay within the contract overhead budget vs the off baseline.",
+  "enable_profiler": true,
+  "record_entry_anchor": true,
+  "record_all_events": true,
+  "buffer_required": true,
+  "compile_defines": {
+    "REPLACE_WITH_YOUR_PROFILER_ENABLE_MACRO": 1,
+    "REPLACE_WITH_YOUR_ENTRY_ANCHOR_ONLY_MACRO": 0,
+    "REPLACE_WITH_YOUR_RECORD_ALL_MACRO": 1
+  },
+  "_compile_defines_note": "The KEYS are project hooks. A macro name that does not exist in your device source compiles cleanly and gates nothing, so this 'full' build can silently degrade to entry-anchor-only: you then get a trace whose only events are the anchor, no operator spans, and an overhead number that looks pleasingly small. Grep the real guard names out of the device source and confirm the decoded event ids cover every id declared in the ABI tasks[].",
+  "compile_flags": [],
+  "_compile_flags_note": "Empty only if no extra build args are needed. Verify by decoding a full capture and checking that every ABI task/phase id actually appears on the tracks that should own it.",
+  "expected_overhead_vs_off": "REPLACE_WITH_MEASURED_RATIO_FROM_validate_overhead.py",
+  "_expected_overhead_note": "Must be the measured full-vs-off ratio, not a guess. This is the number a reader compares against validation.overhead.max in the contract; an invented value that happens to sit under the budget is indistinguishable from a real pass."
+}

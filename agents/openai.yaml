@@ -1,0 +1,4 @@
+interface:
+  display_name: "WeaveProfiler"
+  short_description: "Cross-hardware GPU kernel profiling and validation"
+  default_prompt: "Use $weaveprofiler to scan selected kernel sources, prepare explicit begin/end recorder edits, capture software and hardware evidence, and validate the final timeline."

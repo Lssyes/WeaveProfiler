@@ -1,0 +1,473 @@
+{
+  "schema": "weaveprofiler-semantic-ids/v1",
+  "version": 1,
+  "policy": {
+    "authority": "This file is the only authority for semantic_id, display_name, event_id, and event_id_const.",
+    "resolution_order": [
+      "explicit names.json semantics[event_id].semantic_id",
+      "one unique alias match against the event label",
+      "unknown"
+    ],
+    "aliases_are_match_only": true,
+    "display_name_must_equal_semantic_id": true,
+    "unknown_is_explicit": true,
+    "source_markers_are_hints_only": true,
+    "mlir_required": false,
+    "event_id_is_authoritative": true,
+    "event_id_const_is_authoritative": true,
+    "display_name_is_authoritative": true
+  },
+  "required_ids": [
+    "gemm",
+    "attention",
+    "softmax",
+    "reduction",
+    "moe",
+    "convolution",
+    "megakernel",
+    "load",
+    "wait",
+    "mma",
+    "compute",
+    "epilogue",
+    "store",
+    "barrier",
+    "dispatch",
+    "communication",
+    "unknown"
+  ],
+  "semantics": [
+    {
+      "semantic_id": "gemm",
+      "display_name": "gemm",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "A GEMM or matrix-multiply task, including persistent-tile GEMM.",
+      "aliases": [
+        "gemm",
+        "matmul",
+        "matrix multiply",
+        "persistent gemm",
+        "cublas gemm",
+        "cutlass gemm",
+        "矩阵乘"
+      ],
+      "source_markers": [
+        "cublasGemm",
+        "cutlass::gemm",
+        "persistent_mm",
+        "GEMM",
+        "matmul"
+      ],
+      "event_id": 10,
+      "event_id_const": "EV_GEMM"
+    },
+    {
+      "semantic_id": "attention",
+      "display_name": "attention",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "An attention task such as flash attention, MHA, or FMHA.",
+      "aliases": [
+        "attention",
+        "flash attention",
+        "fmha",
+        "mha",
+        "self attention",
+        "qkv attention",
+        "注意力"
+      ],
+      "source_markers": [
+        "flash_attn",
+        "fmha",
+        "attention",
+        "softmax(Q",
+        "qk^t"
+      ],
+      "event_id": 11,
+      "event_id_const": "EV_ATTENTION"
+    },
+    {
+      "semantic_id": "softmax",
+      "display_name": "softmax",
+      "kind": "shared",
+      "attribution": "compute",
+      "description": "Row max, exponentiation, normalization, or another softmax subtask.",
+      "aliases": [
+        "softmax",
+        "row softmax",
+        "online softmax",
+        "归一化指数"
+      ],
+      "source_markers": [
+        "softmax",
+        "exp2",
+        "row_max",
+        "row_sum"
+      ],
+      "event_id": 16,
+      "event_id_const": "EV_SOFTMAX"
+    },
+    {
+      "semantic_id": "reduction",
+      "display_name": "reduction",
+      "kind": "shared",
+      "attribution": "compute",
+      "description": "A sum, max, mean, or other reduction task at warp, CTA, or grid scope.",
+      "aliases": [
+        "reduction",
+        "reduce",
+        "row reduce",
+        "sum reduce",
+        "max reduce",
+        "归约"
+      ],
+      "source_markers": [
+        "__shfl_xor_sync",
+        "shfl_down",
+        "atomicAdd",
+        "reduce(",
+        "reduction"
+      ],
+      "event_id": 12,
+      "event_id_const": "EV_REDUCTION"
+    },
+    {
+      "semantic_id": "moe",
+      "display_name": "moe",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "Mixture-of-experts routing, expert compute, or combine.",
+      "aliases": [
+        "moe",
+        "mixture of experts",
+        "expert parallel",
+        "experts",
+        "专家网络"
+      ],
+      "source_markers": [
+        "moe",
+        "expert",
+        "topk",
+        "permute",
+        "unpermute"
+      ],
+      "event_id": 13,
+      "event_id_const": "EV_MOE"
+    },
+    {
+      "semantic_id": "convolution",
+      "display_name": "convolution",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "A convolution or implicit-GEMM convolution task.",
+      "aliases": [
+        "convolution",
+        "conv",
+        "conv2d",
+        "implicit gemm",
+        "卷积"
+      ],
+      "source_markers": [
+        "conv2d",
+        "convolution",
+        "implicit_gemm",
+        "fprop",
+        "dgrad",
+        "wgrad"
+      ],
+      "event_id": 14,
+      "event_id_const": "EV_CONVOLUTION"
+    },
+    {
+      "semantic_id": "megakernel",
+      "display_name": "megakernel",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "A fused persistent kernel with a device-side task scheduler.",
+      "aliases": [
+        "megakernel",
+        "mega kernel",
+        "fused persistent",
+        "persistent megakernel",
+        "task graph kernel",
+        "大核"
+      ],
+      "source_markers": [
+        "megakernel",
+        "clusterlaunchcontrol",
+        "try_cancel",
+        "work_queue",
+        "task_queue"
+      ],
+      "event_id": 15,
+      "event_id_const": "EV_MEGAKERNEL"
+    },
+    {
+      "semantic_id": "load",
+      "display_name": "load",
+      "kind": "phase",
+      "attribution": "load",
+      "description": "Global-to-register/shared data movement, including asynchronous copy issue or completion boundaries.",
+      "aliases": [
+        "load",
+        "tma load",
+        "global load",
+        "cp async",
+        "cp.async",
+        "prefetch",
+        "装载",
+        "载入",
+        "取数",
+        "读取"
+      ],
+      "source_markers": [
+        "tl.load",
+        "cp.async",
+        "cp.async.bulk",
+        "tma_load",
+        "global_load",
+        "ld.global",
+        "LDG"
+      ],
+      "event_id": 1,
+      "event_id_const": "EV_LOAD"
+    },
+    {
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "kind": "phase",
+      "attribution": "wait",
+      "wait_subtype": "wait_other",
+      "description": "Time spent waiting for data, a producer, or an asynchronous operation to complete.",
+      "aliases": [
+        "wait",
+        "wait group",
+        "spin wait",
+        "spin",
+        "stall",
+        "自旋",
+        "等待",
+        "阻塞"
+      ],
+      "source_markers": [
+        "wait_group",
+        "try_wait",
+        "mbarrier.test_wait",
+        "s_waitcnt",
+        "while (!ready",
+        "while(!ready"
+      ],
+      "event_id": 2,
+      "event_id_const": "EV_WAIT"
+    },
+    {
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "kind": "phase",
+      "attribution": "compute",
+      "description": "Tensor-core matrix-multiply work, including wgmma, tcgen05.mma, MMA, HMMA, and MFMA.",
+      "aliases": [
+        "mma",
+        "wgmma",
+        "tcgen05 mma",
+        "tcgen05.mma",
+        "mfma",
+        "v mfma",
+        "v_mfma",
+        "hmma",
+        "tensor core",
+        "tensor op",
+        "张量核"
+      ],
+      "source_markers": [
+        "wgmma",
+        "tcgen05.mma",
+        "mma.sync",
+        "v_mfma",
+        "mfma",
+        "tl.dot",
+        "HGMMA",
+        "UTCHMMA"
+      ],
+      "event_id": 3,
+      "event_id_const": "EV_MMA"
+    },
+    {
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "kind": "phase",
+      "attribution": "compute",
+      "description": "Non-MMA arithmetic such as scaling, masking, activation, type conversion, or index calculation.",
+      "aliases": [
+        "compute",
+        "alu",
+        "fma",
+        "exp",
+        "topk",
+        "mask",
+        "计算",
+        "算术"
+      ],
+      "source_markers": [
+        "exp2",
+        "topk",
+        "mask",
+        "fma",
+        "acc.to",
+        "alpha",
+        "beta"
+      ],
+      "event_id": 4,
+      "event_id_const": "EV_COMPUTE"
+    },
+    {
+      "semantic_id": "epilogue",
+      "display_name": "epilogue",
+      "kind": "phase",
+      "attribution": "store",
+      "description": "Accumulator readback, conversion, bias/activation, or writeback preparation after the main loop.",
+      "aliases": [
+        "epilogue",
+        "accumulator read",
+        "tail convert",
+        "收尾转换",
+        "收尾"
+      ],
+      "source_markers": [
+        "epilogue",
+        "tcgen05.ld",
+        "acc.to",
+        "bias",
+        "relu",
+        "gelu"
+      ],
+      "event_id": 5,
+      "event_id_const": "EV_EPILOGUE"
+    },
+    {
+      "semantic_id": "store",
+      "display_name": "store",
+      "kind": "phase",
+      "attribution": "store",
+      "description": "Global writeback, including TMA store completion boundaries.",
+      "aliases": [
+        "store",
+        "global store",
+        "tma store",
+        "writeback",
+        "write back",
+        "写回",
+        "存储",
+        "落盘"
+      ],
+      "source_markers": [
+        "tl.store",
+        "st.global",
+        "cp.async.bulk.tensor",
+        "global_store",
+        "STG"
+      ],
+      "event_id": 6,
+      "event_id_const": "EV_STORE"
+    },
+    {
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "kind": "phase",
+      "attribution": "wait",
+      "wait_subtype": "wait_sync",
+      "description": "CTA, warpgroup, cluster, or grid synchronization and fence wait.",
+      "aliases": [
+        "barrier",
+        "sync",
+        "synchronization",
+        "fence",
+        "mbarrier",
+        "threadfence",
+        "栅栏",
+        "同步",
+        "屏障"
+      ],
+      "source_markers": [
+        "__syncthreads",
+        "bar.sync",
+        "mbarrier",
+        "threadfence",
+        "barrier.cluster",
+        "s_barrier"
+      ],
+      "event_id": 7,
+      "event_id_const": "EV_BARRIER"
+    },
+    {
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "kind": "phase",
+      "attribution": "control",
+      "description": "Task routing, work claiming, or token dispatch/combine control work.",
+      "aliases": [
+        "dispatch",
+        "scatter",
+        "gather",
+        "routing",
+        "route",
+        "分发",
+        "路由",
+        "调度"
+      ],
+      "source_markers": [
+        "try_cancel",
+        "atomicAdd(&ticket",
+        "dispatch",
+        "scatter",
+        "gather",
+        "topk"
+      ],
+      "event_id": 8,
+      "event_id_const": "EV_DISPATCH"
+    },
+    {
+      "semantic_id": "communication",
+      "display_name": "communication",
+      "kind": "shared",
+      "attribution": "memory",
+      "description": "Cross-CTA, cross-GPU, or cross-host communication boundaries; external NIC/fabric evidence remains separate.",
+      "aliases": [
+        "communication",
+        "comm",
+        "allreduce",
+        "all reduce",
+        "allgather",
+        "all gather",
+        "reduce scatter",
+        "broadcast",
+        "nvlink",
+        "xgmi",
+        "rdma",
+        "通信"
+      ],
+      "source_markers": [
+        "nccl",
+        "rccl",
+        "allreduce",
+        "all_gather",
+        "reduce_scatter",
+        "ibv_",
+        "nvlink",
+        "xgmi"
+      ],
+      "event_id": 9,
+      "event_id_const": "EV_COMMUNICATION"
+    },
+    {
+      "semantic_id": "unknown",
+      "display_name": "unknown",
+      "kind": "unknown",
+      "attribution": "other",
+      "description": "Semantic identity was not established. Delivery gates must fail closed.",
+      "aliases": [],
+      "source_markers": []
+    }
+  ]
+}

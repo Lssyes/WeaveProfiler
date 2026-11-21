@@ -1,0 +1,137 @@
+{
+  "schema": "weaveprofiler.composable-two-level-kb/v2",
+  "description": "Composable Two-Level Operator & Primitive Knowledge Base (§3.1): Level 1 defines cross-language, cross-architecture primitive probe templates and invariants; Level 2 composes primitives into whole-CTA warp-specialized and homomorphic operator pipeline topologies.",
+  "canonical_events": {
+    "1": {"name": "load", "const": "EV_LOAD", "five_class": "load", "meaning": "Global/HBM/P2P to Shared/LDS/Register/TMEM data transfer"},
+    "2": {"name": "wait", "const": "EV_WAIT", "five_class": "wait", "meaning": "Asynchronous barrier or producer-consumer dependency wait (strictly OUTSIDE spin loop)"},
+    "3": {"name": "mma", "const": "EV_MMA", "five_class": "compute", "meaning": "Tensor Core / Matrix Core / dot-product mainloop (WMMA, WGMMA, tcgen05, MFMA, tl.dot, cute.gemm)"},
+    "4": {"name": "compute", "const": "EV_COMPUTE", "five_class": "compute", "meaning": "SIMT vector math, online softmax, activation (SwiGLU/exp2), or warp/wave reduction"},
+    "5": {"name": "epilogue", "const": "EV_EPILOGUE", "five_class": "store", "meaning": "Accumulator rescale, bias/residual fusion, or register-to-SMEM staging before global writeback"},
+    "6": {"name": "store", "const": "EV_STORE", "five_class": "store", "meaning": "Final output writeback from registers/SMEM/LDS to HBM/global memory"},
+    "7": {"name": "barrier", "const": "EV_BARRIER", "five_class": "sync", "meaning": "Explicit CTA/wave/cluster synchronization (__syncthreads, s_barrier, barrier.sync)"},
+    "8": {"name": "dispatch", "const": "EV_DISPATCH", "five_class": "compute", "meaning": "Persistent tile scheduling, expert routing lookup, or work-queue atomic ticket fetch"},
+    "9": {"name": "communication", "const": "EV_COMMUNICATION", "five_class": "load", "meaning": "Cross-GPU NVLink/XGMI P2P pull, scatter, ring chunk transfer, or remote signaling"},
+    "10": {"name": "gemm", "const": "EV_GEMM", "five_class": "compute", "meaning": "Fused outer K-loop GEMM stage (enclosing pipelined load + MMA iterations under Scheme A)"}
+  },
+  "level_1_primitives": {
+    "global_invariants": [
+      "INV-1 (Zero Signature Edits): NEVER add buffer pointers, counters, or config structs to `__global__`, `__device__`, `@triton.jit`, or `@cute.kernel` parameter lists. Always use the out-of-band global `wp_g` (`WP_KERNEL_SCOPE` / `wp_open`) sidecar contract.",
+      "INV-2 (Spin-Loop Exclusion): NEVER place `WP_B` / `WP_E` / `wp_b` / `wp_e` inside a polling `while` or `for` spin loop (`while (atomicAdd(...) == 0)`, `while (!mbarrier_try_wait(...))`, `while (*flag != ready)`). Wrap the ENTIRE wait loop from just before `while` to just after `while` exits.",
+      "INV-3 (No Micro-Helper / Inner-Element Probing): NEVER insert probes inside `__device__ __forceinline__` 16B copy/math helpers or inside `#pragma unroll` micro-loops (`for mi`, `for ni`, `for kk`, `for elem`, `for c`). Doing so destroys compiler unrolling, causes register spills, and inflates runtime by 30%–880%.",
+      "INV-4 (Outer-Stage Granularity / Scheme A): On kernels < 5 ms where a mainloop (`for kt`, `for k`, `for tile_k`, `for col_blk`) runs >= 8 iterations, DO NOT place unconditional per-iteration probes inside that inner loop. Instead, hoist probes to wrap: (a) prologue/dispatch/Q-load before the loop, (b) the enclosing hot mainloop as a single `EV_MMA` (3u) or `EV_COMPUTE` (4u) stage, and (c) epilogue/store (6u) outside the writeback element loop. This preserves 100% of loop unrolling and keeps steady-state overhead <= 5%.",
+      "INV-5 (Cross-Warp Async Pairing): When a producer warp issues an async transfer (`cp.async.bulk` TMA, P2P `cp.async`, Ring send) and a consumer warp waits on the `mbarrier` / flag, either (a) pair cross-warp `WP_B` on producer launch with `WP_E` after consumer barrier wait when using matched cross-warp pairing, OR (b) give each warp specialty its own `role_id` via `WP_KERNEL_SCOPE(role_id)` and bracket each role's outer work phase (`EV_LOAD`/`EV_COMMUNICATION` on producer, `EV_WAIT` + `EV_MMA` + `EV_STORE` on consumer) with strictly balanced per-lane `WP_B`/`WP_E` pairs so every active lane has 0 unpaired events.",
+      "INV-6 (Balanced Control Flow): Every executed `WP_B(stage, aux)` on a warp lane MUST execute a matching `WP_E(stage, aux)` with the same `stage` ID before `WP_CLOSE` / kernel return. Handle early `if (cta >= num_tiles) return;` BEFORE `WP_KERNEL_SCOPE(role)` so inactive CTAs exit cleanly without unclosed scopes."
+    ],
+    "language_contracts": {
+      "cuda_cpp": {
+        "headers": "#include \"wp_lite.cuh\"  // (alias of fi_lite.cuh; defines global wp_g / fi_g automatically — NEVER redeclare `FiBuf fi_g;`!)",
+        "scope_open": "WP_KERNEL_SCOPE(role_id);  // Place AFTER early-exit bounds checks (`if (idx >= N) return;`), at top of active kernel body.",
+        "probe_pair": "WP_B(stage_id, aux);\n... stage statements ...\nWP_E(stage_id, aux);",
+        "predicated_pair": "WP_B_PRED(pred, stage_id, aux);\n... stage statements ...\nWP_E_PRED(pred, stage_id, aux);",
+        "pitfalls": [
+          "NEVER write `static __device__ FiBuf fi_g;` in kernel source — header already defines it.",
+          "Place `WP_KERNEL_SCOPE(role)` AFTER `if (tid_cta >= num_tiles) return;` so early-returning warps do not emit orphan OPEN records or overhead.",
+          "In warp-specialized kernels (`if (warp_id == 0) { ... } else { ... }`), compute `uint32_t role = (warp_id == 0) ? 0u : 1u; WP_KERNEL_SCOPE(role);` once before the branch, then put balanced `WP_B`/`WP_E` around the outer loop/phase inside each role branch!"
+        ]
+      },
+      "hip_cpp": {
+        "headers": "#include \"wp_lite_hip.h\"  // (alias of fi_lite_hip.h for AMD ROCm gfx942 wave64; NEVER redeclare `FiBuf fi_g;`!)",
+        "scope_open": "WP_KERNEL_SCOPE(role_id);  // Uses wave64 lane-0 (`threadIdx.x & 63 == 0`) scalar `s_memrealtime` without draining `vmcnt`.",
+        "probe_pair": "WP_B(stage_id, aux);\n... stage statements ...\nWP_E(stage_id, aux);",
+        "pitfalls": [
+          "MI308X (`gfx942`) wavefront size is 64 (`wave_id = threadIdx.x >> 6`, `lane_id = threadIdx.x & 63`). NEVER assume 32threads/warp!",
+          "CRITICAL MI308X MFMA & LDS RULE: `hipcc`/LLVM AMDGPU backend serializes VGPR/SGPR allocation if scalar `s_memrealtime` + global store probes sit inside `for (int kb/kt ...)` MFMA or LDS tile loops (causing 4x GCN instruction bloat and +78% to +289% slowdown!). ALWAYS place `WP_B`/`WP_E` OUTSIDE `for (int kt ...)` and OUTSIDE `for (mi) for (ni) for (i)` store loops!",
+          "For homomorphic HIP kernels with prologue setup + `for (kt)` mainloop + store loop: wrap prologue/LDS setup if outside `kt` (or first tile), wrap the ENTIRE `for (kt)` loop with `WP_B(3u, 0u)` ... `WP_E(3u, 0u)` (`EV_MMA`) or `WP_B(4u, 0u)` (`EV_COMPUTE`), and wrap the ENTIRE output writeback nest with `WP_B(6u, 0u)` ... `WP_E(6u, 0u)` (`EV_STORE`)."
+        ]
+      },
+      "triton": {
+        "nvidia_contract": {
+          "scope_open": "rec, ovf, pid, n, FI = wp_open(pid, 0)  # (or `fi_open(pid, 0)` — transparent launcher proxy injects sidecar buffers)",
+          "probe_pair": "n = wp_b(rec, ovf, pid, n, FI, stage_id, 0)\n... stage ops ...\nn = wp_e(rec, ovf, pid, n, FI, stage_id, 0)",
+          "pitfalls": [
+            "ALWAYS reassign `n = wp_b(...)` and `n = wp_e(...)` because Triton compiles Python variables to SSA values.",
+            "NEVER modify the `def kernel(...):` signature manually when using sidecar `wp_open(pid, role)` — the transparent proxy `_WpTritonProxy` binds `_fi_rec, _fi_ovf, _fi_CFG` automatically!",
+            "Pass integer literals (`1`, `2`, `3`, `4`, `6`, `7`) for `stage_id` and `0` for `aux` inside `@triton.jit` (Triton 3.x forbids reading plain Python module-global `int` inside `@triton.jit` unless `tl.constexpr`).",
+            "HOIST probes OUTSIDE hot `for k in range(0, K, BLOCK_K):` or `for start_n in range(...):` loops! E.g., wrap pointer/prologue setup (`1`), wrap the entire `for k` loop (`3` for `mma` or `4` for `compute`), and wrap output `tl.store` block (`6`)."
+          ]
+        },
+        "amd_contract": {
+          "scope_open": "slot, selected, n = wp_open(0)  # wave64 gfx942 sidecar",
+          "probe_pair": "n = wp_b_16b(time_ptr, tag_ptr, aux_ptr, ovf_ptr, slot, selected, n, stage_id, 0)\n...\nn = wp_e_16b(time_ptr, tag_ptr, aux_ptr, ovf_ptr, slot, selected, n, stage_id, 0)",
+          "pitfalls": [
+            "On AMD MI308X Triton, NEVER place inline-asm probes inside software-pipelined `for k` loops (`num_stages >= 2`), as LLVM's `TritonAMDGPUPipeline` cannot predicate inline asm inside pipelined loops. Always wrap the outer `for k` loop!"
+          ]
+        }
+      },
+      "cutedsl": {
+        "scope_open": "ctx = wp_open(0)  # (or `fi_open(0)`) MUST be placed UNCONDITIONALLY before any `if` or `for` in `@cute.kernel`!",
+        "probe_pair": "ctx = wp_b(ctx, stage_id, 0)\n... stage ops ...\nctx = wp_e(ctx, stage_id, 0)",
+        "pitfalls": [
+          "CRITICAL CuTeDSL MLIR SCF RULE: CuTeDSL traces `if` and `for` into MLIR SCF regions. `ctx = wp_open(0)` MUST be initialized at the top level of the `@cute.kernel` function BEFORE any `if` or `for` statement, and `stage_id` MUST be an integer literal (`1`, `3`, `4`, `6`, `7`) rather than an undefined enum name!",
+          "NEVER modify `@cute.kernel` or `@cute.jit` function parameters manually when using `ctx = wp_open(role)` — `_WpCuteProxy` handles sidecar tensor injection transparently.",
+          "Wrap outer `for k_tile` mainloop with `ctx = wp_b(ctx, 3, 0)` / `ctx = wp_e(ctx, 3, 0)` and epilogue store with `ctx = wp_b(ctx, 6, 0)` / `ctx = wp_e(ctx, 6, 0)`."
+        ]
+      }
+    }
+  },
+  "level_2_cta_topologies": [
+    {
+      "topology_id": "homomorphic_tiled_gemm",
+      "applies_to": ["Dense GEMM", "Persistent GEMM", "cp.async GEMM", "HIP MFMA GEMM", "Triton Persistent GEMM", "CuTeDSL Tiled GEMM"],
+      "cues": ["gemm_cpasync", "gemm_hip_mfma", "persistent_gemm", "wmma::mma_sync", "__builtin_amdgcn_mfma", "tl.dot", "cute.gemm"],
+      "warp_roles": "Single homomorphic CTA role (`role = 0u`). All warps execute tile setup -> K-loop mainloop -> epilogue store.",
+      "compliant_placement_strategy": "Place `WP_KERNEL_SCOPE(0u)` after bounds check. Do NOT probe inside `for (int kt = 0; kt < K/BK; ++kt)`! Instead: (1) optionally wrap prologue/descriptor/first-stage prefetch before the K-loop as `WP_B(1u, 0u)`..`WP_E(1u, 0u)` if nontrivial, (2) wrap the ENTIRE `for (kt ...)` K-loop (which fuses tiled global->shared load, sync, and MMA) as `WP_B(3u, 0u)`..`WP_E(3u, 0u)` (`EV_MMA`), (3) wrap post-loop `__syncthreads()` if present, and (4) wrap the ENTIRE epilogue accumulator store nest (`for mi / for ni / global C[...] = ...`) from outside as `WP_B(6u, 0u)`..`WP_E(6u, 0u)` (`EV_STORE`).",
+      "cuda_hip_example": "WP_KERNEL_SCOPE(0u);\n// accumulator zero-init...\nWP_B(3u, 0u);\nfor (int kt = 0; kt < num_k_tiles; ++kt) {\n    // global -> shared load + __syncthreads() + wmma/mfma...\n}\nWP_E(3u, 0u);\nWP_B(6u, 0u);\n// epilogue shared/global C writeback nest...\nWP_E(6u, 0u);"
+    },
+    {
+      "topology_id": "warp_specialized_gemm",
+      "applies_to": ["2-WG / 3-WG Warp-Specialized GEMM", "Hopper TMA + WGMMA", "Blackwell tcgen05"],
+      "cues": ["gemm_warp_specialized", "gemm_3wg", "Producer", "Consumer", "mbarrier", "wgmma", "warp_group", "is_producer"],
+      "warp_roles": "Decoupled Producer DMA role (`role = 0u` or `1u`) and Consumer Math role (`role = 1u` or `0u`).",
+      "compliant_placement_strategy": "Compute `uint32_t role = is_producer ? 1u : 0u; WP_KERNEL_SCOPE(role);` once at CTA entry (after grid bounds check). Inside the Producer branch (`if (is_producer)`), wrap the entire producer K-tile DMA loop from outside with `WP_B(1u, 0u)`..`WP_E(1u, 0u)` (`EV_LOAD`) — NEVER inside `for (kt)` or `while (!try_wait)`. Inside the Consumer branch (`else`), wrap the entire consumer wait+MMA K-tile loop from outside with `WP_B(3u, 0u)`..`WP_E(3u, 0u)` (`EV_MMA`), and wrap the consumer epilogue global store block from outside with `WP_B(6u, 0u)`..`WP_E(6u, 0u)` (`EV_STORE`).",
+      "cuda_hip_example": "const int wg_id = threadIdx.x / 128;\nWP_KERNEL_SCOPE(wg_id == 0 ? 1u : 0u);\nif (wg_id == 0) {\n    WP_B(1u, 0u);\n    for (int kt = 0; kt < num_k_tiles; ++kt) { /* mbarrier wait + async load + arrive */ }\n    WP_E(1u, 0u);\n} else {\n    WP_B(3u, 0u);\n    for (int kt = 0; kt < num_k_tiles; ++kt) { /* mbarrier wait + mma + arrive */ }\n    WP_E(3u, 0u);\n    WP_B(6u, 0u);\n    /* epilogue store to C */\n    WP_E(6u, 0u);\n}"
+    },
+    {
+      "topology_id": "moe_grouped_gemm",
+      "applies_to": ["Ragged / Grouped Expert MoE GEMM in CUDA, Triton, CuTeDSL"],
+      "cues": ["moe", "MoeTileDesc", "expert_id", "expert_offsets", "grouped_gemm"],
+      "warp_roles": "Homomorphic per-tile CTA (`role = 0u`) processing routed expert tiles.",
+      "compliant_placement_strategy": "Place `WP_KERNEL_SCOPE(0u)` AFTER `if (tid_cta >= num_tiles) return;`. Wrap tile-descriptor / expert routing metadata load (`desc = tiles[tid_cta]`) with `WP_B(8u, 0u)`..`WP_E(8u, 0u)` (`EV_DISPATCH`) or `WP_B(1u, 0u)`..`WP_E(1u, 0u)`, wrap the ENTIRE `for (int kt = 0; kt < num_k_tiles; ++kt)` loop from OUTSIDE with `WP_B(3u, 0u)`..`WP_E(3u, 0u)` (`EV_MMA`), and wrap the ENTIRE epilogue SMEM/global writeback block from OUTSIDE with `WP_B(6u, 0u)`..`WP_E(6u, 0u)` (`EV_STORE`). In Triton Persistent/Grouped MoE, if there is an outer persistent tile loop `for tile_id in range(pid, num_tiles, NUM_SMS):`, wrap the entire outer persistent loop or keep at most 2 coarse probes if num_tiles/SM <= 4; if num_tiles/SM is large, wrap the outer persistent loop once!"
+    },
+    {
+      "topology_id": "flash_attention_gqa",
+      "applies_to": ["FlashAttention Prefill", "GQA Attention in CUDA and Triton"],
+      "cues": ["flash_attn", "gqa", "Hq", "Hkv", "qk", "online_softmax", "exp2f", "tl.exp2"],
+      "warp_roles": "Per-query-tile CTA (`role = 0u`).",
+      "compliant_placement_strategy": " consists of three coarse macro-stages per CTA: (1) Prologue Query tile HBM->SMEM/Reg load (`WP_B(1u, 0u)`..`WP_E(1u, 0u)` `EV_LOAD`, placed BEFORE the KV-block loop), (2) Enclosing KV-sequence attention loop (`for kv_blk / start_n` containing K/V loads, QK^T, online softmax update, and P*V accumulation — wrap the ENTIRE `for kv_blk` loop from OUTSIDE as `WP_B(3u, 0u)`..`WP_E(3u, 0u)` `EV_MMA` or `4u` `EV_COMPUTE`, NEVER inside `for kv_blk`!), and (3) Final output normalization (`O /= row_sum`) and HBM store (`WP_B(6u, 0u)`..`WP_E(6u, 0u)` `EV_STORE`, placed AFTER the KV loop)."
+    },
+    {
+      "topology_id": "online_softmax_reduction",
+      "applies_to": ["Fused Online Softmax", "Row Reduction", "LayerNorm / RMSNorm in Triton, CuTeDSL, HIP"],
+      "cues": ["softmax", "row_max", "row_sum", "tl.max", "tl.sum", "__shfl_xor"],
+      "warp_roles": "Per-row or persistent row-batch CTA (`role = 0u`).",
+      "compliant_placement_strategy": "If the kernel processes one row per program (`row = tl.program_id(0)`): wrap Pass 1 (row load + online max/sum reduction loop) from OUTSIDE the column loop as `4` (`EV_COMPUTE`, or `1` load + `4` compute if single-tile non-looped), and wrap Pass 2 (normalize + output store loop) from OUTSIDE as `6` (`EV_STORE`). If there is an outer persistent `for row in range(pid, M, num_programs):` loop over thousands of rows, wrap the ENTIRE outer `for row` loop rather than placing probes inside `for row`!"
+    },
+    {
+      "topology_id": "persistent_ring_pipeline",
+      "applies_to": ["Warp-Specialized Ring Pipeline", "Persistent Comm-Compute Ring in CUDA and HIP"],
+      "cues": ["ring_pipeline", "ring", "chunk", "peer", "flag", "ready"],
+      "warp_roles": "Either multi-role (comm/producer warp `role=1u`, compute/consumer warp `role=0u`) or homomorphic persistent tile loop (`role=0u`).",
+      "compliant_placement_strategy": "CRITICAL: Ring kernels iterate over many tiles (`for (int t = blockIdx.x; t < n_tiles; t += gridDim.x)`). Placing probes inside `for (t ...)` on fast (< 1 ms) ring kernels executes dozens of times per warp and causes +15% to +879% overhead! Instead, place `WP_KERNEL_SCOPE(role)` at kernel entry and wrap the ENTIRE persistent `for (t ...)` tile-processing loop from OUTSIDE (`WP_B(4u, 0u)`..`WP_E(4u, 0u)` for compute/ring body, plus final epilogue/reduction store `WP_B(6u, 0u)`..`WP_E(6u, 0u)` after the loop if present). Never put probes inside spin-wait loops (`while (atomicAdd(...) < ...)`)."
+    },
+    {
+      "topology_id": "multi_gpu_p2p_overlap",
+      "applies_to": ["2-GPU NVLink / XGMI P2P AllGather + GEMM Overlap"],
+      "cues": ["p2p", "remote", "peer_ptr", "allgather", "loc", "rem"],
+      "warp_roles": "Producer P2P/DMA warp (`role = 0u` or `1u`) + Consumer Math warps (`role = 1u` or `0u`).",
+      "compliant_placement_strategy": "NEVER insert probes inside `__device__ __forceinline__` copy/mbarrier helper functions (`p2p_cp_async_16B`, `p2p_mbar_wait`)! Instead, inside the `__global__` kernel body: declare `WP_KERNEL_SCOPE(role)` after bounds check; in the P2P producer warp branch, wrap the ENTIRE outer `for (int kt ...)` P2P pull loop with `WP_B(9u, 0u)`..`WP_E(9u, 0u)` (`EV_COMMUNICATION`); in the consumer math warps branch, wrap the ENTIRE outer `for (int kt ...)` wait+WMMA/MFMA loop with `WP_B(3u, 0u)`..`WP_E(3u, 0u)` (`EV_MMA`), and wrap the final local/remote output store block after the loop with `WP_B(6u, 0u)`..`WP_E(6u, 0u)` (`EV_STORE`)."
+    },
+    {
+      "topology_id": "fused_megakernel_megamoe",
+      "applies_to": ["Multi-Role Megakernel", "DeepGEMM / FlashInfer MegaMoE (2 to 6 warp roles)"],
+      "cues": ["megakernel", "megamoe", "fc1", "fc2", "n_chain", "ready", "scheduler_warp", "dispatch"],
+      "warp_roles": "Distinct `role_id` per specialized warp group (e.g., `0=producer/epilogue`, `1=consumer/mma`, `2..5=tma/sched/comm`).",
+      "compliant_placement_strategy": "Assign `WP_KERNEL_SCOPE(role_id)` once at kernel entry based on `warp_id`. In each role branch, wrap outer role phases (or coarse outer chain/wave work), strictly keeping `EV_WAIT` (`2u`) OUTSIDE `while (atomicLoad(&ready[...]) == 0)` spin-polling loops! If `n_chain` or `K` loop runs many lightweight iterations, wrap the enclosing `for` loop per role (`WP_B(1u, 0u)`..`WP_E(1u, 0u)` on producer, `WP_B(2u, 0u)`..`WP_E(2u, 0u)` / `WP_B(4u, 0u)`..`WP_E(4u, 0u)` + `WP_B(6u, 0u)`..`WP_E(6u, 0u)` on consumer) so overhead stays well under 10%."
+    }
+  ]
+}

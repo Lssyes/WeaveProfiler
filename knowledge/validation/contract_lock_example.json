@@ -1,0 +1,532 @@
+{
+  "example_only": true,
+  "measured": false,
+  "production_validation_expected": "REJECT",
+  "warning": "EXAMPLE_ONLY：本文件只展示 CONTRACT.lock.json 的组织方式，不包含真实测量、真实路径或真实 SHA256，禁止直接进入生产采集或交付门禁。",
+  "lock": {
+    "state": "frozen",
+    "sha256_definition": "真实运行对 CONTRACT.lock.json 的最终原始字节计算 SHA256；摘要保存在外部 manifest 和 delivery receipt 中，不能写回文件自身。",
+    "allow_in_place_edit": false
+  },
+  "field_sources": {
+    "allowed": [
+      "user_selection",
+      "repository_or_device_detection",
+      "skill_required_rule"
+    ],
+    "target_and_display": "user_selection",
+    "environment_and_launch": "repository_or_device_detection",
+    "sample_rate_and_delivery_rules": "skill_required_rule",
+    "silent_default_allowed": false
+  },
+  "project_layout": {
+    "version_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+    "stable_profile_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile",
+    "candidate_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/operator_optimization/example_candidate",
+    "run_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm",
+    "local_delivery_root": "C:\\Users\\HP\\Downloads\\weave_artifacts",
+    "host_code_allowed_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile",
+    "enforcer_code_allowed_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/.agents/skills/fast-instrument-v2",
+    "host_code_forbidden_roots": [
+      "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results",
+      "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/operator_optimization"
+    ]
+  },
+  "profile_selection": {
+    "abi": {
+      "absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/device_record/abi/v9_record_v1.json",
+      "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256"
+    },
+    "preset": {
+      "name": "full_v9_ep2",
+      "absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/device_record/presets/full_v9_ep2.json",
+      "alternative_same_abi_preset": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/device_record/presets/gemm01_only.json",
+      "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256"
+    },
+    "same_record_layout_uses_one_abi": true
+  },
+  "run": {
+    "run_id": "example_h100_ep2_rank0_sw_hw_200khz_all_sm",
+    "repository_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+    "candidate_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/operator_optimization/example_candidate",
+    "target_kernel": "example_megakernel",
+    "target_kernel_full_symbol": "example_megakernel<ExampleConfig>(ExampleArgs)",
+    "launch_command": "python3 -B /localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/operator_optimization/example_candidate/run.py --world-size 2 --input-config /localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/operator_optimization/example_candidate/config.json",
+    "git_commit": "EXAMPLE_ONLY_NOT_A_REAL_GIT_COMMIT",
+    "git_dirty": true,
+    "rank": 0,
+    "world_size": 2
+  },
+  "environment": {
+    "gpu": {
+      "model": "NVIDIA H100 SXM",
+      "architecture": "Hopper",
+      "chip": "GH100",
+      "uuid": "EXAMPLE_ONLY_GPU_UUID",
+      "physical_sm_count": 132,
+      "physical_smid_domain": {
+        "min_inclusive": 0,
+        "max_inclusive": 131,
+        "count": 132
+      },
+      "mig_enabled": false
+    },
+    "cuda_version": "EXAMPLE_ONLY_CUDA_VERSION",
+    "driver_version": "EXAMPLE_ONLY_DRIVER_VERSION",
+    "nsys_version": "EXAMPLE_ONLY_NSYS_VERSION"
+  },
+  "input": {
+    "generator": "randn",
+    "seed": 20260827,
+    "distribution": {
+      "mean": 0.0,
+      "stddev": 1.0
+    },
+    "tensors": [
+      {
+        "name": "hidden_states",
+        "shape": [4096, 7168],
+        "dtype": "bfloat16",
+        "layout": "row_major"
+      },
+      {
+        "name": "expert_weights",
+        "shape": [8, 7168, 4096],
+        "dtype": "float8_e4m3fn",
+        "layout": "expert_major"
+      }
+    ],
+    "expected_outputs": [
+      {
+        "name": "output",
+        "shape": [4096, 7168],
+        "dtype": "bfloat16",
+        "elements_per_rank": 29360128
+      }
+    ]
+  },
+  "build_and_launch": {
+    "compile_flags": [
+      "-O3",
+      "-lineinfo",
+      "-arch=sm_90",
+      "-DFAST_INSTRUMENT=1"
+    ],
+    "grid": [132, 1, 1],
+    "block": [640, 1, 1],
+    "physical_warps_per_cta": 20,
+    "dynamic_shared_memory_bytes": 227328,
+    "warmup_iterations": 20,
+    "measured_iterations": 100
+  },
+  "capture": {
+    "information_bundle": "sw+hw",
+    "granularity": "task",
+    "kernel_execution_scope": "full_grid_all_ctas_all_ranks",
+    "software_rank_scope": "all_ranks",
+    "display_rank": 0,
+    "display_layout": "physical_sm_and_warp",
+    "software_sm_scope": {
+      "mode": "all",
+      "selected_physical_smids": [],
+      "source_capture_was_all_sm": true,
+      "source_side_smid_filter": false,
+      "postprocess_smid_filter_allowed": false
+    },
+    "hardware": {
+      "physical_gpu_binding": "display_rank_physical_gpu",
+      "scope": "device_wide",
+      "sample_rate_hz": 200000,
+      "sample_period_ns": 5000,
+      "capture_range": "cudaProfilerApi",
+      "capture_range_end": "stop",
+      "target_kernel_launches_in_range": 1
+    }
+  },
+  "events": {
+    "timestamp_unit": "ns",
+    "timestamp_clock": "device_globaltimer",
+    "task_binding": {
+      "rule": "device 在 work_id 通过边界检查后记录 task start，在该项工作完成后记录 task end。",
+      "identity_fields": [
+        "rank",
+        "cta",
+        "physical_warp",
+        "work_id"
+      ],
+      "allow_stage_interval_inference": false,
+      "allow_one_task_for_whole_kernel_or_gemm_stage": false,
+      "task_start_end_recorded_on_device": true
+    },
+    "event_definitions": [
+      {"event_id": 10, "name": "dispatch_row", "layer": "task", "identity_payload": ["row", "work_id"]},
+      {"event_id": 11, "name": "scatter_row", "layer": "task", "identity_payload": ["row", "work_id"]},
+      {"event_id": 20, "name": "gemm0_tile", "layer": "task", "identity_payload": ["expert_or_group", "m_block", "n_block", "work_id"]},
+      {"event_id": 21, "name": "gemm1_tile", "layer": "task", "identity_payload": ["expert_or_group", "m_block", "n_block", "work_id"]},
+      {"event_id": 30, "name": "combine_token", "layer": "task", "identity_payload": ["token", "work_id"]},
+      {"event_id": 100, "name": "load", "layer": "phase", "parent": "task_instance_id"},
+      {"event_id": 101, "name": "mma", "layer": "phase", "parent": "task_instance_id"},
+      {"event_id": 102, "name": "epilogue", "layer": "phase", "parent": "task_instance_id"},
+      {"event_id": 103, "name": "wait", "layer": "phase", "parent": "task_instance_id"},
+      {"event_id": 104, "name": "store", "layer": "phase", "parent": "task_instance_id"}
+    ],
+    "pairing": {
+      "begin_record_kind": 1,
+      "end_record_kind": 2,
+      "key_fields": [
+        "rank",
+        "cta",
+        "observer_warp",
+        "instance_id",
+        "event_id"
+      ],
+      "unmatched_record_policy": "hard_fail"
+    }
+  },
+  "topology": {
+    "physical_sm_count": 132,
+    "physical_warps_per_cta": 20,
+    "default_observer_policy": "one_measured_observer_per_physical_warp",
+    "observer_slot_formula": "capture_slot * observer_count + observer_index",
+    "observers": [
+      {"observer_warp": 0, "represents": [0, 0], "role": "dispatch", "policy": "physical_warp_observer"},
+      {"observer_warp": 1, "represents": [1, 1], "role": "load", "policy": "physical_warp_observer"},
+      {"observer_warp": 2, "represents": [2, 2], "role": "load", "policy": "physical_warp_observer"},
+      {"observer_warp": 3, "represents": [3, 3], "role": "sync", "policy": "physical_warp_observer"},
+      {"observer_warp": 4, "represents": [4, 7], "role": "hopper_mma_warpgroup", "policy": "hopper_mma_warpgroup"},
+      {"observer_warp": 8, "represents": [8, 11], "role": "hopper_mma_warpgroup", "policy": "hopper_mma_warpgroup"},
+      {"observer_warp": 12, "represents": [12, 15], "role": "hopper_mma_warpgroup", "policy": "hopper_mma_warpgroup"},
+      {"observer_warp": 16, "represents": [16, 19], "role": "hopper_mma_warpgroup", "policy": "hopper_mma_warpgroup"}
+    ],
+    "representation_rules": {
+      "allowed_multiwarp_roles": [
+        "hopper_mma_warpgroup",
+        "blackwell_epilogue_warpgroup"
+      ],
+      "forbidden_multiwarp_roles": [
+        "dispatch",
+        "load",
+        "sync",
+        "combine"
+      ],
+      "copy_observer_interval_to_other_warps_allowed": false,
+      "lane_name": "warpN or warpN（代表 warpA-B）"
+    }
+  },
+  "buffer_abi": {
+    "endianness": "little",
+    "allocation": "per_rank_global_append",
+    "header": {
+      "size_bytes": 64,
+      "alignment_bytes": 8,
+      "fields": [
+        {"name": "magic", "offset_bytes": 0, "width_bits": 32, "type": "uint32", "example_value": "0x4650524f"},
+        {"name": "abi_version", "offset_bytes": 4, "width_bits": 16, "type": "uint16"},
+        {"name": "header_bytes", "offset_bytes": 6, "width_bits": 16, "type": "uint16"},
+        {"name": "record_bytes", "offset_bytes": 8, "width_bits": 16, "type": "uint16"},
+        {"name": "capacity_records", "offset_bytes": 12, "width_bits": 32, "type": "uint32"},
+        {"name": "write_count", "offset_bytes": 16, "width_bits": 64, "type": "uint64_atomic"},
+        {"name": "dropped_count", "offset_bytes": 24, "width_bits": 64, "type": "uint64_atomic"},
+        {"name": "overflow", "offset_bytes": 32, "width_bits": 32, "type": "uint32_atomic"},
+        {"name": "physical_sm_count", "offset_bytes": 36, "width_bits": 16, "type": "uint16"},
+        {"name": "physical_warps_per_cta", "offset_bytes": 38, "width_bits": 16, "type": "uint16"},
+        {"name": "rank", "offset_bytes": 40, "width_bits": 16, "type": "uint16"},
+        {"name": "world_size", "offset_bytes": 42, "width_bits": 16, "type": "uint16"},
+        {"name": "device_clock_hz", "offset_bytes": 48, "width_bits": 64, "type": "uint64"},
+        {"name": "contract_sha256_prefix", "offset_bytes": 56, "width_bits": 64, "type": "uint64"}
+      ]
+    },
+    "record": {
+      "size_bytes": 64,
+      "alignment_bytes": 8,
+      "address_formula": "buffer_base + header.size_bytes + record_index * record.size_bytes",
+      "fields": [
+        {"name": "timestamp_ns", "offset_bytes": 0, "width_bits": 64, "type": "uint64"},
+        {"name": "instance_id", "offset_bytes": 8, "width_bits": 64, "type": "uint64"},
+        {"name": "parent_instance_id", "offset_bytes": 16, "width_bits": 64, "type": "uint64"},
+        {"name": "work_id", "offset_bytes": 24, "width_bits": 64, "type": "uint64"},
+        {"name": "cta", "offset_bytes": 32, "width_bits": 32, "type": "uint32"},
+        {"name": "payload0", "offset_bytes": 36, "width_bits": 32, "type": "uint32"},
+        {"name": "payload1", "offset_bytes": 40, "width_bits": 32, "type": "uint32"},
+        {"name": "event_id", "offset_bytes": 44, "width_bits": 16, "type": "uint16"},
+        {"name": "physical_smid", "offset_bytes": 46, "width_bits": 16, "type": "uint16"},
+        {"name": "rank", "offset_bytes": 48, "width_bits": 16, "type": "uint16"},
+        {"name": "physical_warp", "offset_bytes": 50, "width_bits": 8, "type": "uint8"},
+        {"name": "observer_warp", "offset_bytes": 51, "width_bits": 8, "type": "uint8"},
+        {"name": "record_kind", "offset_bytes": 52, "width_bits": 8, "type": "uint8"},
+        {"name": "flags", "offset_bytes": 53, "width_bits": 8, "type": "uint8"},
+        {"name": "reserved", "offset_bytes": 54, "width_bits": 80, "type": "bytes10"}
+      ]
+    },
+    "capacity": {
+      "records_per_rank": 4194304,
+      "bytes_per_rank": 268435456,
+      "overflow_policy": "stop_recording_set_overflow_and_fail_run",
+      "required_dropped_count": 0,
+      "required_overflow": 0
+    },
+    "raw_file_pattern": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/raw/raw_rank{rank}.bin",
+    "abi_file": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/device_record/abi/v9_record_v1.json",
+    "abi_sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256"
+  },
+  "hardware": {
+    "metrics_config": {
+      "absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/hw_perfetto/metrics/h100_minimal.config",
+      "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256",
+      "fallback_to_builtin_metric_set_allowed": false
+    },
+    "semantic_metric_count": 10,
+    "semantic_metrics": [
+      {"semantic_id": "sm_active", "display_name": "SMs Active", "raw_counter_dependencies": ["sm__cycles_active"]},
+      {"semantic_id": "sm_issue", "display_name": "SM Issue", "raw_counter_dependencies": ["sm__inst_executed_realtime"]},
+      {"semantic_id": "tensor_active", "display_name": "Tensor Active", "raw_counter_dependencies": ["sm__pipe_tensor_cycles_active_realtime"]},
+      {"semantic_id": "hmma_active", "display_name": "SM Tensor Pipe Active (HMMA ops)", "raw_counter_dependencies": ["TPC.TriageCompute.sm__pipe_tensor_op_hmma_cycles_active_realtime"]},
+      {"semantic_id": "dram_read", "display_name": "DRAM Read Bandwidth", "raw_counter_dependencies": ["dram__read_throughput"]},
+      {"semantic_id": "dram_write", "display_name": "DRAM Write Bandwidth", "raw_counter_dependencies": ["dram__write_throughput"]},
+      {"semantic_id": "nvlink_rx_request", "display_name": "NVLink RX Requests User Data", "raw_counter_dependencies": ["NVLRX.TriageCompute.nvlrx__bytes_packet_request_data_user"]},
+      {"semantic_id": "nvlink_rx_response", "display_name": "NVLink RX Responses User Data", "raw_counter_dependencies": ["NVLRX.TriageCompute.nvlrx__bytes_packet_response_data_user"]},
+      {"semantic_id": "nvlink_tx_request", "display_name": "NVLink TX Requests User Data", "raw_counter_dependencies": ["NVLTX.TriageCompute.nvltx__bytes_packet_request_data_user"]},
+      {"semantic_id": "nvlink_tx_response", "display_name": "NVLink TX Responses User Data", "raw_counter_dependencies": ["NVLTX.TriageCompute.nvltx__bytes_packet_response_data_user"]}
+    ],
+    "undeclared_metrics_allowed": false,
+    "derived_metrics": []
+  },
+  "alignment": {
+    "software_clock": "device_globaltimer_ns",
+    "hardware_clock": "nsys_gpu_timestamp_ns",
+    "start_anchor": "device_entry",
+    "end_anchor": "device_release",
+    "transform": "hw_timestamp_ns + measured_offset_ns",
+    "scale": 1,
+    "software_timestamps_unchanged": true,
+    "timeline_rebase_allowed": false,
+    "interpolation_allowed": false,
+    "zero_fill_allowed": false,
+    "start_residual_max_ns": 5000,
+    "end_residual_max_ns": 5000,
+    "hardware_scope_after_alignment": "device_wide_not_attributed_to_sm_cta_or_warp"
+  },
+  "validation": {
+    "correctness": {
+      "input_generator": "randn",
+      "check_scope": "all_output_elements_all_ranks",
+      "reference": "same kernel and input with instrumentation disabled",
+      "comparison": "elementwise",
+      "atol": 0.01,
+      "rtol": 0.01,
+      "check_nan_and_inf": true,
+      "sample_only_check_allowed": false
+    },
+    "overhead": {
+      "configurations": {
+        "instrumentation_disabled": "instrumentation completely disabled",
+        "entry_anchors_only": "entry anchors only",
+        "full_event_recording": "full software event recording"
+      },
+      "formula": "(median_full_event_recording_ns - median_entry_anchors_only_ns) / median_entry_anchors_only_ns",
+      "maximum": 0.1,
+      "warmup_iterations": 20,
+      "measured_iterations": 100,
+      "hardware_collection_overhead_reported_separately": true
+    },
+    "semantic_required_checks": [
+      "contract_consistency",
+      "full_correctness",
+      "instrumentation_overhead",
+      "buffer_no_overflow_or_drop",
+      "task_identity_and_boundaries",
+      "task_phase_nesting",
+      "physical_sm_scope",
+      "observer_topology",
+      "hardware_metric_allowlist",
+      "sw_hw_alignment",
+      "perfetto_json_gzip",
+      "trace_processor_import",
+      "delivery_hash_chain"
+    ],
+    "collect_all": true,
+    "fail_fast": false
+  },
+  "execution": {
+    "candidate_trace": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/work/candidate.perfetto.json.gz",
+    "preflight": {
+      "required_check_ids": [
+        "E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09",
+        "E10", "E11", "E12", "E13", "E14", "E15", "E16", "E17", "E18",
+        "E19", "E20", "E21", "E22", "E23", "E24", "E25", "E26", "E27"
+      ],
+      "not_applicable_check_ids": [],
+      "check_command_template": {
+        "argv": [
+          "python3", "-B",
+          "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/check_preflight_item.py",
+          "--contract",
+          "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json",
+          "--check-id", "{check_id}",
+          "--out",
+          "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/preflight/{check_id}.json"
+        ],
+        "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "timeout_sec": 120,
+        "evidence": [
+          "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/preflight/{check_id}.json"
+        ]
+      }
+    },
+    "gpu_idle_command": {
+      "argv": [
+        "python3", "-B",
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/wait_for_gpu_idle.py",
+        "--contract",
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json"
+      ],
+      "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+      "timeout_sec": 3600
+    },
+    "allowed_gpu_ids": [0, 1, 2, 3],
+    "gpu_idle_policy": {
+      "utilization_max_percent": 10,
+      "memory_max_mib": null,
+      "poll_interval_sec": 5,
+      "timeout_sec": 1800
+    },
+    "stages": [
+      {
+        "name": "offline_selftest",
+        "kind": "cpu",
+        "argv": ["python3", "-B", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/run_offline_selftests.py", "--contract", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json", "--out", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/offline_selftest.json"],
+        "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "timeout_sec": 600,
+        "outputs": ["/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/offline_selftest.json"]
+      },
+      {
+        "name": "correctness",
+        "kind": "gpu",
+        "argv": ["python3", "-B", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/validate_correctness.py", "--contract", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json", "--out", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/correctness.json"],
+        "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "timeout_sec": 3600,
+        "outputs": ["/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/correctness.json"]
+      },
+      {
+        "name": "overhead",
+        "kind": "gpu",
+        "argv": ["python3", "-B", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/validate_overhead.py", "--contract", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json", "--out", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/overhead.json"],
+        "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "timeout_sec": 3600,
+        "outputs": ["/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/overhead.json"]
+      },
+      {
+        "name": "sw_capture",
+        "kind": "gpu",
+        "argv": ["python3", "-B", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/run_profile.py", "--contract", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json", "--mode", "sw-capture", "--out", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/sw/stream_manifest.json"],
+        "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "timeout_sec": 3600,
+        "outputs": ["/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/sw/stream_manifest.json"]
+      },
+      {
+        "name": "hw_capture",
+        "kind": "gpu",
+        "argv": ["python3", "-B", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/hw_perfetto/capture_nsys.py", "--contract", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json", "--out-dir", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/hw"],
+        "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "timeout_sec": 3600,
+        "outputs": [
+          "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/hw/capture_manifest.json",
+          "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/hw/hw_metrics.json"
+        ]
+      },
+      {
+        "name": "perfetto",
+        "kind": "cpu",
+        "argv": ["python3", "-B", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/hw_perfetto/emit_perfetto.py", "--contract", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json", "--out", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/work/candidate.perfetto.json.gz"],
+        "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "timeout_sec": 600,
+        "outputs": ["/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/work/candidate.perfetto.json.gz"]
+      }
+    ],
+    "required_gate_ids": [
+      "G00", "G01", "G02", "G03", "G04", "G05", "G06", "G07", "G08",
+      "G09", "G10", "G11", "G12", "G13", "G14", "G15", "G16", "G17",
+      "G18", "G19", "G20", "G21", "G22", "G23", "G24"
+    ],
+    "not_applicable_gate_ids": [],
+    "gate_command_template": {
+      "argv": [
+        "python3", "-B",
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/check_gate_item.py",
+        "--contract",
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/CONTRACT.lock.json",
+        "--gate-id", "{gate_id}",
+        "--out",
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/gates/{gate_id}.json"
+      ],
+      "cwd": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+      "timeout_sec": 300,
+      "evidence": [
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/validation/gates/{gate_id}.json"
+      ]
+    },
+    "finalize": {
+      "receipt": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/delivery/delivery_receipt.json",
+      "args": [
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9",
+        "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/work/candidate.perfetto.json.gz",
+        "--receipt", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/delivery/delivery_receipt.json",
+        "--information-bundle", "sw+hw",
+        "--capture-manifest", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/hw/capture_manifest.json",
+        "--hw-metrics", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/hw/hw_metrics.json",
+        "--abi", "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/device_record/abi/v9_record_v1.json"
+      ]
+    }
+  },
+  "artifacts": {
+    "run_root": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm",
+    "candidate_perfetto": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/work/candidate.perfetto.json.gz",
+    "formal_perfetto": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/delivery/trace_example.perfetto.json.gz",
+    "delivery_receipt": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/results/profile_runs/example_h100_ep2_rank0_sw_hw_200khz_all_sm/delivery/delivery_receipt.json",
+    "maximum_formal_trace_bytes": 10485760,
+    "oversize_policy": "regenerate_candidate_without_phase_events_keep_all_tasks_and_selected_sms",
+    "candidate_path_is_fixed_per_run": true,
+    "formal_perfetto_count_per_run": 1
+  },
+  "components": {
+    "device_writer": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/operator_optimization/example_candidate/example_kernel.cu", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "measurement"},
+    "host_harness": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/run_profile.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "measurement"},
+    "contract_materializer": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/host_decode/materialize_contract.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "decoder": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/host_decode/decode_profile.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "hardware_reader": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/hw_perfetto/capture_nsys.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "perfetto_emitter": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/hw_perfetto/emit_perfetto.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "offline_selftests": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/run_offline_selftests.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "gpu_idle_waiter": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/wait_for_gpu_idle.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "measurement"},
+    "correctness_validator": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/validate_correctness.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "measurement"},
+    "overhead_validator": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/validate_overhead.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "measurement"},
+    "preflight_adapter": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/check_preflight_item.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "gate_adapter": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/weave_v1/rebuttal/h100_megamoe/opt_version/v9/profile/validation/check_gate_item.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "pipeline_runner": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/.agents/skills/fast-instrument-v2/run_measurement.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "preflight_enforcer": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/.agents/skills/fast-instrument-v2/1_scan/validate_preflight.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "gate_enforcer": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/.agents/skills/fast-instrument-v2/4_validate/validate_all.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "finalizer": {"absolute_path": "/localssd/ziyu_huang_localssd/temp_can/weave_new/.agents/skills/fast-instrument-v2/4_validate/finalize_delivery.py", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"},
+    "trace_processor_shell": {"absolute_path": "/localssd/4_validate/tools/trace_processor_shell", "sha256": "EXAMPLE_ONLY_NOT_A_REAL_SHA256", "input_class": "postprocess"}
+  },
+  "invalidation_and_minimal_rerun": [
+    {
+      "changed": "device writer, buffer ABI, kernel/launch, software SM scope or correctness input",
+      "rerun_from": "compile_correctness_overhead_and_real_capture",
+      "reuse": "environment_detection_only"
+    },
+    {
+      "changed": "hardware metrics, sample rate, capture range or nsys config",
+      "rerun_from": "hardware_real_capture",
+      "reuse": "software raw only when all software measurement hashes match"
+    },
+    {
+      "changed": "decoder, SQLite query or Perfetto emitter",
+      "rerun_from": "offline_toolchain_unit_test_and_candidate_generation",
+      "reuse": "software raw, nsys-rep, SQLite and ABI when measurement hashes match"
+    },
+    {
+      "changed": "validator, unified gates or finalizer",
+      "rerun_from": "offline_toolchain_unit_test_and_all_gates",
+      "reuse": "real capture and unaffected candidate Perfetto"
+    }
+  ]
+}

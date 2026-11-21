@@ -1,0 +1,586 @@
+{
+  "schema": "weaveprofiler.card-machine/v1",
+  "version": 1,
+  "kind": "machine_profile",
+  "card": "b300",
+  "arch": "sm_103a",
+  "vendor": "nvidia",
+  "platform": "nv",
+  "warp_size": 32,
+  "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+  "date": "2026-11-08",
+  "evidence_status": "compiled",
+  "granularity": [
+    "SM",
+    "warp"
+  ],
+  "evidence_policy": "每条 isa_mnemonics 都由生成器用正则从本机产出的 PTX/SASS 里抓（build_kb_blackwell.py），抓不到就报错退出，不写推测值。证据是编译期/反汇编级的：本机 mail-12 是 H20，没有 B300，探针未在 sm_100/sm_103 硬件上运行，运行时行为（计时器步长、开销、正确性）未测。",
+  "profiler": {
+    "primary": "nsys",
+    "fallback": [],
+    "sampling_model": "periodic_pm",
+    "preferred_sample_hz": 50000,
+    "evidence": "cross_compile_only",
+    "note": "Both sm_100a and sm_103a remain distinct compiler targets. Sampling rate and continuity require an on-card manifest."
+  },
+  "entries": [
+    {
+      "construct": "cp.async.cg.shared.global 16B（global -> shared 异步拷贝）",
+      "isa_mnemonics": [
+        "PTX: cp.async.cg.shared.global",
+        "SASS: LDGSTS.E.BYPASS.128"
+      ],
+      "placement_rule": "发射处记 FI_M（瞬时）或 B；完成事件的 E 必须记在 cp.async.wait_group 返回之后，不能用发射时刻代表数据就绪。sm_100a/sm_103a 上 16B 的 cp.async.cg 落为 LDGSTS.E.BYPASS.128（带 BYPASS 修饰，与 sm_90 的 LDGSTS.E.128 写法不同），匹配时用前缀 LDGSTS 而不是全名等值比较。",
+      "evidence": {
+        "snippet": "/*0160*/ LDGSTS.E.BYPASS.128 [R5+0x10], desc[UR8][R2.64] ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "cp.async.commit_group + cp.async.wait_group 0",
+      "isa_mnemonics": [
+        "PTX: cp.async.commit_group",
+        "PTX: cp.async.wait_group 0",
+        "SASS: LDGDEPBAR",
+        "SASS: DEPBAR.LE"
+      ],
+      "placement_rule": "B 放在 wait_group 之前，E 放在 wait_group 返回之后。commit_group 落为 LDGDEPBAR、wait_group 落为 DEPBAR.LE SB0, 0x0；不要在编译器拆出的每条依赖检查上各记一对，一次逻辑等待只产生一对记录。commit_group 不是完成点，完成以 wait_group 返回为准。",
+      "evidence": {
+        "snippet": "/*0170*/ LDGDEPBAR ; | /*08e0*/ DEPBAR.LE SB0, 0x0 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "cp.async.bulk.tensor.2d TMA load（mbarrier::complete_tx::bytes）",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes",
+        "SASS: UTMALDG.2D"
+      ],
+      "placement_rule": "发射线程记瞬时 FI_M；完成事件的 E 放在对应 mbarrier 的 try_wait 返回之后。TMA 是全 CTA 可见的异步搬运，只有发射它的那个线程（通常 tid0/elect_one）该记发射点，其余线程记等待区间，别让每个线程都记一遍发射。",
+      "evidence": {
+        "snippet": "/*01c0*/ @!UP1 UTMALDG.2D [UR4], [UR10] ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "cp.async.bulk.tensor.2d TMA store + commit_group + wait_group.read",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.tensor.2d.global.shared::cta.bulk_group",
+        "PTX: cp.async.bulk.commit_group",
+        "PTX: cp.async.bulk.wait_group.read 0",
+        "SASS: UTMASTG.2D",
+        "SASS: UTMACMDFLUSH",
+        "SASS: DEPBAR.LE"
+      ],
+      "placement_rule": "发射处记 FI_M，E 记在 cp.async.bulk.wait_group.read 返回之后（SASS 是紧跟 UTMACMDFLUSH 的 DEPBAR.LE SB0, 0x0）。注意 sm_100a/sm_103a 的 tensor TMA store 是 UTMASTG.2D，而 plain cp.async.bulk（非 tensor）在本项目 sm_90 实测是 UBLKCP.G.S，两者不要混用匹配规则。",
+      "evidence": {
+        "snippet": "/*08c0*/ UTMASTG.2D [UR4], [UR10] ; | /*08d0*/ UTMACMDFLUSH ; | /*08e0*/ DEPBAR.LE SB0, 0x0 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "写回",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "mbarrier.try_wait.parity 自旋等待",
+      "isa_mnemonics": [
+        "PTX: mbarrier.try_wait.parity.shared::cta.b64",
+        "SASS: SYNCS.PHASECHK.TRANS64.TRYWAIT"
+      ],
+      "placement_rule": "B 放在进入自旋/try_wait 循环之前，E 放在循环退出且所有消费线程到达汇合点之后；一次逻辑等待只产生一对记录。匹配要写具体形态 SYNCS.PHASECHK.TRANS64.TRYWAIT，不要用笼统的 SYNCS：arrive/expect_tx 是 SYNCS.ARRIVE.TRANS64 与 SYNCS.EXCH.64，属于同步不是等待。",
+      "evidence": {
+        "snippet": "/*01a0*/ SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [R0+URZ], R3 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "mbarrier.init / arrive / arrive.expect_tx",
+      "isa_mnemonics": [
+        "PTX: mbarrier.init.shared::cta.b64",
+        "PTX: mbarrier.arrive.shared::cta.b64",
+        "PTX: mbarrier.arrive.expect_tx.shared::cta.b64",
+        "SASS: SYNCS.ARRIVE.TRANS64",
+        "SASS: SYNCS.ARRIVE.TRANS64.A1T0",
+        "SASS: SYNCS.EXCH.64"
+      ],
+      "placement_rule": "到达（arrive/expect_tx）是瞬时事件，记 FI_M；不要用它当“数据已到”的完成点，完成点在 try_wait 返回处。单线程 arrive 会出现 A1T0 变体（arrive 1 thread 0），匹配时按前缀 SYNCS.ARRIVE 归类。",
+      "evidence": {
+        "snippet": "/*0160*/ @!P0 SYNCS.ARRIVE.TRANS64 RZ, [UR6], R2 ; | /*0120*/ SYNCS.EXCH.64 URZ, [UR7], UR4 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "__syncthreads()（CTA 栅栏）",
+      "isa_mnemonics": [
+        "PTX: bar.sync 0",
+        "SASS: BAR.SYNC.DEFER_BLOCKING"
+      ],
+      "placement_rule": "B 放在栅栏调用前，E 放在栅栏返回后；这段就是“到齐等待”，是生产者-消费者归因里最常见的同步项。sm_100a/sm_103a 落为 BAR.SYNC.DEFER_BLOCKING（带 DEFER_BLOCKING 修饰），按前缀 BAR.SYNC 匹配。栅栏必须被 CTA 内全部线程执行：分支内再出现栅栏是危险信号。",
+      "evidence": {
+        "snippet": "/*01d0*/ BAR.SYNC.DEFER_BLOCKING 0x0 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tcgen05.mma.cta_group::1.kind::f16（Blackwell 张量核，单 CTA）",
+      "isa_mnemonics": [
+        "PTX: tcgen05.mma.cta_group::1.kind::f16",
+        "SASS: UTCHMMA"
+      ],
+      "placement_rule": "发射处记 FI_M，完成事件的 E 记在 tcgen05.commit + mbarrier 等待返回之后（累加器在 tensor memory 里，发射返回不代表算完）。SASS 是 UTCHMMA，操作数形如 gdesc[UR4], gdesc[UR8], tmem[UR7], tmem[URZ], idesc[URZ], !UPT —— 看到 tmem[] 操作数就说明是 tcgen05 路径，不是 sm_90 的 HGMMA。",
+      "evidence": {
+        "snippet": "/*0160*/ UTCHMMA gdesc[UR4], gdesc[UR8], tmem[UR7], tmem[URZ], idesc[URZ], !UPT ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tcgen05.mma.cta_group::2.kind::f16（2-CTA 协同 MMA）",
+      "isa_mnemonics": [
+        "PTX: tcgen05.mma.cta_group::2.kind::f16",
+        "SASS: UTCHMMA.2CTA"
+      ],
+      "placement_rule": "2-CTA 形态落为 UTCHMMA.2CTA。跨 CTA 的完成要靠 cluster 栅栏（barrier.cluster.arrive/wait，SASS UCGABAR_ARV/UCGABAR_WAIT）或 tcgen05.commit 的 mbarrier；E 记在等待返回之后，并且两个 CTA 都要各自记一对，别只在 leader CTA 记。",
+      "evidence": {
+        "snippet": "/*00c0*/ UTCHMMA.2CTA gdesc[UR4], gdesc[UR6], tmem[UR8], tmem[URZ], idesc[URZ], !UPT ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tcgen05.commit.cta_group::1.mbarrier::arrive::one（MMA 完成通知）",
+      "isa_mnemonics": [
+        "PTX: tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64",
+        "SASS: UTCBAR"
+      ],
+      "placement_rule": "commit 本身只是“把完成信号挂到 mbarrier 上”，记 FI_M；真正的完成 E 记在随后 try_wait 返回处。把 E 记在 commit 处会把张量核的在途时间算成 0，这是 Blackwell 上最容易犯的打点错。",
+      "evidence": {
+        "snippet": "/*01c0*/ UTCBAR [UR6], URZ ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "同步",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tcgen05.ld.sync.aligned（从 tensor memory 取累加器到寄存器）",
+      "isa_mnemonics": [
+        "PTX: tcgen05.ld.sync.aligned.32x32b.x1.b32",
+        "SASS: LDTM"
+      ],
+      "placement_rule": "epilogue 第一步：B 放在 tcgen05.ld 之前，E 放在其后的 tcgen05.wait::ld（或数据真正被使用前）之后。SASS 是 LDTM（tmem[URZ] 源），Triton 路径上是 LDTM.x64。tmem 读是同步指令但延迟不小，别把它并进“计算”区间，否则算不清 epilogue 到底花在哪。",
+      "evidence": {
+        "snippet": "/*0220*/ LDTM R5, tmem[URZ] ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "clusterlaunchcontrol.try_cancel（persistent/megakernel 取下一个任务）",
+      "isa_mnemonics": [
+        "PTX: clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128",
+        "SASS: UGETNEXTWORKID.BROADCAST"
+      ],
+      "placement_rule": "这是 Blackwell 上“取任务”的原生形态：try_cancel 把一个 work id 异步写进 shared，并由 mbarrier 通知完成。发射处记 FI_M，“拿到任务”的 E 记在 mbarrier try_wait（SYNCS.PHASECHK.TRANS64.TRYWAIT）返回之后；随后的 YIELD 是调度提示，不是完成点。megakernel 的“取任务→等依赖→执行→通知”四段里，这一段必须单独成区间，否则任务队列饥饿和依赖等待会混在一起。",
+      "evidence": {
+        "snippet": "/*0150*/ UGETNEXTWORKID.BROADCAST [UR6], [UR7] ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "semantic_legacy": "装载",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "barrier.cluster.arrive / barrier.cluster.wait（cluster 栅栏）",
+      "isa_mnemonics": [
+        "PTX: barrier.cluster.arrive",
+        "PTX: barrier.cluster.wait",
+        "SASS: UCGABAR_ARV",
+        "SASS: UCGABAR_WAIT"
+      ],
+      "placement_rule": "arrive 与 wait 在 ISA 层是分开的两条（UCGABAR_ARV / UCGABAR_WAIT），所以“到达时刻”和“放行时刻”可以分别记：arrive 处记 FI_M，wait 前记 B、wait 返回后记 E，这段就是跨 CTA 的等待时间。2-CTA MMA 与 cluster 内共享 tmem 的场景都靠它，别把它和 __syncthreads（BAR.SYNC）混成一类。",
+      "evidence": {
+        "snippet": "/*0130*/ UCGABAR_ARV ; | /*0140*/ UCGABAR_WAIT ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "st.global（普通全局写，含 float4 向量写）",
+      "isa_mnemonics": [
+        "PTX: st.global.v4.f32",
+        "SASS: STG.E.128",
+        "SASS: STG.E"
+      ],
+      "placement_rule": "B 放在写之前、E 放在写之后即可；普通 st.global 是同步语义（指令返回即已提交到访存流水），不需要等 mbarrier。要区分“写回耗时”和“写回被下游看见”：后者要等 kernel 结束或显式 fence。",
+      "evidence": {
+        "snippet": "/*01d0*/ STG.E.128 desc[UR6][R2.64], R8 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "标量 FFMA（epilogue/逐元素计算）",
+      "isa_mnemonics": [
+        "PTX: fma.rn.f32",
+        "SASS: FFMA"
+      ],
+      "placement_rule": "B/E 直接包住计算语句。逐元素 FFMA 段通常是访存受限，看到它占比高要结合 DRAM/L2 曲线判断，不要直接当成“算力不够”。",
+      "evidence": {
+        "snippet": "/*0450*/ FFMA R8, R6, R7, 1 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "semantic_legacy": "计算",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "elect.sync / warp 内选一个线程执行（打点常用）",
+      "isa_mnemonics": [
+        "PTX: elect.sync",
+        "SASS: ELECT"
+      ],
+      "placement_rule": "FI_OPEN_BY(elect_one, role) 这类“只让一个线程记录”的写法在 Blackwell 上落为 ELECT。记录点要放在 elect 分支内部，且分支内不得再出现 CTA 级栅栏（只有部分线程到达，BAR.SYNC 到不齐）。",
+      "evidence": {
+        "snippet": "/*0140*/ @P0 ELECT P1, URZ, PT ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "semantic_legacy": "同步",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tl.dot -> tcgen05.mma（Blackwell 张量核路径）",
+      "isa_mnemonics": [
+        "PTX: tcgen05.mma.cta_group::1.kind::f16",
+        "SASS: UTCHMMA"
+      ],
+      "placement_rule": "Triton 在 sm_100a/sm_103a 上把 tl.dot 直接落成 tcgen05.mma（SASS UTCHMMA），不是 sm_90 的 wgmma/HGMMA。打点规则同 CUDA：发射记 FI_M，完成 E 记在 tcgen05.commit 的 mbarrier 等待返回后。Triton 全 CTA 走同一控制流，做不到 warp 特化，事件是“整个 program 一段”。",
+      "evidence": {
+        "snippet": "/*3200*/ UTCHMMA gdesc[UR20], gdesc[UR18], tmem[UR15], tmem[UR26], idesc[UR27], !UPT ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tl.load（bf16 GEMM 操作数）：LDG + STS 两级 staging，本构建没有 cp.async",
+      "isa_mnemonics": [
+        "PTX: ld.global.b16",
+        "SASS: LDG.E.U16",
+        "SASS: STS.U16"
+      ],
+      "placement_rule": "实测这个持久化 GEMM（num_warps=8, num_stages=3）在 sm_100a/sm_103a 上的操作数搬运是普通 ld.global.b16 -> LDG.E.U16 加 STS.U16 写 shared，没有出现 LDGSTS（cp.async）也没有 TMA。所以“装载”区间要包住 load 与随后的 shared 写，E 放在数据被 tl.dot 消费之前；不能假设 Triton 一定用异步拷贝——必须回查本 arch 的反汇编再定打点位置。",
+      "evidence": {
+        "snippet": "/*12d0*/ @P2 LDG.E.U16 R167, desc[UR28][R6.64] ; | /*2cf0*/ STS.U16 [R72+UR14], R167 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tcgen05.alloc / dealloc / relinquish_alloc_permit（tensor memory 分配）",
+      "isa_mnemonics": [
+        "PTX: tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32",
+        "PTX: tcgen05.dealloc.cta_group::1.sync.aligned.b32",
+        "PTX: tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned",
+        "SASS: UTCATOMSWS.FIND_AND_SET.ALIGN",
+        "SASS: UTCATOMSWS.AND"
+      ],
+      "placement_rule": "tmem 分配是序言里的一次性动作（SASS UTCATOMSWS.FIND_AND_SET.ALIGN），释放是 UTCATOMSWS.AND。它们通常很短，但落在主循环之前：分析“序言开销”时把 alloc 与随后的第一次 mbarrier 等待分开记，否则会把 tmem 分配和第一个 tile 的装载等待混成一段。",
+      "evidence": {
+        "snippet": "/*0140*/ UTCATOMSWS.FIND_AND_SET.ALIGN UP0, UR5, UR5 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tcgen05.ld / tcgen05.st + tl.store（累加器出 tmem 再写全局）",
+      "isa_mnemonics": [
+        "PTX: tcgen05.ld.sync.aligned.32x32b.x64.b32",
+        "PTX: tcgen05.st.sync.aligned.32x32b.x64.b32",
+        "PTX: tcgen05.wait::ld.sync.aligned",
+        "PTX: tcgen05.wait::st.sync.aligned",
+        "SASS: LDTM.x64",
+        "SASS: STTM.x64",
+        "SASS: STG.E.U16"
+      ],
+      "placement_rule": "epilogue 三段：LDTM.x64 把累加器搬进寄存器 -> tcgen05.wait::ld 之后才是可用数据 -> tl.store 落为 STG.E.U16 写回全局。B/E 分别包住“出 tmem”和“写全局“两段，wait::ld 返回处才是”计算真的结束”的时刻。",
+      "evidence": {
+        "snippet": "/*51e0*/ LDTM.x64 R4, tmem[UR7] ; | /*1190*/ STTM.x64 tmem[UR7], RZ ; | /*6220*/ STG.E.U16 desc[UR28][R228.64], R28 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "epilogue",
+      "display_name": "epilogue",
+      "semantic_legacy": "写回",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "mbarrier.try_wait.parity（Triton 生成的 tmem/MMA 等待）",
+      "isa_mnemonics": [
+        "PTX: mbarrier.try_wait.parity.shared.b64",
+        "SASS: SYNCS.PHASECHK.TRANS64.TRYWAIT"
+      ],
+      "placement_rule": "与 CUDA 同规则：B 在自旋循环前，E 在循环退出后。Triton 里这段等待通常就是“计算 warp 等 MMA 完成”，是生产者-消费者归因的主要项。",
+      "evidence": {
+        "snippet": "/*37d0*/ SYNCS.PHASECHK.TRANS64.TRYWAIT P2, [UR8], R130 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "等待",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "bar.sync / tl.debug_barrier 与 elect.sync",
+      "isa_mnemonics": [
+        "PTX: bar.sync",
+        "PTX: elect.sync",
+        "SASS: BAR.SYNC.DEFER_BLOCKING",
+        "SASS: ELECT"
+      ],
+      "placement_rule": "Triton 的 CTA 栅栏与 CUDA 落点相同（BAR.SYNC.DEFER_BLOCKING）；记录点由前端选出的单个线程执行时会看到 ELECT。Triton 没有 warp 特化，所以“每个 program 一条泳道”是它的最细粒度（FI_GRAN=0 也是全 CTA 一致的事件）。",
+      "evidence": {
+        "snippet": "/*0340*/ BAR.SYNC.DEFER_BLOCKING 0x0 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "semantic_legacy": "同步",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tensor descriptor TMA load（tl.make_tensor_descriptor + desc.load）",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.tensor.2d",
+        "SASS: UTMALDG",
+        "SASS: SYNCS.ARRIVE.TRANS64"
+      ],
+      "placement_rule": "描述符式 TMA load 在 Triton 里落为 UTMALDG（不带 .2D 后缀的形态也出现），完成通知走 mbarrier（SYNCS.ARRIVE.TRANS64 + SYNCS.PHASECHK.TRANS64.TRYWAIT）。发射记 FI_M，E 记在 wait 返回后。",
+      "evidence": {
+        "snippet": "/*0ea0*/ @UP1 UTMALDG.2D [UR12], [UR4] ; | /*0e00*/ @!P1 SYNCS.ARRIVE.TRANS64 RZ, [UR8+0x4000], R0 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "tensor descriptor TMA store（desc.store）",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.tensor.2d",
+        "SASS: UTMASTG",
+        "SASS: UTMACMDFLUSH",
+        "SASS: DEPBAR.LE"
+      ],
+      "placement_rule": "落为 UTMASTG + UTMACMDFLUSH，随后的 DEPBAR.LE 是 wait_group 的等待点。写回区间 E 记在 DEPBAR 返回之后，才能把“TMA 写回真正完成”和“发射了写回”分开。",
+      "evidence": {
+        "snippet": "/*1320*/ @UP2 UTMASTG.2D [UR12], [UR6] ; | /*0680*/ UTMACMDFLUSH ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    },
+    {
+      "construct": "mbarrier.init / mbarrier.inval（Triton 自己管理 barrier 生命周期）",
+      "isa_mnemonics": [
+        "PTX: mbarrier.init.shared::cta.b64",
+        "PTX: mbarrier.inval.shared::cta.b64",
+        "SASS: SYNCS.EXCH.64"
+      ],
+      "placement_rule": "Triton 会在 kernel 序言初始化、收尾 inval 掉它自己用的 mbarrier。这两处属于序言/收尾，不要计入主循环的等待；分析序言开销时单独记一段。",
+      "evidence": {
+        "snippet": "/*0db0*/ @!UP1 SYNCS.EXCH.64 URZ, [UR8+0x4000], UR6 ;",
+        "machine": "mail-12 交叉编译到 sm_103a（nvcc 13.3 V13.3.73 / triton 3.6.0，cuobjdump -sass）；本机无 B300，未实机运行",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_103a",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "cross-compiled PTX/SASS only; no B300 hardware run"
+    }
+  ],
+  "probes": {
+    "CUDA C++": "probe_cuda.cu（cp.async / mbarrier / TMA / tcgen05 单 CTA 与 2-CTA / cluster 栅栏 / clusterlaunchcontrol）",
+    "Triton 主探针": "triton_persistent_mm.py 的 mm_persistent（BM=128 BN=128 BK=64 GROUP_M=8 num_warps=8 num_stages=3）",
+    "Triton TMA 探针": "probe_triton_tma.py 的 probe_tma_copy（make_tensor_descriptor + load/store）"
+  }
+}

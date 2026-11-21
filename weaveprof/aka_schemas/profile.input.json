@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["source", "bench"],
+  "additionalProperties": false,
+  "properties": {
+    "source": {"type": "string", "minLength": 1},
+    "bench": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "card": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "limit": {"type": "number", "minimum": 0, "maximum": 0.5},
+    "max_rounds": {"type": "integer", "minimum": 1, "maximum": 10},
+    "out": {"type": "string", "minLength": 1},
+    "run_dir": {"type": "string", "minLength": 1},
+    "require_abba_order": {"type": "boolean"},
+    "enforce_trace_processor": {"type": "boolean"},
+    "prev_causal_report": {"type": "object"},
+    "prev_causal_report_path": {"type": "string", "minLength": 1}
+  }
+}

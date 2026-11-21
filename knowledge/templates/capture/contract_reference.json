@@ -1,0 +1,20 @@
+{
+  "_doc": "插桩契约。每个项目一份，放在 <项目>/profile/contract.json。skill 的判据脚本自动加载它，人只填一次，避免每次命令行手敲 --expect-* 传错。所有字段都是这个 kernel 的客观属性，不是阈值调参。",
+  "_usage": "validate_capability.py --contract <项目>/profile/contract.json <trace>  （命令行显式传的参数优先级更高，可覆盖契约）",
+
+  "kernel_name_contains": "填 nsys CUPTI 里目标 kernel 的名字片段，如 MiniMaxM3Megakernel / KdaMegakernel。extract_gpu_metrics 用它定位 launch。",
+
+  "grid": 78,
+  "warps_per_block": 12,
+  "phases": 6,
+
+  "kloop_per_warp": null,
+  "kloop_task_pattern": "wgmma|mma_compute|mma|attn_qk_mma|attn_softmax_pv",
+  "_kloop_doc": "kloop_per_warp = kernel 主循环每个打点 warp 的迭代次数(如 K_TILES)。填了就检查观测到的 kloop task 实例数是否接近它，防止只在 phase 首尾打一对代表。用了采样打点就填 K/sampling_rate。填 null 跳过这条判据。",
+
+  "require_task_layer": true,
+  "require_hw": true,
+  "hw_required_metrics": ["SMs Active", "DRAM"],
+
+  "_not_a_criterion": "counter 数值的高低(SMs Active 是 5% 还是 95%)不作判据 —— 那是 kernel 的真实属性，profile 的意义正是暴露它。工具只判「hw 采的和 sw 是不是同一个 build」(时长匹配)，不替 kernel 判断该有多少占用。"
+}

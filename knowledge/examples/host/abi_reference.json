@@ -1,0 +1,472 @@
+{
+  "schema": "megamoe.profiler-abi/v1",
+  "source_file": "infra/deep_gemm/include/deep_gemm/profiler/mega_moe_profiler.cuh",
+  "source_sha256": "1671dc7f6babbf2628887f4edfab2305451fdfcef3351759cabb6da0b79e511f",
+  "binding_source_file": "fixed/kernel.cuh",
+  "binding_source_sha256": "370bb273dc8628beeb6655cf9bf76ab83b6be0213776edea4246cd3ed1805e79",
+  "host_source_file": "infra/csrc/jit_kernels/impls/sm90_fp8_mega_moe.hpp",
+  "host_source_sha256": "3371e2dcd3425d1142de62016121b211b55c8c56db1f5f2eae66cf49410356bd",
+  "generator": "profile/scripts/extract_abi.py",
+  "regeneration": "python3 -B profile/scripts/extract_abi.py --write, then python3 -B profile/scripts/extract_abi.py --check",
+  "target": {
+    "arch": "sm_90",
+    "device_family": "Hopper/H20",
+    "kernel": "SM90 FP8 MegaMoE megakernel (persistent CTAs, warp specialized)"
+  },
+  "clock": {
+    "source": "%globaltimer",
+    "unit": "ns",
+    "width_bits": 64,
+    "scope": "gpu-global",
+    "monotonic_within_device": true,
+    "comparable_across_ctas": true,
+    "comparable_across_ranks": false,
+    "cross_rank_alignment": "use sync_anchors.entry_rendezvous"
+  },
+  "buffer": {
+    "element_dtype": "int64",
+    "torch_dtype": "torch.long",
+    "element_bytes": 8,
+    "zero_init_required": true,
+    "zero_init_rationale": "unwritten record slots are only recognizable because both elements stay 0",
+    "header_elems_expr": "1 + num_sms",
+    "header_elems_source_expr": "1 + kNumSMs",
+    "elems_per_record": 2,
+    "slot_formula": "slot = (block * num_tracks * max_records + track * max_records + offset) * 2",
+    "element_index_formula": "header_elems + slot + field_index",
+    "numel_formula": "1 + num_sms + num_sms * num_tracks * max_records * 2",
+    "num_tracks": 7,
+    "empty_slot_sentinel": {
+      "field": "timestamp_ns",
+      "value": 0,
+      "note": "timestamp_ns == 0 marks a never-written slot"
+    },
+    "overflow_policy": "drop_on_full_no_wrap",
+    "overflow_detail": "record() returns early once offset >= max_records; dropped events are not counted anywhere on device",
+    "append_semantics": "per (block, track) monotonically increasing offset",
+    "atomic_free": true,
+    "offset_bits": 29,
+    "offset_mask": 536870911,
+    "disabled_state": 4294967295,
+    "state_packing": "state = (track_id << kOffsetBits) | offset"
+  },
+  "regions": {
+    "metadata": {
+      "elem_index": 0,
+      "elem_count": 1,
+      "view_dtype": "uint32",
+      "writer": "track 0 observer of blockIdx.x == 0",
+      "fields": [
+        {
+          "name": "num_sms",
+          "word_index": 0,
+          "lsb": 0,
+          "width": 32,
+          "mask": 4294967295,
+          "source_symbol": "kNumSMs"
+        },
+        {
+          "name": "num_tracks",
+          "word_index": 1,
+          "lsb": 32,
+          "width": 32,
+          "mask": 4294967295,
+          "source_symbol": "kMegaMoEProfileNumTracks"
+        }
+      ]
+    },
+    "block_map": {
+      "elem_index_expr": "1 + block",
+      "elem_index_source_expr": "1 + blockIdx.x",
+      "elem_count_expr": "num_sms",
+      "view_dtype": "uint32",
+      "writer": "track 0 observer of every CTA",
+      "writer_guard": "track_id == 0",
+      "purpose": "logical CTA -> physical SM id mapping",
+      "fields": [
+        {
+          "name": "logical_cta",
+          "word_index": 0,
+          "lsb": 0,
+          "width": 32,
+          "mask": 4294967295,
+          "source_expr": "static_cast<uint32_t>(blockIdx.x)"
+        },
+        {
+          "name": "physical_smid",
+          "word_index": 1,
+          "lsb": 32,
+          "width": 32,
+          "mask": 4294967295,
+          "source_expr": "physical_smid"
+        }
+      ]
+    },
+    "records": {
+      "elem_index_expr": "1 + num_sms",
+      "elem_count_expr": "num_sms * num_tracks * max_records * 2",
+      "layout": {
+        "elems_per_record": 2,
+        "block_stride_expr": "num_tracks * max_records * 2",
+        "track_stride_expr": "max_records * 2",
+        "record_stride_expr": "2",
+        "slot_formula": "slot = (block * num_tracks * max_records + track * max_records + offset) * 2",
+        "element_index_formula": "header_elems + slot + field_index",
+        "fields": [
+          {
+            "index": 0,
+            "name": "timestamp_ns",
+            "dtype": "uint64",
+            "unit": "ns"
+          },
+          {
+            "index": 1,
+            "name": "tag",
+            "dtype": "uint32",
+            "unit": "bitfield"
+          }
+        ],
+        "num_tracks_symbol_value": 7,
+        "source_expr": "(static_cast<uint64_t>(blockIdx.x) * kMegaMoEProfileNumTracks * max_records + static_cast<uint64_t>(track_id) * max_records + offset) * 2ull"
+      }
+    }
+  },
+  "tag_storage": {
+    "container_dtype": "int64",
+    "value_bits": 32,
+    "high_bits_must_be_zero": true,
+    "note": "tag occupies the low 32 bits of the second record element"
+  },
+  "tag_bitfields": {
+    "block": {
+      "lsb": 20,
+      "width": 12,
+      "mask": 4095,
+      "msb": 31,
+      "meaning": "blockIdx.x of the recording persistent CTA"
+    },
+    "track": {
+      "lsb": 17,
+      "width": 3,
+      "mask": 7,
+      "msb": 19,
+      "meaning": "observer track id (role slot) inside the CTA"
+    },
+    "expert_idx": {
+      "lsb": 9,
+      "width": 8,
+      "mask": 255,
+      "msb": 16,
+      "meaning": "optional expert index argument, 0 when unused"
+    },
+    "task": {
+      "lsb": 4,
+      "width": 5,
+      "mask": 31,
+      "msb": 8,
+      "meaning": "MegaMoEProfileTask enum value"
+    },
+    "is_start": {
+      "lsb": 3,
+      "width": 1,
+      "mask": 1,
+      "msb": 3,
+      "meaning": "1 = interval open, 0 = interval close"
+    },
+    "unused": {
+      "lsb": 0,
+      "width": 3,
+      "mask": 7,
+      "msb": 2,
+      "meaning": "not written by the kernel, always 0"
+    }
+  },
+  "tag_field_order_msb_first": [
+    "block",
+    "track",
+    "expert_idx",
+    "task",
+    "is_start",
+    "unused"
+  ],
+  "enum": {
+    "name": "MegaMoEProfileTask",
+    "underlying_type": "uint32_t",
+    "count": 20
+  },
+  "tasks": [
+    {
+      "id": 0,
+      "name": "kDispatchRoutePublish",
+      "short_name": "route_publish",
+      "display_name": "Dispatch: Route Publish"
+    },
+    {
+      "id": 1,
+      "name": "kDispatchNvlinkPull",
+      "short_name": "nvlink_pull",
+      "display_name": "Dispatch: NVLink Pull"
+    },
+    {
+      "id": 2,
+      "name": "kDispatchCleanup",
+      "short_name": "cleanup",
+      "display_name": "Dispatch: Cleanup"
+    },
+    {
+      "id": 3,
+      "name": "kDispatchSync",
+      "short_name": "dispatch_sync",
+      "display_name": "Dispatch: Sync"
+    },
+    {
+      "id": 4,
+      "name": "kLoaderAWaitPool",
+      "short_name": "a_wait_pool",
+      "display_name": "Loader A: Wait Pool"
+    },
+    {
+      "id": 5,
+      "name": "kLoaderAPipeline",
+      "short_name": "a_pipe",
+      "display_name": "Loader A: Pipeline"
+    },
+    {
+      "id": 6,
+      "name": "kLoaderBPipeline",
+      "short_name": "b_pipe",
+      "display_name": "Loader B: Pipeline"
+    },
+    {
+      "id": 7,
+      "name": "kMathL1GemmPipeline",
+      "short_name": "l1_gemm",
+      "display_name": "Math L1: GEMM Pipeline"
+    },
+    {
+      "id": 8,
+      "name": "kMathL1SwiGLUQuantize",
+      "short_name": "l1_swiglu_q",
+      "display_name": "Math L1: SwiGLU Quantize"
+    },
+    {
+      "id": 9,
+      "name": "kMathL1TmaStore",
+      "short_name": "l1_tma_store",
+      "display_name": "Math L1: TMA Store"
+    },
+    {
+      "id": 10,
+      "name": "kMathL2GemmPipeline",
+      "short_name": "l2_gemm",
+      "display_name": "Math L2: GEMM Pipeline"
+    },
+    {
+      "id": 11,
+      "name": "kMathL2Bf16Scatter",
+      "short_name": "l2_scatter",
+      "display_name": "Math L2: BF16 Scatter"
+    },
+    {
+      "id": 12,
+      "name": "kMathCombineReduceStore",
+      "short_name": "combine_store",
+      "display_name": "Math: Combine Reduce Store"
+    },
+    {
+      "id": 13,
+      "name": "kMathBeforeCombineBarrier",
+      "short_name": "pre_combine_bar",
+      "display_name": "Math: Pre-Combine Barrier"
+    },
+    {
+      "id": 14,
+      "name": "kMathWaitDispatch",
+      "short_name": "wait_dispatch",
+      "display_name": "Math: Wait Dispatch"
+    },
+    {
+      "id": 15,
+      "name": "kMathWaitFullBarrier",
+      "short_name": "wait_full_bar",
+      "display_name": "Math: Wait Full Barrier"
+    },
+    {
+      "id": 16,
+      "name": "kLoaderAWaitEmpty",
+      "short_name": "a_wait_empty",
+      "display_name": "Loader A: Wait Empty"
+    },
+    {
+      "id": 17,
+      "name": "kLoaderBWaitEmpty",
+      "short_name": "b_wait_empty",
+      "display_name": "Loader B: Wait Empty"
+    },
+    {
+      "id": 18,
+      "name": "kDispatchWaitBeforeCleanup",
+      "short_name": "wait_pre_cleanup",
+      "display_name": "Dispatch: Wait Before Cleanup"
+    },
+    {
+      "id": 19,
+      "name": "kEntryRankSync",
+      "short_name": "entry_rank_sync",
+      "display_name": "Entry Rank Sync"
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": 0,
+      "track_id_expr": "0",
+      "binding_rule": "if (warp_idx == 0 and lane_idx == 0)",
+      "binding_source_line": 170,
+      "observer_warp_expr": "0",
+      "observer_lane": 0,
+      "reference_warp_idx": 0,
+      "may_be_empty": false,
+      "populated_in_reference_config": true
+    },
+    {
+      "track_id": 1,
+      "track_id_expr": "1",
+      "binding_rule": "else if (warp_idx == kNumDispatchWarps and lane_idx == 0)",
+      "binding_source_line": 172,
+      "observer_warp_expr": "kNumDispatchWarps",
+      "observer_lane": 0,
+      "reference_warp_idx": 2,
+      "may_be_empty": false,
+      "populated_in_reference_config": true
+    },
+    {
+      "track_id": 2,
+      "track_id_expr": "2",
+      "binding_rule": "else if (warp_idx == kNumDispatchWarps + 1 and lane_idx == 0)",
+      "binding_source_line": 174,
+      "observer_warp_expr": "kNumDispatchWarps + 1",
+      "observer_lane": 0,
+      "reference_warp_idx": 3,
+      "may_be_empty": false,
+      "populated_in_reference_config": true
+    },
+    {
+      "track_id": 3,
+      "track_id_expr": "3 + (warp_idx - math_warp_start) / 4",
+      "binding_rule": "if (warp_idx >= math_warp_start and warp_idx < math_warp_start + kNumEpilogueWarps and (warp_idx - math_warp_start) % 4 == 0 and lane_idx == 0)",
+      "binding_source_line": 180,
+      "observer_warp_expr": "math_warp_start + (track_id - 3) * 4",
+      "observer_lane": 0,
+      "reference_warp_idx": 4,
+      "may_be_empty": false,
+      "populated_in_reference_config": true
+    },
+    {
+      "track_id": 4,
+      "track_id_expr": "3 + (warp_idx - math_warp_start) / 4",
+      "binding_rule": "if (warp_idx >= math_warp_start and warp_idx < math_warp_start + kNumEpilogueWarps and (warp_idx - math_warp_start) % 4 == 0 and lane_idx == 0)",
+      "binding_source_line": 180,
+      "observer_warp_expr": "math_warp_start + (track_id - 3) * 4",
+      "observer_lane": 0,
+      "reference_warp_idx": 8,
+      "may_be_empty": false,
+      "populated_in_reference_config": true
+    },
+    {
+      "track_id": 5,
+      "track_id_expr": "3 + (warp_idx - math_warp_start) / 4",
+      "binding_rule": "if (warp_idx >= math_warp_start and warp_idx < math_warp_start + kNumEpilogueWarps and (warp_idx - math_warp_start) % 4 == 0 and lane_idx == 0)",
+      "binding_source_line": 180,
+      "observer_warp_expr": "math_warp_start + (track_id - 3) * 4",
+      "observer_lane": 0,
+      "reference_warp_idx": null,
+      "may_be_empty": true,
+      "populated_in_reference_config": false
+    },
+    {
+      "track_id": 6,
+      "track_id_expr": "3 + (warp_idx - math_warp_start) / 4",
+      "binding_rule": "if (warp_idx >= math_warp_start and warp_idx < math_warp_start + kNumEpilogueWarps and (warp_idx - math_warp_start) % 4 == 0 and lane_idx == 0)",
+      "binding_source_line": 180,
+      "observer_warp_expr": "math_warp_start + (track_id - 3) * 4",
+      "observer_lane": 0,
+      "reference_warp_idx": null,
+      "may_be_empty": true,
+      "populated_in_reference_config": false
+    }
+  ],
+  "sync_anchors": {
+    "entry_rendezvous": {
+      "task": "kEntryRankSync",
+      "task_id": 19,
+      "track": 0,
+      "recorded_by": "dispatch observer warp (track 0, lane 0)",
+      "guaranteed_first_event_per_cta": true,
+      "start_semantics": "rank_arrive",
+      "end_semantics": "rank_release",
+      "end_aliases": [
+        "rank_release",
+        "core_begin"
+      ],
+      "mechanism": {
+        "between_start_and_end": "comm::nvlink_barrier across ranks",
+        "after_end": "comm::grid_sync publishes every CTA end record before any dispatch/loader/math warp starts business work",
+        "profile_only": true,
+        "guard": "if constexpr (kEnableProfiler)"
+      },
+      "grid_sync_indices": {
+        "entry_barrier_grid_sync_index": 2,
+        "entry_publish_grid_sync_index": 3,
+        "cta_barrier_idx": 15
+      },
+      "alignment_usage": "cross-rank timeline alignment baseline: shift ranks so that max(entry_sync_end_ns) or min(entry_sync_start_ns) coincide",
+      "source": "fixed/kernel.cuh:192-220",
+      "source_file": "fixed/kernel.cuh"
+    }
+  },
+  "enable_switch": {
+    "device_template": "MegaMoEProfiler<kEnabled, kNumSMs>",
+    "disabled_specialization": "MegaMoEProfiler<false, kNumSMs> has empty init/start/end, so the non-profiled JIT specialization compiles the probes away",
+    "host_contract": {
+      "gate": "args.profiler_buf != nullptr",
+      "source": "infra/csrc/jit_kernels/impls/sm90_fp8_mega_moe.hpp",
+      "dtype": "torch.long",
+      "device": "cuda",
+      "contiguous": true,
+      "zero_init_required": true,
+      "max_records_exclusive_limit": 536870912,
+      "required_numel_expr": "1 + num_sms + num_sms * 7 * max_records * 2",
+      "asserts_numel_at_least_required": true
+    }
+  },
+  "decoder_hints": {
+    "scan_order": "per (block, track), ascending offset",
+    "stop_condition": "first slot with timestamp_ns == 0 and tag == 0 terminates the track; anything non-zero after it is corruption",
+    "pairing": "stack per task_id inside one (block, track); nesting of different tasks is expected (waits inside pipelines)",
+    "truncation_check": "records == max_records means events may be missing",
+    "consistency_check": "tag.block / tag.track must equal the block / track implied by the slot index",
+    "empty_tracks_are_legal": true
+  },
+  "reference_config": {
+    "name": "qwen3.6-ep2-sm90",
+    "num_dispatch_warps": 2,
+    "num_mma_non_epilogue_warps": 2,
+    "num_epilogue_warps": 8,
+    "num_math_warpgroups": 2,
+    "num_warps": 12,
+    "num_threads": 384,
+    "math_warp_start": 4,
+    "observer_warp_by_track": {
+      "0": 0,
+      "1": 2,
+      "2": 3,
+      "3": 4,
+      "4": 8
+    },
+    "expected_empty_tracks": [
+      5,
+      6
+    ],
+    "provenance": "warp counts come from the JIT specialization launched through infra/csrc/jit_kernels/impls/sm90_fp8_mega_moe.hpp; observer warp ids follow the binding block in fixed/kernel.cuh"
+  }
+}

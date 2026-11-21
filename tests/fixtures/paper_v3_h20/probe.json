@@ -1,0 +1,7 @@
+{
+  "roles": {"dma": "warp 4", "math": "warps 0-3"},
+  "probes": [
+    {"id": "load", "begin": {"role": "dma", "line": 14}, "end": {"role": "math", "line": 18}, "slot": "s"},
+    {"id": "mma", "begin": {"role": "math", "line": 23}, "end": {"role": "math", "line": 26}}
+  ]
+}

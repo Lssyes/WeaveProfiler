@@ -1,0 +1,154 @@
+{
+  "schema": "weaveprofiler-hardware-metrics/v1",
+  "version": 2,
+  "policy": {
+    "required_timeline_ids": ["compute_util", "memory_util", "communication_util", "sm_active"],
+    "auxiliary_metric_ids": ["tensor_util", "simd_util"],
+    "display_names_equal_ids": true,
+    "timeline_label_policy": "keep semantic ids stable; hardware tracks may add an explicit pipe qualifier such as compute_util [matrix_core] or simd_util [SIMD/CU]",
+    "unavailable_must_be_explicit": true,
+    "fabricated_zero_forbidden": true,
+    "strict_kernel_window_for_coverage": true,
+    "pad_is_display_only": true,
+    "amd_tensor_util_source": "same-run rocprof-sys: 100*SQ_VALU_MFMA_BUSY_CYCLES/(GRBM_GUI_ACTIVE*(CU_NUM*SIMD_PER_CU/XCC_NUM))",
+    "amd_tensor_util_rocprofv3_role": "optional independent calibration/fallback only; never the primary source",
+    "amd_same_run_timestamp_pairing": "Pair each kernel dispatch slice with a raw ROCm PM counter sample from the same rocprof-sys Perfetto proto by same-dispatch start timestamp and a declared tolerance; never splice another run.",
+    "amd_canonical_filename_card_token": "card-mi308x",
+    "amd_communication_unavailable_without_same_dispatch_counter": true,
+    "amd_amdsmi_as_compute_or_memory_utilization_forbidden": true,
+    "amd_simd_fallback_for_tensor_forbidden": true
+  },
+  "metrics": [
+    {
+      "semantic_id": "compute_util",
+      "display_name": "compute_util",
+      "unit": "percent_of_peak",
+      "meaning": "Compute-pipeline utilization. On the MI308X MFMA/GEMM route this is Matrix Core utilization derived from same-run raw ROCm PM counters. SIMD/CU utilization is the separate auxiliary simd_util curve.",
+      "nvidia": {
+        "preferred_observed_names": ["GPU Throughput [Throughput %]", "SM Issue [Throughput %]"],
+        "raw_counter_ids": ["sm__throughput.avg.pct_of_peak_sustained_elapsed", "sm__inst_executed_realtime.avg.pct_of_peak_sustained_elapsed"],
+        "evidence_status": "measured_on_h20_config_compiled_for_b300"
+      },
+      "amd": {
+        "kernel_route": ["mfma", "gemm"],
+        "collection": "rocprof-sys-run --rocm-events; kernel dispatch slices and raw ROCm PM counter tracks share one Perfetto proto",
+        "preferred_counters": ["SQ_VALU_MFMA_BUSY_CYCLES", "GRBM_GUI_ACTIVE"],
+        "native_metrics": ["SQ_VALU_MFMA_BUSY_CYCLES", "GRBM_GUI_ACTIVE"],
+        "formula": "100*SQ_VALU_MFMA_BUSY_CYCLES/(GRBM_GUI_ACTIVE*(CU_NUM*SIMD_PER_CU/XCC_NUM))",
+        "defaults": {
+          "cu_num": 80,
+          "simd_per_cu": 4,
+          "xcc_num": 4,
+          "simd_lanes_per_xcc": 80
+        },
+        "compute_pipe": "matrix_core",
+        "timeline_label": "compute_util [matrix_core]",
+        "derivation": "For a matched MFMA/GEMM kernel, pair the same-run raw counter sample to the dispatch start timestamp. For MI308X defaults, 80*4/4 gives 80 SIMD lanes per XCC. Expose the derived value as both compute_util and tensor_util. Never substitute SIMD_UTILIZATION, GPU_UTIL, CUDA-core utilization, GPU GFX Busy, or GPU UMC Busy.",
+        "rocprofv3_fallback": "rocprofv3:MfmaUtil is optional independent calibration/fallback evidence. Use it directly as a percent without multiplying by 100, label its provenance, and keep it separate from the primary same-run rocprof-sys series.",
+        "unavailable_rule": "If the kernel route is not MFMA/GEMM, either raw counter or a valid denominator is absent, mark compute_util and tensor_util unavailable with a reason. Never fill zero. A rocprofv3 calibration value does not make a missing same-run series measured.",
+        "evidence_status": "measured_on_mi308x_gemm_route"
+      }
+    },
+    {
+      "semantic_id": "memory_util",
+      "display_name": "memory_util",
+      "unit": "percent_of_peak",
+      "meaning": "HBM/DRAM utilization. Directional read/write counters stay as supporting series.",
+      "nvidia": {
+        "preferred_observed_names": ["DRAM Read Bandwidth [Throughput %]", "DRAM Write Bandwidth [Throughput %]"],
+        "raw_counter_ids": ["dram__read_throughput.avg.pct_of_peak_sustained_elapsed", "dram__write_throughput.avg.pct_of_peak_sustained_elapsed"],
+        "combine": "max(read,write) as a lower-bound utilization, plus directional curves",
+        "evidence_status": "measured_on_h20_config_compiled_for_b300"
+      },
+      "amd": {
+        "collection": "same-run rocprof-sys-run --rocm-events; pair the raw counter sample to the same dispatch by start timestamp",
+        "preferred_counters": ["TCC_EA0_RDREQ_DRAM", "TCC_EA0_WRREQ_DRAM"],
+        "formula": "100*((TCC_EA0_RDREQ_DRAM+TCC_EA0_WRREQ_DRAM)*64 B)/dispatch_duration/3684 GB/s",
+        "request_bytes": 64,
+        "measured_hbm_peak_gbps": 3684,
+        "timeline_label": "memory_util [HBM request estimate]",
+        "derivation": "Sum HBM read and write requests, multiply by the explicit 64 B/request model, divide by the paired dispatch duration and the measured 3684 GB/s peak, then multiply by 100. Keep directional read/write series and label the result explicitly as an estimate.",
+        "unavailable_rule": "If either DRAM request counter, the dispatch duration, or the measured peak is absent or invalid, mark memory_util and its directional series unavailable with a reason. Never fill zero for missing evidence.",
+        "evidence_status": "measured_on_mi308x_gemm_route_estimated_from_64b_requests_and_3684_gbps_peak"
+      }
+    },
+    {
+      "semantic_id": "communication_util",
+      "display_name": "communication_util",
+      "unit": "percent_of_peak",
+      "meaning": "Interconnect utilization. Same-host NVLink/XGMI and cross-host NIC/RDMA evidence must remain distinguishable.",
+      "nvidia": {
+        "preferred_observed_names": ["NVLink RX Requests User Data [Throughput %]", "NVLink RX Responses User Data [Throughput %]", "NVLink TX Requests User Data [Throughput %]", "NVLink TX Responses User Data [Throughput %]"],
+        "raw_counter_ids": ["nvlrx__bytes_packet_request_data_user", "nvlrx__bytes_packet_response_data_user", "nvltx__bytes_packet_request_data_user", "nvltx__bytes_packet_response_data_user"],
+        "cross_host": "NIC-side counters required; GPU NVLink counters do not prove RDMA traffic",
+        "evidence_status": "counter_names_compiled_config_runtime_unverified"
+      },
+      "amd": {
+        "preferred_counters": [],
+        "same_dispatch_requirement": "Requires an XGMI, RDMA, or fabric counter collected in the same run and paired to the same dispatch. Cross-host bandwidth also requires NIC-side evidence.",
+        "derivation": null,
+        "proxies_not_utilization": ["TCC_EA0_RDREQ_GMI_CREDIT_STALL", "TCC_EA0_WRREQ_GMI_CREDIT_STALL", "EA requests minus HBM DRAM requests", "amd-smi NIC polling", "amd-smi GPU busy or memory busy"],
+        "unavailable_rule": "When no same-dispatch XGMI/RDMA/fabric counter exists, mark communication_util unavailable with a reason. Never invent zero, never derive it from GMI credit-stall cycles or an EA-minus-DRAM request difference, and never use amd-smi as a substitute.",
+        "evidence_status": "unavailable_without_same_dispatch_interconnect_counter"
+      }
+    },
+    {
+      "semantic_id": "sm_active",
+      "display_name": "sm_active",
+      "unit": "percent_of_peak",
+      "meaning": "Fraction of physical SM/CU resources active over the strict kernel window. This is not Tensor Core utilization.",
+      "nvidia": {
+        "preferred_observed_names": ["SMs Active [Throughput %]"],
+        "raw_counter_ids": ["sm__cycles_active.avg.pct_of_peak_sustained_elapsed"],
+        "evidence_status": "measured_on_h20_config_compiled_for_b300"
+      },
+      "amd": {
+        "preferred_counters": ["GPU_UTIL"],
+        "native_metrics": ["GPU_UTIL"],
+        "timeline_label": "sm_active [GPU active]",
+        "derivation": "Use same-run rocprof-sys GPU_UTIL as percent device-level GPU activity when present. Do not relabel it as tensor_util or compute_util.",
+        "unavailable_rule": "If GPU_UTIL is absent or outside its percent range, mark sm_active unavailable with a reason; never fill zero.",
+        "evidence_status": "measured_on_mi308x_gemm_route"
+      }
+    }
+  ],
+  "supporting_series": [
+    {"semantic_id": "memory_read_util", "parent": "memory_util", "unit": "percent_of_peak", "source": "same-run rocprof-sys:TCC_EA0_RDREQ_DRAM*64 B/dispatch_duration/3684 GB/s", "estimate": true},
+    {"semantic_id": "memory_write_util", "parent": "memory_util", "unit": "percent_of_peak", "source": "same-run rocprof-sys:TCC_EA0_WRREQ_DRAM*64 B/dispatch_duration/3684 GB/s", "estimate": true},
+    {
+      "semantic_id": "tensor_util",
+      "parent": "compute_util",
+      "unit": "percent_of_peak",
+      "source": "same-run rocprof-sys:SQ_VALU_MFMA_BUSY_CYCLES+GRBM_GUI_ACTIVE",
+      "native_metrics": ["SQ_VALU_MFMA_BUSY_CYCLES", "GRBM_GUI_ACTIVE"],
+      "formula": "100*SQ_VALU_MFMA_BUSY_CYCLES/(GRBM_GUI_ACTIVE*(CU_NUM*SIMD_PER_CU/XCC_NUM))",
+      "defaults": {"cu_num": 80, "simd_per_cu": 4, "xcc_num": 4, "simd_lanes_per_xcc": 80},
+      "compute_pipe": "matrix_core",
+      "kernel_route": ["mfma", "gemm"],
+      "timeline_label": "tensor_util [matrix_core]",
+      "auxiliary": true,
+      "rocprofv3_calibration": "optional independent rocprofv3:MfmaUtil fallback; not the primary source",
+      "unavailable_rule": "non-MFMA/GEMM route or missing/invalid raw counters; never zero-filled and never derived from SIMD, GPU_UTIL, or amd-smi GPU busy",
+      "evidence_status": "measured_on_mi308x_gemm_route"
+    },
+    {
+      "semantic_id": "simd_util",
+      "parent": "compute_util",
+      "unit": "percent_of_peak",
+      "source": "same-run rocprof-sys:SIMD_UTILIZATION*100",
+      "native_metric": "SIMD_UTILIZATION",
+      "compute_pipe": "simd",
+      "timeline_label": "simd_util [SIMD/CU]",
+      "auxiliary": true,
+      "unavailable_rule": "missing or out-of-range SIMD_UTILIZATION; do not relabel as tensor_util",
+      "evidence_status": "measured_on_mi308x_gemm_route"
+    },
+    {"semantic_id": "communication_rx_util", "parent": "communication_util", "unit": "percent_of_peak"},
+    {"semantic_id": "communication_tx_util", "parent": "communication_util", "unit": "percent_of_peak"}
+  ],
+  "coarse_auxiliary_overlays": [
+    {"semantic_id": "gpu_busy", "source": "optional amd-smi polling:GPU_GFX_BUSY", "canonical_mapping": null, "auxiliary_only": true, "presentation_role": "coarse_debug_context_only", "not_compute_util": true, "not_tensor_util": true},
+    {"semantic_id": "memory_busy", "source": "optional amd-smi polling:GPU_UMC_BUSY", "canonical_mapping": null, "auxiliary_only": true, "presentation_role": "coarse_debug_context_only", "not_memory_util": true, "not_compute_util": true},
+    {"semantic_id": "gpu_memory_used_mib", "source": "optional amd-smi polling:GPU_MEMORY_USAGE", "canonical_mapping": null, "auxiliary_only": true, "presentation_role": "coarse_debug_context_only", "not_memory_util": true, "not_compute_util": true}
+  ]
+}

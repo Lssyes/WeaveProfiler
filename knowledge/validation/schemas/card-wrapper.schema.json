@@ -1,0 +1,1183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weaveprofiler.local/schemas/card-wrapper.schema.json",
+  "title": "Weaveprofiler card wrapper and machine profile",
+  "description": "Validates a public card wrapper or one machine profile. Public wrappers are exactly h20, b300, mi308x; B300 architectures remain distinct.",
+  "$defs": {
+    "profileRef": {
+      "type": "object",
+      "required": [
+        "arch",
+        "profile",
+        "evidence_status",
+        "evidence_scope"
+      ],
+      "properties": {
+        "arch": {
+          "enum": [
+            "sm_90",
+            "sm_100a",
+            "sm_103a",
+            "gfx942"
+          ]
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+\\.json$"
+        },
+        "evidence_status": {
+          "enum": [
+            "measured",
+            "compiled",
+            "simulated",
+            "unverified"
+          ]
+        },
+        "evidence_scope": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "machineEntry": {
+      "type": "object",
+      "required": [
+        "semantic_id",
+        "display_name",
+        "arch",
+        "evidence_status",
+        "language",
+        "construct",
+        "placement_rule",
+        "evidence"
+      ],
+      "properties": {
+        "semantic_id": {
+          "enum": [
+            "gemm",
+            "attention",
+            "softmax",
+            "reduction",
+            "moe",
+            "convolution",
+            "megakernel",
+            "load",
+            "wait",
+            "mma",
+            "compute",
+            "epilogue",
+            "store",
+            "barrier",
+            "dispatch",
+            "communication",
+            "unknown"
+          ]
+        },
+        "display_name": {
+          "enum": [
+            "gemm",
+            "attention",
+            "softmax",
+            "reduction",
+            "moe",
+            "convolution",
+            "megakernel",
+            "load",
+            "wait",
+            "mma",
+            "compute",
+            "epilogue",
+            "store",
+            "barrier",
+            "dispatch",
+            "communication",
+            "unknown"
+          ]
+        },
+        "semantic_legacy": {
+          "type": "string"
+        },
+        "arch": {
+          "enum": [
+            "sm_90",
+            "sm_100a",
+            "sm_103a",
+            "gfx942"
+          ]
+        },
+        "evidence_status": {
+          "enum": [
+            "measured",
+            "compiled",
+            "simulated",
+            "unverified"
+          ]
+        },
+        "evidence_status_basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "language": {
+          "enum": [
+            "cuda_cpp",
+            "triton",
+            "cutedsl",
+            "hip_cpp",
+            "generic"
+          ]
+        },
+        "language_display_name": {
+          "type": "string"
+        },
+        "construct": {
+          "type": "string",
+          "minLength": 1
+        },
+        "isa_mnemonics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "placement_rule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "object",
+          "required": [
+            "date",
+            "machine",
+            "snippet"
+          ],
+          "properties": {
+            "date": {
+              "type": "string"
+            },
+            "machine": {
+              "type": "string",
+              "minLength": 1
+            },
+            "snippet": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "gemm"
+                },
+                "display_name": {
+                  "const": "gemm"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "attention"
+                },
+                "display_name": {
+                  "const": "attention"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "softmax"
+                },
+                "display_name": {
+                  "const": "softmax"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "reduction"
+                },
+                "display_name": {
+                  "const": "reduction"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "moe"
+                },
+                "display_name": {
+                  "const": "moe"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "convolution"
+                },
+                "display_name": {
+                  "const": "convolution"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "megakernel"
+                },
+                "display_name": {
+                  "const": "megakernel"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "load"
+                },
+                "display_name": {
+                  "const": "load"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "wait"
+                },
+                "display_name": {
+                  "const": "wait"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "mma"
+                },
+                "display_name": {
+                  "const": "mma"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "compute"
+                },
+                "display_name": {
+                  "const": "compute"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "epilogue"
+                },
+                "display_name": {
+                  "const": "epilogue"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "store"
+                },
+                "display_name": {
+                  "const": "store"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "barrier"
+                },
+                "display_name": {
+                  "const": "barrier"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "dispatch"
+                },
+                "display_name": {
+                  "const": "dispatch"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "communication"
+                },
+                "display_name": {
+                  "const": "communication"
+                }
+              }
+            },
+            {
+              "required": [
+                "semantic_id",
+                "display_name"
+              ],
+              "properties": {
+                "semantic_id": {
+                  "const": "unknown"
+                },
+                "display_name": {
+                  "const": "unknown"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "machineProfileDocument": {
+      "type": "object",
+      "required": [
+        "schema",
+        "version",
+        "kind",
+        "card",
+        "arch",
+        "vendor",
+        "platform",
+        "warp_size",
+        "machine",
+        "date",
+        "evidence_status",
+        "granularity",
+        "evidence_policy",
+        "profiler",
+        "entries"
+      ],
+      "properties": {
+        "schema": {
+          "const": "weaveprofiler.card-machine/v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "machine_profile"
+        },
+        "card": {
+          "enum": [
+            "h20",
+            "b300",
+            "mi308x"
+          ]
+        },
+        "arch": {
+          "enum": [
+            "sm_90",
+            "sm_100a",
+            "sm_103a",
+            "gfx942"
+          ]
+        },
+        "vendor": {
+          "enum": [
+            "nvidia",
+            "amd"
+          ]
+        },
+        "platform": {
+          "enum": [
+            "nv",
+            "amd"
+          ]
+        },
+        "warp_size": {
+          "enum": [
+            32,
+            64
+          ]
+        },
+        "machine": {
+          "type": "string",
+          "minLength": 1
+        },
+        "date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "evidence_status": {
+          "enum": [
+            "measured",
+            "compiled",
+            "simulated",
+            "unverified"
+          ]
+        },
+        "granularity": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "evidence_policy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profiler": {
+          "type": "object",
+          "required": [
+            "primary",
+            "fallback"
+          ],
+          "properties": {
+            "primary": {
+              "enum": [
+                "nsys",
+                "rocprof-sys",
+                "rocprofv3"
+              ]
+            },
+            "fallback": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "nsys",
+                  "rocprof-sys",
+                  "rocprofv3"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "sampling_model": {
+              "type": "string"
+            },
+            "preferred_sample_hz": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "amd_smi_coarse_hz_range": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "additionalProperties": true
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/machineEntry"
+          }
+        },
+        "device": {
+          "type": "object"
+        },
+        "toolchain": {
+          "type": "object"
+        },
+        "timer": {
+          "type": "object"
+        },
+        "probes": {
+          "type": "object"
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "validation": {
+          "type": "object"
+        },
+        "recorder_kb": {
+          "type": [
+            "string",
+            "object"
+          ]
+        },
+        "how_to_reproduce": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "arch": {
+                "const": "sm_90"
+              }
+            },
+            "required": [
+              "arch"
+            ]
+          },
+          "then": {
+            "properties": {
+              "card": {
+                "const": "h20"
+              },
+              "vendor": {
+                "const": "nvidia"
+              },
+              "platform": {
+                "const": "nv"
+              },
+              "warp_size": {
+                "const": 32
+              },
+              "entries": {
+                "items": {
+                  "properties": {
+                    "arch": {
+                      "const": "sm_90"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "arch": {
+                "const": "sm_100a"
+              }
+            },
+            "required": [
+              "arch"
+            ]
+          },
+          "then": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              },
+              "vendor": {
+                "const": "nvidia"
+              },
+              "platform": {
+                "const": "nv"
+              },
+              "warp_size": {
+                "const": 32
+              },
+              "entries": {
+                "items": {
+                  "properties": {
+                    "arch": {
+                      "const": "sm_100a"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "arch": {
+                "const": "sm_103a"
+              }
+            },
+            "required": [
+              "arch"
+            ]
+          },
+          "then": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              },
+              "vendor": {
+                "const": "nvidia"
+              },
+              "platform": {
+                "const": "nv"
+              },
+              "warp_size": {
+                "const": 32
+              },
+              "entries": {
+                "items": {
+                  "properties": {
+                    "arch": {
+                      "const": "sm_103a"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "arch": {
+                "const": "gfx942"
+              }
+            },
+            "required": [
+              "arch"
+            ]
+          },
+          "then": {
+            "properties": {
+              "card": {
+                "const": "mi308x"
+              },
+              "vendor": {
+                "const": "amd"
+              },
+              "platform": {
+                "const": "amd"
+              },
+              "warp_size": {
+                "const": 64
+              },
+              "profiler": {
+                "properties": {
+                  "primary": {
+                    "const": "rocprof-sys"
+                  },
+                  "fallback": {
+                    "contains": {
+                      "const": "rocprofv3"
+                    }
+                  }
+                },
+                "required": [
+                  "primary",
+                  "fallback"
+                ]
+              },
+              "entries": {
+                "items": {
+                  "properties": {
+                    "arch": {
+                      "const": "gfx942"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cardWrapper": {
+      "type": "object",
+      "required": [
+        "schema",
+        "version",
+        "kind",
+        "card",
+        "display_name",
+        "vendor",
+        "platform",
+        "visibility",
+        "warp_size",
+        "architectures",
+        "machine_profiles",
+        "profiler",
+        "languages"
+      ],
+      "properties": {
+        "schema": {
+          "const": "weaveprofiler.card/v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "card_wrapper"
+        },
+        "card": {
+          "enum": [
+            "h20",
+            "b300",
+            "mi308x"
+          ]
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vendor": {
+          "enum": [
+            "nvidia",
+            "amd"
+          ]
+        },
+        "platform": {
+          "enum": [
+            "nv",
+            "amd"
+          ]
+        },
+        "visibility": {
+          "const": "public"
+        },
+        "warp_size": {
+          "enum": [
+            32,
+            64
+          ]
+        },
+        "architectures": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "sm_90",
+              "sm_100a",
+              "sm_103a",
+              "gfx942"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "machine_profiles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/profileRef"
+          }
+        },
+        "profiler": {
+          "type": "object",
+          "required": [
+            "primary",
+            "fallback"
+          ],
+          "properties": {
+            "primary": {
+              "enum": [
+                "nsys",
+                "rocprof-sys",
+                "rocprofv3"
+              ]
+            },
+            "fallback": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "nsys",
+                  "rocprof-sys",
+                  "rocprofv3"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "sampling_model": {
+              "type": "string"
+            },
+            "preferred_sample_hz": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "amd_smi_coarse_hz_range": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "additionalProperties": true
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "cuda_cpp",
+              "triton",
+              "cutedsl",
+              "hip_cpp"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "summary": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "card": {
+                "const": "h20"
+              }
+            },
+            "required": [
+              "card"
+            ]
+          },
+          "then": {
+            "properties": {
+              "display_name": {
+                "const": "NVIDIA H20"
+              },
+              "vendor": {
+                "const": "nvidia"
+              },
+              "platform": {
+                "const": "nv"
+              },
+              "warp_size": {
+                "const": 32
+              },
+              "architectures": {
+                "const": [
+                  "sm_90"
+                ]
+              },
+              "machine_profiles": {
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "required": [
+                    "arch",
+                    "profile",
+                    "evidence_status"
+                  ],
+                  "properties": {
+                    "arch": {
+                      "const": "sm_90"
+                    },
+                    "profile": {
+                      "const": "h20_sm_90.json"
+                    },
+                    "evidence_status": {
+                      "const": "measured"
+                    }
+                  }
+                }
+              },
+              "profiler": {
+                "required": [
+                  "primary",
+                  "fallback"
+                ],
+                "properties": {
+                  "primary": {
+                    "const": "nsys"
+                  },
+                  "fallback": {
+                    "maxItems": 0
+                  }
+                }
+              },
+              "languages": {
+                "const": [
+                  "cuda_cpp",
+                  "triton",
+                  "cutedsl"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              }
+            },
+            "required": [
+              "card"
+            ]
+          },
+          "then": {
+            "properties": {
+              "display_name": {
+                "const": "NVIDIA B300"
+              },
+              "vendor": {
+                "const": "nvidia"
+              },
+              "platform": {
+                "const": "nv"
+              },
+              "warp_size": {
+                "const": 32
+              },
+              "architectures": {
+                "const": [
+                  "sm_100a",
+                  "sm_103a"
+                ]
+              },
+              "machine_profiles": {
+                "minItems": 2,
+                "maxItems": 2,
+                "allOf": [
+                  {
+                    "contains": {
+                      "required": [
+                        "arch",
+                        "profile",
+                        "evidence_status"
+                      ],
+                      "properties": {
+                        "arch": {
+                          "const": "sm_100a"
+                        },
+                        "profile": {
+                          "const": "b300_sm_100a.json"
+                        },
+                        "evidence_status": {
+                          "const": "compiled"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "contains": {
+                      "required": [
+                        "arch",
+                        "profile",
+                        "evidence_status"
+                      ],
+                      "properties": {
+                        "arch": {
+                          "const": "sm_103a"
+                        },
+                        "profile": {
+                          "const": "b300_sm_103a.json"
+                        },
+                        "evidence_status": {
+                          "const": "compiled"
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "profiler": {
+                "required": [
+                  "primary",
+                  "fallback"
+                ],
+                "properties": {
+                  "primary": {
+                    "const": "nsys"
+                  },
+                  "fallback": {
+                    "maxItems": 0
+                  }
+                }
+              },
+              "languages": {
+                "const": [
+                  "cuda_cpp",
+                  "triton",
+                  "cutedsl"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "card": {
+                "const": "mi308x"
+              }
+            },
+            "required": [
+              "card"
+            ]
+          },
+          "then": {
+            "properties": {
+              "display_name": {
+                "const": "AMD Instinct MI308X"
+              },
+              "vendor": {
+                "const": "amd"
+              },
+              "platform": {
+                "const": "amd"
+              },
+              "warp_size": {
+                "const": 64
+              },
+              "architectures": {
+                "const": [
+                  "gfx942"
+                ]
+              },
+              "machine_profiles": {
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "required": [
+                    "arch",
+                    "profile",
+                    "evidence_status"
+                  ],
+                  "properties": {
+                    "arch": {
+                      "const": "gfx942"
+                    },
+                    "profile": {
+                      "const": "mi308x_gfx942.json"
+                    },
+                    "evidence_status": {
+                      "const": "measured"
+                    }
+                  }
+                }
+              },
+              "profiler": {
+                "required": [
+                  "primary",
+                  "fallback"
+                ],
+                "properties": {
+                  "primary": {
+                    "const": "rocprof-sys"
+                  },
+                  "fallback": {
+                    "contains": {
+                      "const": "rocprofv3"
+                    }
+                  }
+                }
+              },
+              "languages": {
+                "const": [
+                  "hip_cpp",
+                  "triton"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/cardWrapper"
+    },
+    {
+      "$ref": "#/$defs/machineProfileDocument"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+"""Command-line interface for WeaveProfiler (`Stage Identifier`: `identify`, `Trace Verifier`: `verify` / `profile`, `Supervisor`: `seal-check`, `Causal`: `causal`, `Env`: `doctor`)."""
+import argparse
+import gzip
+import json
+from pathlib import Path
+import sys
+
+from . import api
+from .causal import analyze_sw_hw_causality
+from .harness import verify_seal
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="weaveprof", description="WeaveProfiler Stage Identifier & Trace Verifier CLI")
+    subs = parser.add_subparsers(dest="action", required=True)
+    for action in ("identify", "locate", "verify", "validate", "profile"):
+        is_id = action in ("identify", "locate")
+        is_ver = action in ("verify", "validate")
+        sub = subs.add_parser(action)
+        sub.add_argument("target_pos", nargs="?", help="Optional positional source (identify/profile) or probe.json (verify)")
+        sub.add_argument("--source")
+        sub.add_argument("-o", "--out", required=is_id, default="out.perfetto-trace")
+        sub.add_argument("--feedback")
+        if not is_ver:
+            sub.add_argument("--model", default="qwen4-max")
+            sub.add_argument("--card", default="auto")
+        if is_id:
+            sub.add_argument("--offline-heuristic", action="store_true")
+        else:
+            sub.add_argument("--probe")
+            sub.add_argument("--verify-json")
+            sub.add_argument("--preview-png")
+            sub.add_argument("--limit", type=float, default=0.10)
+            sub.add_argument("--gpu", dest="gpu_id", default="auto")
+            if action == "profile":
+                sub.add_argument("--max-rounds", type=int, default=3)
+                sub.add_argument("--llm-refine-first", action="store_true")
+            sub.add_argument("bench", nargs=argparse.REMAINDER, help="-- <benchmark command> [arguments]")
+    seal_sub = subs.add_parser("seal-check", help="Fail-closed verification of a sealed episode receipt (*.seal.json)")
+    seal_sub.add_argument("seal", help="Path to *.seal.json")
+    seal_sub.add_argument("--allow-fail", action="store_true", help="Verify integrity even if status is FAIL")
+    seal_sub.add_argument("--max-limit", type=float, default=None, help="Optional hard overhead limit ceiling")
+
+    doc_sub = subs.add_parser("doctor", help="Check local GPU/profiler/LLM/KREX-lock readiness")
+    doc_sub.add_argument("--no-gpu", action="store_true", help="Skip nvidia-smi / amd-smi GPU probes")
+
+    causal_sub = subs.add_parser("causal", help="Run SW+HW causal bottleneck & optimization-opportunity attribution")
+    causal_sub.add_argument("input", help="Path to aligned Perfetto JSON[.gz] or structured SW+HW capture JSON")
+    causal_sub.add_argument("--arch", default=None, help="Override GPU arch (sm_90a, sm_103a, gfx942)")
+    causal_sub.add_argument("--sms", type=int, default=None, help="Override total physical SM/CU count")
+
+    args = vars(parser.parse_args(argv))
+    action = args.pop("action")
+    if action == "seal-check":
+        res = verify_seal(args["seal"], require_pass=not args["allow_fail"], max_overhead_limit=args["max_limit"])
+        print(json.dumps({"ok": res["ok"], "errors": res["errors"]}, ensure_ascii=False, indent=2))
+        return 0 if res["ok"] else 1
+    if action == "doctor":
+        rep = api.doctor(check_gpu=not args["no_gpu"])
+        print(json.dumps(rep, ensure_ascii=False, indent=2))
+        return 0 if rep["ready_for_offline_tests"] else 1
+    if action == "causal":
+        inp = Path(args["input"])
+        if not inp.is_file():
+            print(f"Input not found: {inp}", file=sys.stderr)
+            return 1
+        if inp.suffix == ".gz" or inp.name.endswith(".json.gz"):
+            with gzip.open(inp, "rt", encoding="utf-8") as fh:
+                data = json.load(fh)
+        else:
+            data = json.loads(inp.read_text(encoding="utf-8"))
+        rep = analyze_sw_hw_causality(data, arch=args["arch"], total_sms=args["sms"])
+        print(json.dumps(rep, ensure_ascii=False, indent=2))
+        return 0
+    pos = args.pop("target_pos", None)
+    if action in ("verify", "validate"):
+        args["probe"] = args.get("probe") or pos
+        if not args["probe"]:
+            parser.error("verify requires --probe <probe.json> or positional <probe.json>")
+    else:
+        args["source"] = args.get("source") or pos
+        if not args["source"]:
+            parser.error(f"{action} requires --source <file> or positional <file>")
+    if action not in ("locate", "identify"):
+        if args["bench"][:1] != ["--"] or len(args["bench"]) < 2:
+            parser.error("expected -- <benchmark command>")
+        args["bench"] = args["bench"][1:]
+    try:
+        getattr(api, action)(**args)
+        print(args["out"])
+        return 0
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

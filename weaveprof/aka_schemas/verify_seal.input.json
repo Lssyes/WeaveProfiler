@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["seal_path"],
+  "additionalProperties": false,
+  "properties": {
+    "seal_path": {"type": "string", "minLength": 1},
+    "expected_source_sha": {"type": "string", "minLength": 1},
+    "require_pass": {"type": "boolean"},
+    "max_overhead_limit": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}

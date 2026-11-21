@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "prev_report": {"type": "object"},
+    "prev_report_path": {"type": "string", "minLength": 1},
+    "curr_report": {"type": "object"},
+    "curr_report_path": {"type": "string", "minLength": 1},
+    "noise_floor_pct": {"type": "number", "minimum": 0, "maximum": 50}
+  }
+}

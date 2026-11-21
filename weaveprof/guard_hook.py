@@ -1,0 +1,896 @@
+#!/usr/bin/env python3
+"""WeaveProfiler (`wp`) unified hard-enforcement hook for Claude Code and OpenAI Codex CLI.
+
+Wired by `agent_installer.py` into `.claude/settings.json` and `.codex/hooks.json` as:
+
+    python -B <skill_root>/weaveprof/guard_hook.py --event PreToolUse|PostToolUse|Stop \
+        --workspace <ws> --session-dir <session_dir>
+
+The hook reads one JSON event from stdin (`hook_event_name`, `tool_name`, `tool_input`,
+`tool_response`, `cwd`, `stop_hook_active`).  Blocking writes an actionable reason to
+stderr and exits 2; allowing exits 0.
+
+This module also hosts the shared session primitives (session location, HMAC seal
+verification, seal registration, byte-exact backup restore, completion verdict) used by
+`mcp_server.py` and `agent_installer.py`.
+"""
+from __future__ import annotations
+
+import sys
+
+sys.dont_write_bytecode = True
+
+import argparse
+import contextlib
+import hashlib
+import hmac
+import json
+import os
+from pathlib import Path
+import re
+import time
+import uuid
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+
+_HERE = Path(__file__).resolve().parent
+SKILL_ROOT = _HERE.parent
+try:
+    if sys.path and sys.path[0] and Path(sys.path[0]).resolve() == _HERE:
+        sys.path.pop(0)
+except OSError:
+    pass
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+
+SESSION_SCHEMA = "weaveprof.agent-session/v1"
+SESSION_FILE = "session.json"
+KEY_FILE = ".supervisor.key"
+BACKUP_DIRNAME = "backups"
+STOP_BLOCK_LIMIT = 3
+EXIT_ALLOW = 0
+EXIT_BLOCK = 2
+TAG = "[WeaveProfiler wp guard]"
+SEALING_TOOLS_HINT = "`weaveprof_megakernel_audit` (fast shadow-copy megakernel audit) or `weaveprof_profile`"
+
+PROBE_TOKENS: Tuple[str, ...] = (
+    "wp_lite.cuh", "wp_lite_hip.h", "wp_cute", "wp_triton",
+    "WP_OPEN", "WP_KERNEL_SCOPE", "WP_DEVICE_SCOPE", "WP_B(", "WP_E(",
+    "fi_lite.cuh", "fi_lite_hip.h", "fi_cute", "fi_triton",
+    "FI_OPEN", "FI_KERNEL_SCOPE", "FI_B(", "FI_E(",
+    "%globaltimer", "s_memrealtime", "prof_interval_start",
+)
+SECRET_NEEDLES: Tuple[str, ...] = (
+    ".supervisor.key", ".supervisor.", "weaveprof/sessions", "weaveprof_supervisor_hmac_key",
+    "weaveprof_sessions_dir", "guard_hook.py", "mcp_server.py",
+)
+
+EDIT_TOOLS = {
+    "edit", "write", "multiedit", "notebookedit", "str_replace_based_edit_tool", "str_replace_editor",
+    "create_file", "write_file", "edit_file", "replace", "apply_patch", "applypatch", "patch",
+}
+SHELL_TOOLS = {
+    "bash", "shell", "local_shell", "exec_command", "container.exec", "run_shell_command",
+    "terminal", "powershell", "unified_exec", "run_terminal_cmd",
+}
+READ_ONLY_TOOLS = {"read", "grep", "glob", "ls", "websearch", "webfetch", "todowrite", "todoread", "view"}
+
+_SAMPLING_RE = re.compile(
+    r"(?:\b(?:FI_SAMPLE|WP_SAMPLE|WEAVEPROF_SAMPLE|--fi-sample|--wp-sample|--sample-stride)\s*(?:=|:|\s)\s*['\"]?[+]?(?:0x[0-9a-f]+|[2-9]|\d{2,})"
+    r"|['\"](?:FI_SAMPLE|WP_SAMPLE|WEAVEPROF_SAMPLE)['\"]\s*[\]:,]\s*=?\s*['\"]?[+]?(?:0x[0-9a-f]+|[2-9]|\d{2,}))",
+    re.I,
+)
+_INSTALLER_RE = re.compile(
+    r"(?:\bagent_installer\b|\binstall[-_]agent\b|\bguard[-_]exec\b|run\.py['\"]?\s+(?:install|agent|guard)\w*)", re.I
+)
+_PATCH_HDR_RE = re.compile(r"^\*\*\* (Add|Update|Delete) File:\s*(.+?)\s*$")
+_PATCH_MOVE_RE = re.compile(r"^\*\*\* Move to:\s*(.+?)\s*$")
+
+
+def _shell_write_re(target: str) -> "re.Pattern[str]":
+    """Heuristic: shell command that writes/deletes/moves onto a path matching `target` (regex)."""
+    tgt = r"[^\s\"';|&]*(?:" + target + r")"
+    return re.compile(
+        r"(?:(?<![0-9&])>{1,2}\s*[\"']?" + tgt
+        + r"|\b(?:tee|truncate|rm|del|erase|unlink|shred|touch|ln|Remove-Item|Set-Content|Add-Content|Out-File|New-Item)\b[^\n;|&]*" + tgt
+        + r"|\bdd\b[^\n;|&]*\bof=[\"']?" + tgt
+        + r"|\b(?:sed|perl)\s+(?:-\w+\s+)*-\w*i\w*\b[^\n;|&]*" + tgt
+        + r"|\b(?:cp|mv|rsync|install|Copy-Item|Move-Item)\b[^\n;|&]*\s[\"']?" + tgt + r"[\"']?\s*(?:$|[;|&\n])"
+        + r"|(?:write_text|write_bytes|json\.dump|os\.remove|os\.unlink|os\.replace|os\.rename|shutil\.\w+|open\s*\([^)]*['\"][wa]b?\+?['\"])[^\n]*" + tgt
+        + r"|" + tgt + r"[^\n]*(?:write_text|write_bytes|['\"][wa]b?\+?['\"]\s*\)))",
+        re.I | re.M,
+    )
+
+
+_EVIDENCE_WRITE_RE = _shell_write_re(r"seal\.json|verify\.json|episode_ledger\.json")
+_CONFIG_WRITE_RE = _shell_write_re(r"\.claude[/\\]settings[\w.]*\.json|\.codex[/\\][\w.]+|\.mcp\.json")
+
+
+# ---------------------------------------------------------------------------
+# Session location & persistence
+# ---------------------------------------------------------------------------
+
+def sessions_root(override: Optional[os.PathLike | str] = None) -> Path:
+    if override:
+        return Path(override).expanduser().resolve()
+    env = os.environ.get("WEAVEPROF_SESSIONS_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return (Path(base) / "weaveprof" / "sessions").resolve()
+
+
+def workspace_id(workspace: os.PathLike | str) -> str:
+    resolved = os.path.normcase(str(Path(workspace).expanduser().resolve()))
+    return hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
+
+
+def session_dir_for(workspace: os.PathLike | str, root: Optional[os.PathLike | str] = None) -> Path:
+    return sessions_root(root) / workspace_id(workspace)
+
+
+def resolve_session_dir(
+    *, session_dir: Optional[str] = None, workspace: Optional[str] = None,
+    cwd: Optional[str] = None, root: Optional[str] = None,
+) -> Path:
+    if session_dir:
+        return Path(session_dir).expanduser().resolve()
+    if workspace:
+        return session_dir_for(workspace, root)
+    start = Path(cwd or os.getcwd()).resolve()
+    for cand in (start, *start.parents):
+        sd = session_dir_for(cand, root)
+        if (sd / SESSION_FILE).is_file():
+            return sd
+    return session_dir_for(start, root)
+
+
+def sha256_file(path: os.PathLike | str) -> Optional[str]:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _atomic_write_bytes(path: Path, data: bytes, mode: Optional[int] = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.wp-{uuid.uuid4().hex[:12]}")
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        with contextlib.suppress(OSError):
+            os.fsync(fh.fileno())
+    if mode is not None:
+        with contextlib.suppress(OSError):
+            os.chmod(tmp, mode)
+    last: Optional[BaseException] = None
+    for _ in range(40):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:  # Windows: target briefly open by another process
+            last = exc
+            time.sleep(0.025)
+    with contextlib.suppress(OSError):
+        tmp.unlink()
+    raise last if last else OSError(f"cannot replace {path}")
+
+
+def write_json_atomic(path: os.PathLike | str, doc: Any) -> None:
+    text = json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=False, default=str) + "\n"
+    _atomic_write_bytes(Path(path), text.encode("utf-8"), 0o600)
+
+
+def read_session(session_dir: os.PathLike | str) -> Optional[Dict[str, Any]]:
+    p = Path(session_dir) / SESSION_FILE
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+@contextlib.contextmanager
+def session_lock(session_dir: os.PathLike | str, timeout: float = 10.0) -> Iterator[None]:
+    lock = Path(session_dir) / ".session.lock"
+    deadline = time.monotonic() + timeout
+    fd: Optional[int] = None
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except FileExistsError:
+            with contextlib.suppress(OSError):
+                if time.time() - lock.stat().st_mtime > 30.0:
+                    lock.unlink()
+                    continue
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.02)
+        except OSError:
+            break
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+            with contextlib.suppress(OSError):
+                lock.unlink()
+
+
+def update_session(session_dir: os.PathLike | str, fn) -> Optional[Dict[str, Any]]:
+    """Read-modify-write session.json under an advisory lock. `fn(doc)` mutates in place."""
+    sd = Path(session_dir)
+    with session_lock(sd):
+        doc = read_session(sd)
+        if doc is None:
+            return None
+        fn(doc)
+        doc["updated_at"] = round(time.time(), 3)
+        write_json_atomic(sd / SESSION_FILE, doc)
+        return doc
+
+
+@contextlib.contextmanager
+def supervisor_env(session_dir: os.PathLike | str) -> Iterator[None]:
+    """Temporarily point harness HMAC sealing/verification at the session key."""
+    saved = {k: os.environ.get(k) for k in ("WEAVEPROF_SUPERVISOR_KEY_FILE", "WEAVEPROF_SUPERVISOR_HMAC_KEY")}
+    os.environ["WEAVEPROF_SUPERVISOR_KEY_FILE"] = str(Path(session_dir) / KEY_FILE)
+    os.environ.pop("WEAVEPROF_SUPERVISOR_HMAC_KEY", None)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _read_key(session_dir: os.PathLike | str) -> Optional[bytes]:
+    try:
+        raw = (Path(session_dir) / KEY_FILE).read_bytes().strip()
+    except OSError:
+        return None
+    return raw or None
+
+
+# ---------------------------------------------------------------------------
+# Seal verification & registration
+# ---------------------------------------------------------------------------
+
+_VERIFY_CACHE: Dict[Tuple[Any, ...], Tuple[bool, List[str], Optional[Dict[str, Any]]]] = {}
+
+
+def verify_seal_file(
+    session_dir: os.PathLike | str, seal_path: os.PathLike | str, *,
+    require_pass: bool = True, max_overhead_limit: Optional[float] = None,
+) -> Tuple[bool, List[str], Optional[Dict[str, Any]]]:
+    """HMAC (session key) + harness `verify_seal` check.
+
+    A later edit of the profiled source only invalidates the *source binding* of an older
+    seal, not the fact that it was verified; that freshness question is answered by the
+    `protected_shas` snapshot comparison (Stop gate), so source-binding drift is tolerated.
+    """
+    sp = Path(seal_path)
+    try:
+        st = sp.stat()
+    except OSError:
+        return False, [f"Seal file missing: {sp}"], None
+    key = _read_key(session_dir)
+    if key is None:
+        return False, ["Session supervisor key missing; cannot verify HMAC (fail-closed)"], None
+    key_fp = hashlib.sha256(key).hexdigest()[:16]
+    lim_key = round(float(max_overhead_limit), 8) if max_overhead_limit is not None else None
+    cache_key = (str(sp.resolve()), st.st_mtime_ns, st.st_size, int(bool(require_pass)), key_fp, lim_key)
+    hit = _VERIFY_CACHE.get(cache_key)
+    if hit is not None:
+        return hit
+    from weaveprof.harness import verify_seal
+
+    with supervisor_env(session_dir):
+        kwargs: Dict[str, Any] = {"require_pass": require_pass, "require_hmac": True}
+        if max_overhead_limit is not None:
+            kwargs["max_overhead_limit"] = float(max_overhead_limit)
+        res = verify_seal(sp, **kwargs)
+    errors = [e for e in (res.get("errors") or []) if not str(e).startswith("Bound artifact 'source'")]
+    doc = res.get("seal") if isinstance(res.get("seal"), dict) else None
+    if doc is None:
+        errors = errors or ["Seal JSON unreadable"]
+    else:
+        claimed = doc.get("seal_hmac")
+        expected = hmac.new(key, str(doc.get("seal_sha256") or "").encode("utf-8"), hashlib.sha256).hexdigest()
+        if not isinstance(claimed, str) or not hmac.compare_digest(claimed, expected):
+            msg = "Seal supervisor HMAC mismatch (possible forgery)"
+            if msg not in errors:
+                errors.append(msg)
+    out = (not errors, errors, doc)
+    _VERIFY_CACHE[cache_key] = out
+    return out
+
+
+def live_protected_shas(session: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    return {str(e.get("rel")): sha256_file(e.get("path", "")) for e in session.get("protected") or []}
+
+
+def register_seal(
+    session_dir: os.PathLike | str, seal_path: os.PathLike | str, *,
+    kernel_us: Optional[float] = None, tool: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Verify a supervisor seal and record it in session.json (PASS resets `stop_blocks`)."""
+    sd = Path(session_dir)
+    session = read_session(sd)
+    if session is None:
+        return {"registered": False, "errors": [f"No WeaveProfiler session at {sd}"]}
+    sp = Path(seal_path).expanduser().resolve()
+    ok_pass, errs_pass, doc = verify_seal_file(sd, sp, require_pass=True,
+                                               max_overhead_limit=session.get("max_overhead"))
+    if ok_pass:
+        ok, errs = True, []
+    else:
+        ok, errs, doc = verify_seal_file(sd, sp, require_pass=False,
+                                         max_overhead_limit=session.get("max_overhead"))
+    if not ok or doc is None:
+        return {"registered": False, "errors": errs or errs_pass}
+    status = "PASS" if ok_pass else str(doc.get("status") or "FAIL")
+    src = (doc.get("artifacts") or {}).get("source") or {}
+    live = live_protected_shas(session)
+    source_sha = src.get("sha256")
+    covers = bool(source_sha) and source_sha in set(v for v in live.values() if v)
+    ovh = doc.get("overhead_ratio")
+    try:
+        overhead_pct = round(float(ovh) * 100.0, 4) if ovh is not None else None
+    except (TypeError, ValueError):
+        overhead_pct = None
+    try:
+        kus = float(kernel_us) if kernel_us is not None else None
+    except (TypeError, ValueError):
+        kus = None
+    entry = {
+        "seal_path": str(sp),
+        "seal_sha256": doc.get("seal_sha256"),
+        "source_path": src.get("path"),
+        "source_sha256": source_sha,
+        "protected_shas": live,
+        "covers_protected": covers,
+        "status": status,
+        "overhead_pct": overhead_pct,
+        "kernel_us": kus,
+        "tool": tool,
+        "timestamp": round(time.time(), 3),
+    }
+
+    def _apply(d: Dict[str, Any]) -> None:
+        seals = [s for s in d.get("seals") or [] if s.get("seal_sha256") != entry["seal_sha256"]]
+        seals.append(entry)
+        d["seals"] = seals
+        if status == "PASS" and covers:
+            d["stop_blocks"] = 0
+
+    update_session(sd, _apply)
+    note = None
+    if status == "PASS" and not covers:
+        note = ("PASS seal recorded but its source SHA-256 matches no protected file's current bytes; "
+                "it does not unlock edits/stop. Profile the protected kernel itself.")
+    return {"registered": True, "status": status, "covers_protected": covers, "entry": entry, "note": note,
+            "errors": errs_pass if status != "PASS" else []}
+
+
+def valid_pass_seals(session_dir: os.PathLike | str, session: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out = []
+    for entry in session.get("seals") or []:
+        if entry.get("status") != "PASS" or not entry.get("covers_protected"):
+            continue
+        ok, _errs, doc = verify_seal_file(session_dir, entry.get("seal_path", ""), require_pass=True,
+                                          max_overhead_limit=session.get("max_overhead"))
+        if ok and doc is not None and doc.get("seal_sha256") == entry.get("seal_sha256"):
+            out.append(entry)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Protected-file inspection & restore
+# ---------------------------------------------------------------------------
+
+def _read_text(path: os.PathLike | str) -> str:
+    try:
+        return Path(path).read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def new_probe_tokens(entry: Dict[str, Any], text: Optional[str] = None) -> List[str]:
+    live = _read_text(entry.get("path", "")) if text is None else text
+    base = _read_text(entry.get("backup", ""))
+    return [t for t in PROBE_TOKENS if t in live and t not in base]
+
+
+def restore_protected(session: Dict[str, Any], rels: Optional[Sequence[str]] = None) -> List[str]:
+    restored = []
+    for e in session.get("protected") or []:
+        if rels is not None and e.get("rel") not in rels:
+            continue
+        backup = Path(e.get("backup", ""))
+        target = Path(e.get("path", ""))
+        try:
+            data = backup.read_bytes()
+        except OSError:
+            continue
+        if hashlib.sha256(data).hexdigest() != e.get("baseline_sha256"):
+            continue  # never restore from a tampered backup
+        if sha256_file(target) == e.get("baseline_sha256"):
+            continue
+        mode = None
+        with contextlib.suppress(OSError):
+            mode = backup.stat().st_mode & 0o777
+        _atomic_write_bytes(target, data, mode)
+        restored.append(str(e.get("rel")))
+    return restored
+
+
+def mutated_since_baseline(session: Dict[str, Any]) -> List[str]:
+    return [str(e.get("rel")) for e in session.get("protected") or []
+            if sha256_file(e.get("path", "")) != e.get("baseline_sha256")]
+
+
+def incumbent(seals: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    timed = [s for s in seals if isinstance(s.get("kernel_us"), (int, float))]
+    if not timed:
+        return None
+    best = min(timed, key=lambda s: float(s["kernel_us"]))
+    return {"kernel_us": best["kernel_us"], "seal_sha256": best.get("seal_sha256"),
+            "overhead_pct": best.get("overhead_pct"), "protected_shas": best.get("protected_shas")}
+
+
+def verify_session_completion(
+    workspace: Optional[str] = None, *, session_dir: Optional[str] = None, sessions_root_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Exact Stop-gate verdict: >=1 verified PASS seal, probe-free sources, final bytes sealed."""
+    sd = resolve_session_dir(session_dir=session_dir, workspace=workspace, root=sessions_root_dir)
+    session = read_session(sd)
+    if session is None:
+        return {"ok": False, "installed": False, "session_dir": str(sd),
+                "blockers": [f"SESSION_MISSING: no WeaveProfiler session at {sd}; run the wp installer."]}
+    valid = valid_pass_seals(sd, session)
+    live = live_protected_shas(session)
+    blockers: List[str] = []
+    if not valid:
+        blockers.append("NO_VERIFIED_PASS_SEAL: no HMAC-verified PASS seal of the protected kernel exists yet; call "
+                        + SEALING_TOOLS_HINT + ".")
+    polluted = {}
+    for e in session.get("protected") or []:
+        toks = new_probe_tokens(e)
+        if toks:
+            polluted[str(e.get("rel"))] = toks
+    if polluted:
+        blockers.append(f"PROBE_POLLUTION: protected files contain manual probe macros {polluted}; strip them "
+                        "(production kernel source must stay probe-free).")
+    matched = None
+    if valid and session.get("require_final_seal", True):
+        for entry in reversed(valid):
+            snap = entry.get("protected_shas") or {}
+            if snap and all(snap.get(rel) == sha for rel, sha in live.items()):
+                matched = entry
+                break
+        if matched is None:
+            latest = valid[-1].get("protected_shas") or {}
+            changed = [rel for rel, sha in live.items() if latest.get(rel) != sha]
+            blockers.append(
+                f"UNSEALED_FINAL_KERNEL: protected kernel was modified after the last verified seal ({changed}); call "
+                + SEALING_TOOLS_HINT + " to verify & seal the optimized kernel (or revert the regression to a "
+                "sealed incumbent) before stopping.")
+    elif valid:
+        matched = valid[-1]
+    return {
+        "ok": not blockers,
+        "installed": True,
+        "session_dir": str(sd),
+        "workspace": session.get("workspace"),
+        "blockers": blockers,
+        "valid_pass_seals": len(valid),
+        "matched_seal_sha256": matched.get("seal_sha256") if matched else None,
+        "live_shas": live,
+        "incumbent": incumbent(valid),
+        "stop_blocks": int(session.get("stop_blocks") or 0),
+    }
+
+
+def status_report(session_dir: os.PathLike | str) -> Dict[str, Any]:
+    sd = Path(session_dir)
+    session = read_session(sd)
+    if session is None:
+        return {"installed": False, "session_id": sd.name,
+                "hint": "Workspace not provisioned; run `python -B <skill_root>/run.py` agent install (wp installer)."}
+    valid = valid_pass_seals(sd, session)
+    latest = valid[-1] if valid else None
+    comp = verify_session_completion(session_dir=str(sd))
+    files = []
+    for e in session.get("protected") or []:
+        live = sha256_file(e.get("path", ""))
+        sealed = (latest.get("protected_shas") or {}).get(e.get("rel")) if latest else None
+        files.append({
+            "rel": e.get("rel"), "path": e.get("path"),
+            "baseline_sha256": e.get("baseline_sha256"), "live_sha256": live,
+            "latest_sealed_sha256": sealed,
+            "modified_since_baseline": live != e.get("baseline_sha256"),
+            "matches_latest_seal": bool(sealed) and live == sealed,
+            "new_probe_tokens": new_probe_tokens(e),
+        })
+    return {
+        "installed": True,
+        "session_id": sd.name,
+        "workspace": session.get("workspace"),
+        "protected": files,
+        "seals_recorded": len(session.get("seals") or []),
+        "valid_pass_seals": len(valid),
+        "edit_unlocked": bool(valid),
+        "stop_unlocked": bool(comp.get("ok")),
+        "stop_blockers": comp.get("blockers"),
+        "require_final_seal": bool(session.get("require_final_seal", True)),
+        "max_overhead": session.get("max_overhead"),
+        "bench_cmd": session.get("bench_cmd"),
+        "card": session.get("card"),
+        "arch": session.get("arch"),
+        "incumbent": incumbent(valid),
+        "next_step": ("Call " + SEALING_TOOLS_HINT + " on the baseline kernel to unlock edits.") if not valid else (
+            "Edits unlocked. After each optimization re-run " + SEALING_TOOLS_HINT + " so the final kernel is sealed."),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool-input parsing
+# ---------------------------------------------------------------------------
+
+def _strings(obj: Any) -> Iterator[str]:
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _strings(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _strings(v)
+
+
+def _norm(s: str) -> str:
+    return s.replace("\\", "/").lower()
+
+
+def _tool_kind(tool_name: str) -> Tuple[str, bool]:
+    """Return (normalized short tool name, is_own_weaveprofiler_mcp_tool)."""
+    name = (tool_name or "").strip()
+    low = name.lower()
+    if low.startswith("mcp__"):
+        own = "weaveprofiler" in low or "weaveprof_" in low
+        return low.rsplit("__", 1)[-1], own
+    return low, False
+
+
+def _shell_command(tool_input: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for k in ("command", "cmd", "bench", "bench_cmd", "build_cmd"):
+        v = tool_input.get(k)
+        if isinstance(v, (list, tuple)):
+            parts.append(" ".join(str(c) for c in v))
+        elif isinstance(v, str) and v.strip():
+            parts.append(v)
+    return "\n".join(parts)
+
+
+def _own_output_targets(tool_input: Dict[str, Any], cwd: Path) -> List[Path]:
+    out: List[Path] = []
+    for k in ("out_dir", "out", "run_dir"):
+        v = tool_input.get(k)
+        if isinstance(v, str) and v.strip() and "\n" not in v:
+            out.append(_resolve(v, cwd))
+    return out
+
+
+def _resolve(p: str, cwd: Path) -> Path:
+    q = Path(os.path.expanduser(p.strip().strip("\"'")))
+    if not q.is_absolute():
+        q = cwd / q
+    try:
+        return q.resolve()
+    except OSError:
+        return Path(os.path.abspath(str(q)))
+
+
+def _parse_patch(text: str, cwd: Path) -> List[Tuple[Path, str, str]]:
+    out: List[Tuple[Path, str, str]] = []
+    cur: Optional[List[Any]] = None
+    diff_minus: Optional[str] = None
+    for line in text.splitlines():
+        m = _PATCH_HDR_RE.match(line)
+        if m:
+            cur = [_resolve(m.group(2), cwd), [], "delete" if m.group(1) == "Delete" else "write"]
+            out.append(cur)  # type: ignore[arg-type]
+            continue
+        m = _PATCH_MOVE_RE.match(line)
+        if m and cur is not None:
+            cur = [_resolve(m.group(1), cwd), cur[1], "write"]
+            out.append(cur)  # type: ignore[arg-type]
+            continue
+        if line.startswith("--- "):
+            diff_minus = line[4:].strip()
+            continue
+        if line.startswith("+++ "):
+            tgt = line[4:].strip().split("\t")[0]
+            op = "write"
+            if tgt == "/dev/null" and diff_minus:
+                tgt, op = diff_minus, "delete"
+            for pre in ("a/", "b/"):
+                if tgt.startswith(pre):
+                    tgt = tgt[2:]
+            cur = [_resolve(tgt, cwd), [], op]
+            out.append(cur)  # type: ignore[arg-type]
+            continue
+        if cur is not None and line.startswith("+"):
+            cur[1].append(line[1:])
+    return [(c[0], "\n".join(c[1]), c[2]) for c in out]
+
+
+def edit_targets(tool_name: str, tool_input: Any, cwd: Path) -> List[Tuple[Path, str, str]]:
+    """Files a tool call proposes to write: [(resolved_path, added_text, 'write'|'delete')]."""
+    short, own = _tool_kind(tool_name)
+    if own or not isinstance(tool_input, dict):
+        return []
+    targets: List[Tuple[Path, str, str]] = []
+    if short in EDIT_TOOLS:
+        added_parts = []
+        for k in ("content", "new_string", "new_source", "file_text", "new_str", "contents", "text", "code"):
+            v = tool_input.get(k)
+            if isinstance(v, str):
+                added_parts.append(v)
+        for ed in tool_input.get("edits") or []:
+            if isinstance(ed, dict):
+                for k in ("new_string", "new_str", "content"):
+                    if isinstance(ed.get(k), str):
+                        added_parts.append(ed[k])
+        for k in ("file_path", "path", "notebook_path", "filename", "target_file", "file"):
+            v = tool_input.get(k)
+            if isinstance(v, str) and v.strip() and "\n" not in v:
+                targets.append((_resolve(v, cwd), "\n".join(added_parts), "write"))
+                break
+    for s in _strings(tool_input):
+        if "*** Begin Patch" in s or ("\n+++ " in s and "\n--- " in s) or s.startswith("--- "):
+            targets.extend(_parse_patch(s, cwd))
+    return targets
+
+
+# ---------------------------------------------------------------------------
+# Hook event handlers
+# ---------------------------------------------------------------------------
+
+class HookBlock(Exception):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(f"{TAG} BLOCKED ({code}): {message}")
+
+
+def _same(a: Path, b: Path) -> bool:
+    return os.path.normcase(str(a)) == os.path.normcase(str(b))
+
+
+def _under(p: Path, root: Path) -> bool:
+    pa, ra = os.path.normcase(str(p)), os.path.normcase(str(root))
+    return pa == ra or pa.startswith(ra.rstrip("\\/") + os.sep)
+
+
+class Context:
+    def __init__(self, payload: Dict[str, Any], args: argparse.Namespace):
+        self.payload = payload
+        self.cwd = Path(payload.get("cwd") or args.workspace or os.getcwd()).resolve()
+        self.session_dir = resolve_session_dir(session_dir=args.session_dir, workspace=args.workspace,
+                                               cwd=str(self.cwd), root=getattr(args, "sessions_root", None))
+        self.session = read_session(self.session_dir)
+        ws = (self.session or {}).get("workspace") or args.workspace or str(self.cwd)
+        self.workspace = Path(ws).resolve()
+        self._valid: Optional[List[Dict[str, Any]]] = None
+
+    def protected(self) -> List[Dict[str, Any]]:
+        return list((self.session or {}).get("protected") or [])
+
+    def protected_entry(self, path: Path) -> Optional[Dict[str, Any]]:
+        for e in self.protected():
+            if _same(Path(e.get("path", "")), path):
+                return e
+        return None
+
+    def valid_seals(self) -> List[Dict[str, Any]]:
+        if self._valid is None:
+            self._valid = valid_pass_seals(self.session_dir, self.session) if self.session else []
+        return self._valid
+
+
+def handle_pre(ctx: Context) -> None:
+    payload = ctx.payload
+    tool_name = str(payload.get("tool_name") or "")
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, str):
+        tool_input = {"command": tool_input}
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    short, own = _tool_kind(tool_name)
+    blob = _norm("\n".join(_strings(tool_input)))
+
+    # (a) secrets / supervisor internals
+    needles = list(SECRET_NEEDLES) + [_norm(str(ctx.session_dir)), _norm(str(ctx.session_dir.parent))]
+    for n in needles:
+        if n and n in blob:
+            raise HookBlock("SECRET_OR_SUPERVISOR_ACCESS",
+                            f"tool `{tool_name}` references protected supervisor state ({n!r}). The supervisor key, "
+                            "session store, hook and MCP server are off-limits; use MCP `weaveprof_status` to inspect "
+                            "session state.")
+    is_shell = short in SHELL_TOOLS
+    cmd = _shell_command(tool_input)
+    if _SAMPLING_RE.search("\n".join(_strings(tool_input))):
+        raise HookBlock("LOOP_SAMPLING_FORBIDDEN",
+                        "WP_SAMPLE / FI_SAMPLE > 1 violates the full-audit policy; keep WP_SAMPLE at 0 or 1.")
+    if cmd and _INSTALLER_RE.search(cmd):
+        raise HookBlock("SUPERVISOR_RECONFIG",
+                        "the agent may not re-run the wp installer / guard-exec (that would reset the baseline). "
+                        "Ask the user to re-provision if the protected set must change.")
+    targets = edit_targets(tool_name, tool_input, ctx.cwd)
+    check_paths: List[Path] = [p for p, _a, _op in targets] + (_own_output_targets(tool_input, ctx.cwd) if own else [])
+    ws_norm = os.path.normcase(str(ctx.workspace)).replace("\\", "/").rstrip("/")
+    home_norm = os.path.normcase(str(Path.home().resolve())).replace("\\", "/").rstrip("/")
+    for path in check_paths:
+        name = path.name.lower()
+        if name.endswith("seal.json") or name in ("verify.json", "episode_ledger.json"):
+            raise HookBlock("EVIDENCE_TAMPER",
+                            f"`{path.name}` is sealed harness evidence and cannot be written/deleted by the agent. "
+                            "Use MCP `weaveprof_verify_seal` to check seals.")
+        np = os.path.normcase(str(path)).replace("\\", "/")
+        cfg = (np == ws_norm + "/.claude" or np.startswith(ws_norm + "/.claude/")
+               or np == ws_norm + "/.codex" or np.startswith(ws_norm + "/.codex/")
+               or np == ws_norm + "/.mcp.json"
+               or np == ws_norm + "/.agents/skills/weaveprofiler"
+               or np.startswith(ws_norm + "/.agents/skills/weaveprofiler/")
+               or np == home_norm + "/.claude" or np.startswith(home_norm + "/.claude/")
+               or np == home_norm + "/.codex" or np.startswith(home_norm + "/.codex/"))
+        if cfg or _under(path, SKILL_ROOT) or _under(path, ctx.session_dir.parent):
+            raise HookBlock("SUPERVISOR_CONFIG_TAMPER",
+                            f"`{path}` is WeaveProfiler supervisor/agent configuration and is read-only for the agent.")
+    if cmd and _EVIDENCE_WRITE_RE.search(cmd):
+        raise HookBlock("EVIDENCE_TAMPER",
+                        "command writes/moves/deletes seal.json / verify.json / episode_ledger.json evidence.")
+    if cmd and _CONFIG_WRITE_RE.search(cmd):
+        raise HookBlock("SUPERVISOR_CONFIG_TAMPER",
+                        "command modifies `.claude/settings*.json`, `.codex/*` or `.mcp.json` (hook/MCP wiring).")
+
+    if ctx.session is None:
+        if short in READ_ONLY_TOOLS or own:
+            return
+        if targets or is_shell:
+            raise HookBlock("SESSION_MISSING",
+                            f"no WeaveProfiler session found at {ctx.session_dir.name}; enforcement fails closed. "
+                            "Ask the user to re-run the wp agent installer for this workspace.")
+        return
+
+    # (b) probe pollution + (c) seal-before-optimize for protected files
+    protected_hits = [(p, a, op, ctx.protected_entry(p)) for p, a, op in targets]
+    protected_hits = [h for h in protected_hits if h[3] is not None]
+    for path, added, _op, entry in protected_hits:
+        toks = [t for t in PROBE_TOKENS if t in added and t not in _read_text(entry.get("backup", ""))]
+        if toks:
+            raise HookBlock("PROBE_POLLUTION",
+                            f"proposed edit to protected `{entry.get('rel')}` adds probe instrumentation {toks}. Keep "
+                            "production kernel files clean; call MCP `weaveprof_megakernel_audit` or "
+                            "`weaveprof_profile`, which instrument a shadow copy.")
+    shell_hits: List[Dict[str, Any]] = []
+    if is_shell:
+        for e in ctx.protected():
+            base = re.escape(Path(e.get("path", "")).name)
+            if re.search(r"(?<![\w.-])" + base + r"(?![\w-])", cmd):
+                shell_hits.append(e)
+        for e in shell_hits:
+            toks = [t for t in PROBE_TOKENS if t in cmd and t not in _read_text(e.get("backup", ""))]
+            if toks:
+                raise HookBlock("PROBE_POLLUTION",
+                                f"shell command touching protected `{e.get('rel')}` carries probe tokens {toks}; keep "
+                                "production kernel source probe-free and use the MCP profilers.")
+    if protected_hits or shell_hits:
+        writing_shell = [e for e in shell_hits
+                         if _shell_write_re(re.escape(Path(e.get("path", "")).name)).search(cmd)]
+        if (protected_hits or writing_shell) and not ctx.valid_seals():
+            rels = sorted({str(h[3].get("rel")) for h in protected_hits} | {str(e.get("rel")) for e in writing_shell})
+            raise HookBlock("SEAL_BEFORE_OPTIMIZE",
+                            f"protected kernel file(s) {rels} are locked until an HMAC-verified PASS seal of the "
+                            "baseline exists. First call " + SEALING_TOOLS_HINT + " on the unmodified kernel; edits "
+                            "unlock automatically once the seal is registered (check with `weaveprof_status`).")
+
+
+def handle_post(ctx: Context) -> None:
+    if ctx.session is None:
+        return
+    mutated = mutated_since_baseline(ctx.session)
+    if mutated and not ctx.valid_seals():
+        restored = restore_protected(ctx.session, mutated)
+        raise HookBlock("UNAUTHORIZED_PRE_PROFILE_MUTATION",
+                        f"protected kernel file(s) {mutated} changed before any verified PASS seal existed (e.g. via "
+                        f"Bash/python). The exact baseline bytes were restored ({restored}). Call "
+                        + SEALING_TOOLS_HINT + " on the baseline first; edits unlock after the seal.")
+    polluted = {}
+    for e in ctx.protected():
+        toks = new_probe_tokens(e)
+        if toks:
+            polluted[str(e.get("rel"))] = toks
+    if polluted:
+        raise HookBlock("PROBE_POLLUTION",
+                        f"protected kernel source now contains probe macros {polluted}. Remove them: production "
+                        "kernel source must stay probe-free; profiling instruments a shadow copy via "
+                        + SEALING_TOOLS_HINT + ".")
+
+
+def handle_stop(ctx: Context) -> None:
+    if ctx.session is None:
+        if ctx.payload.get("stop_hook_active"):
+            sys.stderr.write(f"{TAG} WARNING: no session found; allowing stop to avoid a loop.\n")
+            return
+        raise HookBlock("SESSION_MISSING", f"no WeaveProfiler session at {ctx.session_dir.name}; cannot verify "
+                                           "completion. Ask the user to re-run the wp agent installer.")
+    comp = verify_session_completion(session_dir=str(ctx.session_dir))
+    if comp["ok"]:
+        return
+    holder: Dict[str, int] = {}
+
+    def _inc(d: Dict[str, Any]) -> None:
+        base = int(d.get("stop_blocks") or 0) if ctx.payload.get("stop_hook_active") else 0
+        n = base + 1
+        holder["n"] = n
+        d["stop_blocks"] = 0 if n > STOP_BLOCK_LIMIT else n
+
+    update_session(ctx.session_dir, _inc)
+    n = holder.get("n", STOP_BLOCK_LIMIT + 1)
+    if n > STOP_BLOCK_LIMIT:
+        sys.stderr.write(f"{TAG} WARNING: stop gate unmet after {n - 1} blocked stops; allowing stop to avoid an "
+                         f"infinite loop. Unresolved: {comp['blockers']}\n")
+        return
+    raise HookBlock("STOP_GATE", f"cannot finish yet (block {n}/{STOP_BLOCK_LIMIT}): " + " | ".join(comp["blockers"]))
+
+
+def _read_payload() -> Dict[str, Any]:
+    try:
+        raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+    except (OSError, ValueError, AttributeError):
+        raw = ""
+    if not raw.strip():
+        return {}
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="WeaveProfiler (wp) Claude Code / Codex CLI enforcement hook")
+    ap.add_argument("--event", choices=("PreToolUse", "PostToolUse", "Stop", "SubagentStop"))
+    ap.add_argument("--workspace")
+    ap.add_argument("--session-dir")
+    ap.add_argument("--sessions-root")
+    args = ap.parse_args(list(argv) if argv is not None else None)
+    payload = _read_payload()
+    event = args.event or str(payload.get("hook_event_name") or "")
+    try:
+        ctx = Context(payload, args)
+        if event == "PreToolUse":
+            handle_pre(ctx)
+        elif event == "PostToolUse":
+            handle_post(ctx)
+        elif event in ("Stop", "SubagentStop"):
+            handle_stop(ctx)
+        return EXIT_ALLOW
+    except HookBlock as blk:
+        sys.stderr.write(str(blk) + "\n")
+        return EXIT_BLOCK
+    except Exception as exc:  # fail closed with a visible reason
+        sys.stderr.write(f"{TAG} BLOCKED (HOOK_ERROR): {type(exc).__name__}: {exc}\n")
+        return EXIT_BLOCK
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

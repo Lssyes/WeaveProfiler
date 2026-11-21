@@ -1,0 +1,60 @@
+{
+  "schema": "ep-moe-metrics/v1",
+  "name": "EP-MoE cross-card timeline metrics (SM + DRAM + NVLink)",
+  "capture_metrics_set": "gh100",
+  "capture_rationale": "capture 用 nsys 内置 gh100 全集（General Metrics for NVIDIA GH100），它含合法的 NVLink counter；这样最稳（metric id 由 nsys 自带，不会因手写 file: config 的 id 拼写错误而整轮失败）。extract 阶段再按 keep 过滤到 EP2 MoE 真正关心的 7-8 个，避免 hw_metrics 里塞几十个无关 counter。",
+  "keep_match": "大小写不敏感、去掉 [unit] 后缀与多余空格后做等值或子串匹配",
+  "keep": [
+    "SMs Active",
+    "SM Issue",
+    "Tensor Active",
+    "SM Tensor Pipe Active (HMMA ops)",
+    "DRAM Read Bandwidth",
+    "DRAM Write Bandwidth",
+    "NVLink TX Requests User Data",
+    "NVLink RX Requests User Data",
+    "NVLink TX Responses User Data",
+    "NVLink RX Responses User Data"
+  ],
+  "combine": [
+    {
+      "name": "DRAM Bandwidth Total",
+      "sum_of": ["DRAM Read Bandwidth", "DRAM Write Bandwidth"],
+      "unit": "%",
+      "drop_sources": false,
+      "rationale": "DRAM 半双工，读+写共享同一物理带宽。同时保留原 Read/Write 两条(便于看方向偏斜)，再加一条累加 Total 看总带宽压力。"
+    },
+    {
+      "name": "NVLink RX User Data Total",
+      "sum_of": ["NVLink RX Requests User Data", "NVLink RX Responses User Data"],
+      "unit": "Throughput %",
+      "drop_sources": false,
+      "rationale": "RX Request 与 RX Response 共享同一个物理接收方向和峰值归一化口径；逐采样点相加得到该接收方向的用户 payload 利用率。保留两条原始曲线，不包含 protocol data。"
+    },
+    {
+      "name": "NVLink TX User Data Total",
+      "sum_of": ["NVLink TX Requests User Data", "NVLink TX Responses User Data"],
+      "unit": "Throughput %",
+      "drop_sources": false,
+      "rationale": "TX Request 与 TX Response 共享同一个物理发送方向和峰值归一化口径；逐采样点相加得到该发送方向的用户 payload 利用率。保留两条原始曲线，不包含 protocol data。"
+    }
+  ],
+  "scale": [
+    {
+      "name": "Tensor Active",
+      "factor": 4.0,
+      "device_name_regex": "(?i)\\bH20\\b",
+      "derived_name": "Tensor Active (H20-corrected ×4)",
+      "rationale": "H20 是阉割卡,Tensor throughput 是标准 GH100 的 1/4。nsys 用 gh100.config 的 peak 归一,H20 上跑 Tensor Active 显示只到真值的 1/4,乘 4 反映 H20 自身占用。SM/DRAM/NVLink 不阉割,不校正。"
+    }
+  ],
+  "required": [
+    "SMs Active",
+    "SM Issue",
+    "Tensor Active",
+    "NVLink TX Requests User Data",
+    "NVLink TX Responses User Data",
+    "NVLink RX Requests User Data",
+    "NVLink RX Responses User Data"
+  ]
+}

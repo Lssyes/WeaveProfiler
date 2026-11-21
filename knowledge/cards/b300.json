@@ -1,0 +1,47 @@
+{
+  "schema": "weaveprofiler.card/v1",
+  "version": 1,
+  "kind": "card_wrapper",
+  "card": "b300",
+  "display_name": "NVIDIA B300",
+  "vendor": "nvidia",
+  "platform": "nv",
+  "visibility": "public",
+  "warp_size": 32,
+  "architectures": [
+    "sm_100a",
+    "sm_103a"
+  ],
+  "machine_profiles": [
+    {
+      "arch": "sm_100a",
+      "profile": "b300_sm_100a.json",
+      "evidence_status": "compiled",
+      "evidence_scope": "Cross-compiled PTX/SASS only; no B300 hardware run is recorded."
+    },
+    {
+      "arch": "sm_103a",
+      "profile": "b300_sm_103a.json",
+      "evidence_status": "compiled",
+      "evidence_scope": "Cross-compiled PTX/SASS only; no B300 hardware run is recorded."
+    }
+  ],
+  "profiler": {
+    "primary": "nsys",
+    "fallback": [],
+    "sampling_model": "periodic_pm",
+    "preferred_sample_hz": 50000,
+    "evidence": "cross_compile_only",
+    "note": "Both sm_100a and sm_103a remain distinct compiler targets. Sampling rate and continuity require an on-card manifest."
+  },
+  "languages": [
+    "cuda_cpp",
+    "triton",
+    "cutedsl"
+  ],
+  "summary": {
+    "machine_profiles_are_distinct": true,
+    "arch_selection_rule": "The caller must compile, label, capture, and validate sm_100a and sm_103a separately. A card-level b300 result does not imply one architecture from the other.",
+    "profile_metadata": "Compile probes and limits are preserved independently in b300_sm_100a.json and b300_sm_103a.json."
+  }
+}

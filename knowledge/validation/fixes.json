@@ -1,0 +1,284 @@
+{
+  "note": "损失类型 -> 常见改法。fi_attrib 的建议直接从这里取（4_validate/tools/fi_attrib.py 读 ../knowledge/validation/fixes.json），代码里不再写死改法文本。每条改法给 how（具体怎么改，尽量指到真实代码/助记符）、cost（代价）、verify（怎么证明有效）。",
+  "how_to_use": "先按 attrib.json 的 primary/secondary kind 通过 attrib_kind_map 找到损失类型，再用 evidence_to_check 逐项核对证据是否真的支持，最后挑 fixes 里的改法。改完必须按 verify 复测，正确性一律 randn 输入 + 全输出张量比对。",
+  "generated": "2026-11-16",
+  "machine": "H20 (sm_90a), B300 (sm_103a, 148 SMs, 267 GB HBM3e), MI308X (gfx942, 80 CUs) 实测汇总；覆盖 Warp-Specialized 2-WarpGroup GEMM、无分支谓词化 PTX fi_record_pred (FI_BG_PRED/FI_EG_PRED)、16B AoS global_store_dwordx4、12-buffer cold-HBM ring 与 Rendering Contract R6 (fi_trace_gate.py G1-G4)。",
+  "loss_types": [
+    "依赖等待",
+    "装载未掩盖",
+    "拖尾",
+    "序言",
+    "算得慢"
+  ],
+  "attrib_kind_map": {
+    "dependency_wait": "依赖等待",
+    "sync_wait": "依赖等待",
+    "wait_load": "装载未掩盖",
+    "memory_bandwidth": "装载未掩盖",
+    "tail_imbalance": "拖尾",
+    "prologue": "序言",
+    "compute_throughput": "算得慢",
+    "peak_loss": "算得慢",
+    "bubble_idle": "序言"
+  },
+  "fixes": [
+    {
+      "loss_type": "依赖等待",
+      "attrib_kinds": [
+        "dependency_wait",
+        "sync_wait"
+      ],
+      "symptom": "消费者泳道出现具名等待区间（等块就绪 / 等依赖 / 等信号），且这些区间覆盖了墙钟空泡；attrib.json 主因或次因为 dependency_wait / sync_wait；生产者的结束时刻明显晚于消费者的等待起点。",
+      "evidence_to_check": [
+        "attrib.json: primary / secondary[].kind 是否含 dependency_wait、sync_wait",
+        "attrib.json: bubble_rows 里 kind=wait_dependency、wait_sync 的 exclusive_us 与 fraction_of_bubble",
+        "attrib.json: dependencies[].event 与 sum_wait_us（逐 warp 累计，不是墙钟）",
+        "fi_lite_decode summary: events 里等待类事件的 total_us / p50_us / max_us（p50 小而 max 大＝少数 CTA 卡住）",
+        "fi_lite_decode summary: roles[].end_median_us，比较生产者与消费者角色谁先谁后",
+        "二进制侧：NVIDIA 看 SYNCS.PHASECHK.TRANS64.TRYWAIT / BAR.SYNC / LDGSTS，gfx942 看 s_barrier / ds_read + s_waitcnt lgkmcnt 的自旋"
+      ],
+      "fixes": [
+        {
+          "fix": "修复 Warp-Specialized cp.async.mbarrier.arrive 缺少 .noinc 导致的死锁",
+          "how": "在 2-WarpGroup Warp-Specialized GEMM（Producer_DMA warps 0..3 / Consumer_MMA warps 4..7）中，cp.async.mbarrier.arrive.shared.b64 不带 .noinc 会同时递增 expected arrival count（128 -> 256），导致 Consumer_MMA 的 mbarrier.try_wait.parity.shared.b64 永远等不到完成而死锁；必须改为 cp.async.mbarrier.arrive.noinc.shared.b64。",
+          "cost": "无额外硬件开销；mbarrier 初始化计数必须严格等于 Producer_DMA 线程数（4 warps = 128 threads）。",
+          "verify": "H20 (sm_90a, 57.52 TFLOPS) 与 B300 (sm_103a, 179.92 TFLOPS / 190.98 us) 实测无死锁，C2 全量输出 0 mismatch，Producer_DMA 与 Consumer_MMA 泳道正常闭合。"
+        },
+        {
+          "fix": "加深流水级数，让生产者提前更多步",
+          "how": "CUDA 环：把 STAGES 从 3 提到 4（targets/ring_pipeline.cu 每级 16 KB，4 级＝64 KB 动态 smem，改完要用 fi_check C1 重算每 SM 驻留 CTA）；Triton：num_stages=3 改 4（targets/triton_persistent_mm.py）；gfx942：LDS 环同样加一级，注意 64 KB LDS/CU 上限。",
+          "cost": "每多一级就多一份 tile 的 smem/LDS，可能把每 SM(CU) 驻留 CTA 从 2 降到 1；寄存器压力也可能上升。",
+          "verify": "同一份 randn 输入下跑 L0 与改后版本，用 knowledge/templates/compare_raw_arrays.py 全量比对（max_abs=max_rel=0）；再看 decode summary 里等待事件的 p50_us 与 attrib 的 bubble_us 是否下降。"
+        },
+        {
+          "fix": "装载提前一步发出，不要等 empty 握手才发",
+          "how": "ring_pipeline 的装载 warp 现在先 bar_sync(empty) 再 cp_async16；改成先对下一级发 cp.async 并 commit_group，再用 cp.async.wait_group N-1 只等最老一组，empty 握手移到 wait 之后。Triton 侧对应让 tl.load 在 tl.dot 之前一个 k-tile 发出。",
+          "cost": "需要多一级在途缓冲；wait_group 计数写错会读到未完成的 tile（正确性故障，不是性能故障）。",
+          "verify": "compare_raw_arrays 全量比对必须逐位一致；等待事件 max_us 下降，硬件侧 DRAM/Tensor 占空上升。"
+        },
+        {
+          "fix": "把全 CTA 栅栏换成只覆盖相关 warp 的握手",
+          "how": "__syncthreads / s_barrier 换成命名栅栏 bar.arrive+bar.sync(id,cnt)（Hopper/Blackwell）或 mbarrier 的 arrive/try_wait（SYNCS.PHASECHK.TRANS64.TRYWAIT）；gfx942 上换成 LDS 标志 + s_waitcnt lgkmcnt(0) 的轮询，只让生产/消费该 tile 的 wave 参与。",
+          "cost": "到达计数必须精确，写错直接死锁；轮询式握手在等待长时会占发射槽。",
+          "verify": "fi_check C1：插桩与改写前后 s_barrier / BAR.SYNC 的静态条数不得变化；attrib 的 wait_sync 覆盖降为 0 或转入 wait_dependency 且总时长下降。"
+        },
+        {
+          "fix": "megakernel 的跨 CTA 依赖改成完成计数 + 单次通知",
+          "how": "用 atomicAdd 到 per-consumer 计数器，消费者只在计数达到期望值时前进（knowledge/operators/operators.json 的 megakernel “等依赖” stage）；Blackwell 上跨 CTA 用 cluster 的 barrier.cluster.arrive/wait（UCGABAR_ARV/WAIT）或 mbarrier 远端 arrive。",
+          "cost": "原子操作在热点地址上会串行化；需要 threadfence/内存序保证 payload 先于计数可见。",
+          "verify": "等待区间的 max_us 与 CTA 结束分布（roles[].end_max_us - end_median_us）收窄；输出全量比对不变。"
+        }
+      ]
+    },
+    {
+      "loss_type": "装载未掩盖",
+      "attrib_kinds": [
+        "wait_load",
+        "memory_bandwidth"
+      ],
+      "symptom": "数据到达前计算泳道空转（wait_load 覆盖空泡），或 DRAM read/write 均值已经很高但 kernel 时长仍明显高于内存下界；二进制里装载指令与第一次使用之间没有独立工作（LDGSTS 之后立刻等待，或 global_load 之后紧跟 s_waitcnt vmcnt(0)）。",
+      "evidence_to_check": [
+        "attrib.json: primary=memory_bandwidth 时看 tmin_model.memory_bound_us 与 kernel_us 的比值",
+        "attrib.json: hardware_metrics.used 里 dram_read / dram_write 的 mean（>=80% 才算带宽主导）",
+        "attrib.json: bubble_rows 里 kind=wait_load 的 exclusive_us",
+        "fi_binsim / fi_binsim_hip：装载指令（LDGSTS.E.BYPASS.128 / UTMALDG.2D / global_load_dwordx4）与消费指令之间的间隔条数",
+        "fi_lite_decode summary: 装载事件与计算事件的时间线是否首尾相接（相接＝没掩盖）"
+      ],
+      "fixes": [
+        {
+          "fix": "让装载与计算真正重叠：只等最老一组",
+          "how": "cp.async.wait_group 0 改 wait_group (STAGES-2)；TMA 路径用 mbarrier.try_wait 等单个 stage 的到达；gfx942 用 s_waitcnt vmcnt(k) 保留 k 组在途，而不是 vmcnt(0)。",
+          "cost": "在途组数受 smem/LDS 级数与寄存器限制；等待计数与级数必须一致，否则读到脏数据。",
+          "verify": "全量输出比对逐位一致；decode 时间线上装载区间与计算区间的重叠比例上升，wait_load 的 exclusive_us 下降。"
+        },
+        {
+          "fix": "访存向量化并保证合并",
+          "how": "每 lane 16 B（cp.async.cg.shared.global 16 / global_load_dwordx4 / st.global.cs.v4.u32），地址在 lane 维连续；Triton 侧让最内维 stride=1，避免 offs[:,None]*sam 成为跨步装载。",
+          "cost": "需要 layout 配合，必要时先转置或用 swizzle；对齐不满足时反而退化。",
+          "verify": "fi_binsim 里宽装载（.128 / dwordx4）条数占比上升；DRAM 有效带宽（必需字节/时长）接近硬件下界。"
+        },
+        {
+          "fix": "减少必需字节：复用与缓存",
+          "how": "权重 tile 装进 smem/LDS 后在 k 循环内复用；用 GROUP_M 分组 swizzle（triton_persistent_mm.py 的 num_in_group）提高 L2 命中；对只读数据用 __ldg / const __restrict__ 或 global_load 的 slc/glc 位按需设置。",
+          "cost": "swizzle 会让 tile 访问顺序偏离最自然的行优先，索引计算变复杂。",
+          "verify": "attrib 的 tmin_model.memory_bound_us 下降（必需字节变少），kernel_us 跟着下降；L2 命中率（nsys GPU metrics）上升。"
+        },
+        {
+          "fix": "地址计算移出关键路径",
+          "how": "用 TMA 描述符（UTMALDG.2D + UTMACMDFLUSH）或把偏移量在序言里算好放寄存器；避免每个 k-tile 重算 64 位地址导致装载发射被标量运算拖住。",
+          "cost": "TMA 需要 host 侧构造 tensor map，descriptor 与 layout 必须匹配。",
+          "verify": "SASS/AMDGCN 里装载前的标量指令条数下降；装载事件起点与上一次计算结束的间隔缩短。"
+        }
+      ]
+    },
+    {
+      "loss_type": "拖尾",
+      "attrib_kinds": [
+        "tail_imbalance"
+      ],
+      "symptom": "最晚结束的 CTA 比中位晚很多（attrib cta_stats.tail_us >= max(10 us, 10% kernel)）；SM/CU 占用整条的最忙与最闲相差大；持久化轮转下每个 CTA 领到的任务数或单任务计算量不同（ring_pipeline.cu 里 iters = base_iters*(1+(t*7919)%5) 就是人造的这种不均）。",
+      "evidence_to_check": [
+        "attrib.json: cta_stats.tail_us / slowest_cta",
+        "fi_lite_decode summary: roles[].end_min_us / end_median_us / end_max_us / tail_us",
+        "fi_lite_decode summary: sm_grouping.sm_busy_spread_us（SM 粒度）或 cu.max_bands（CU 粒度）",
+        "每个 CTA 的任务数：n_tiles 与 gridDim 的余数；单任务计算量是否随 tile 号变化"
+      ],
+      "fixes": [
+        {
+          "fix": "动态取任务替代静态轮转",
+          "how": "t = blockIdx.x + k*gridDim.x 换成 atomicAdd 全局工作队列（每个 CTA 取一个 tile 号）；Blackwell 上可用 clusterlaunchcontrol.try_cancel（UGETNEXTWORKID.BROADCAST）在设备侧领取后续 CTA 的工作。",
+          "cost": "每次取任务一个原子操作；任务粒度太细时取任务本身成为开销。",
+          "verify": "roles[].end_max_us - end_median_us 收窄到单任务时长量级；sm_busy_spread_us 下降；输出全量比对不变。"
+        },
+        {
+          "fix": "让 grid 与物理单元数成整数倍",
+          "how": "grid 取 SM/CU 数的整数倍（H20 78 个 SM，MI308X 80 个 CU，B300 按实机读到的值）；持久化 kernel 的 NUM_SMS 就是 grid，任务总数不是它的整数倍时最后一波必然不满。",
+          "cost": "只能消掉波次级别的拖尾，消不掉单任务计算量不均。",
+          "verify": "sm_grouping.ctas_per_sm 的 min 与 max 相等；kernel 中位时长下降。"
+        },
+        {
+          "fix": "把不均匀的任务切细",
+          "how": "计算量随 tile 变化时，把大 tile 再按行/k 段切成多个可独立领取的子任务，让队列自己均衡。",
+          "cost": "子任务之间可能要重复装载一次边界数据；部分和需要额外归约。",
+          "verify": "最慢 CTA 的最后一段区间时长（decode 时间线）与其它 CTA 的中位段接近。"
+        },
+        {
+          "fix": "收尾归约不要压在最后一个 CTA 上",
+          "how": "ring_pipeline 的“最后一个完成的 CTA 归约全部 partial”会让它比其它 CTA 多跑一整段；改成两级归约（每 CTA 写一个部分和，由一个极小的第二个 kernel 或 32 个 CTA 分摊收尾），或让每个 CTA 用 atomicAdd 直接累加到结果。",
+          "cost": "atomicAdd 的浮点累加顺序不确定，逐位复现性会丢（比对要放宽容差，必须先说明）。",
+          "verify": "decode 时间线上收尾 stage 的时长与所在 CTA 数；kernel_us 的 max-end 与 median-end 差值。"
+        }
+      ]
+    },
+    {
+      "loss_type": "序言",
+      "attrib_kinds": [
+        "prologue",
+        "bubble_idle"
+      ],
+      "symptom": "kernel 开头有一段没有有效工作的墙钟：资源分配与 barrier 初始化、迭代空间/索引映射、第一批装载还没回来；attrib 的空泡集中在 [0, 第一条 compute 区间] 之间；SM/CU 占用整条的起始时刻分散。",
+      "evidence_to_check": [
+        "attrib.json: bubble_us 与第一段空泡的时间位置（是否贴着 0）",
+        "fi_lite_decode summary: events 里 operators.json 标了 phase=prologue 的 stage（“序言：资源准备”“序言：迭代空间与索引映射”）的 total_us 与占比",
+        "第一条装载事件与第一条计算事件之间的间隔",
+        "SM 粒度转储：sm_grouping.sm_busy_us.min 与 max 的差（起始分散会拉大它）"
+      ],
+      "fixes": [
+        {
+          "fix": "先发第一批装载，再做序言里的其它工作",
+          "how": "把 mbarrier.init / tcgen05.alloc（UTCATOMSWS.FIND_AND_SET.ALIGN）与索引计算放到第一批 cp.async/TMA 发出之后；装载是异步的，序言的标量工作正好用来掩盖它的延迟。",
+          "cost": "需要注意 barrier 初始化必须先于任何 wait；只有装载本身不依赖 barrier 时才能这样排。",
+          "verify": "decode 时间线上第一条装载事件的起点提前，序言 stage 与第一条计算区间的重叠增加。"
+        },
+        {
+          "fix": "在序言里预取满流水的前 STAGES-1 级",
+          "how": "主循环开始前把环的前几级装满（ring_pipeline 的装载 warp 先连发 STAGES-1 次 cp_async_commit），这样第一次 bar_sync(full) 的等待接近 0；Triton 的 num_stages 已经由编译器做这件事，手写循环要自己做。",
+          "cost": "序言变长，但换掉的是主循环里最长的一次等待；短 kernel（<10 us）可能得不偿失。",
+          "verify": "第一个 tile 的“等块就绪”时长与后续 tile 的中位时长接近。"
+        },
+        {
+          "fix": "索引与描述符只算一次",
+          "how": "把 num_pid_m/num_pid_n、group_id、offs_m/offs_n 这类不变量提到持久化循环外；整数除法和取模在 GPU 上是多指令序列，triton_persistent_mm.py 的 tile_id -> (pm,pn) 映射每个 tile 都算一次，可以改成递增更新。",
+          "cost": "增量更新容易在分组边界出错，需要按 group 边界重算。",
+          "verify": "序言 stage 的 total_us 下降；fi_binsim 的标量整数指令条数下降；输出比对不变。"
+        },
+        {
+          "fix": "启动阶段本身：合并小 kernel、避免不必要的 memset/垫 launch",
+          "how": "如果空泡来自 kernel 之间而不是 kernel 内部，用 nsys/rocprofv3 时间线（fi_align_nsys / fi_align_rocprof）确认后，把固定形状的清零合并进 kernel，或改成 megakernel 内部的复位 stage（operators.json 的“收尾：全局归约与状态复位”）。",
+          "cost": "megakernel 让调试更难，且失去 kernel 边界的天然同步。",
+          "verify": "对齐后的 trace 里 kernel 条与软件时间线的 end_margin_us 在 0–50 us；kernel 数量减少而总时长下降。"
+        }
+      ]
+    },
+    {
+      "loss_type": "算得慢",
+      "attrib_kinds": [
+        "compute_throughput",
+        "peak_loss"
+      ],
+      "symptom": "active 时间几乎占满 kernel，但明显高于 T_min：peak_loss = active_span - T_min 大；Tensor Active 均值低而 compute 区间铺满时间线（说明跑的是标量/向量指令而不是矩阵引擎），或 SM Issue 接近饱和。",
+      "evidence_to_check": [
+        "attrib.json: accounting.peak_loss_us 与 tmin_model.t_min_us / t_min_resource",
+        "attrib.json: hardware_metrics.used 里 tensor_active、issue、dram_read/write 的 mean",
+        "二进制侧：SASS 是否真有 UTCHMMA/HMMA（Blackwell/Hopper）或 v_mfma_*（gfx942）；只在 PTX 里写 tl.dot/mma 不算",
+        "fi_binsim: 关键指令类别计数（MMA/TMA/同步）在插桩前后是否保持，计算指令是否被标量指令稀释"
+      ],
+      "fixes": [
+        {
+          "fix": "确认真的走了矩阵引擎",
+          "how": "Triton 用 tl.dot 且形状满足 MMA 要求（BM/BN/BK 是 16 的倍数，输入 bf16/fp16/fp8）；CUDA 用 tcgen05.mma（Blackwell，SASS UTCHMMA/UTCHMMA.2CTA）或 wgmma（Hopper）；HIP 用 v_mfma_f32_16x16x16_bf16 一类。用 fi_binsim / fi_binsim_hip 在二进制里回查，而不是只看源码。",
+          "cost": "改 MMA 通常要重排 layout 与累加器存放（tmem/AGPR），改动面大。",
+          "verify": "二进制里出现对应 MMA 助记符；nsys 的 Tensor Active 均值上升；kernel_us 向 T_min 靠近。"
+        },
+        {
+          "fix": "增大每次计算的数据复用",
+          "how": "增大 BK（k 方向一次装更多）与累加器驻留（Blackwell 放 tmem，Hopper 放寄存器，gfx942 放 AGPR/VGPR），让一条 MMA 指令的输入被更多输出复用；避免每个 k-tile 重新装载同一份 A/B。",
+          "cost": "累加器占寄存器/tmem，过大反而降低驻留 wave/CTA 数（fi_check C1 会报出来）。",
+          "verify": "fi_check C1 的寄存器与占用率在预算内；单位时间有效 FLOPs（有用 FLOPs / kernel_us）上升。"
+        },
+        {
+          "fix": "删掉非必需的依赖计算",
+          "how": "检查主循环里是否有每次都重算的常量、mask、scale；把它们提到循环外或折进 epilogue。ring_pipeline.cu 的 iters 内层循环是合成负载，真实 kernel 常见的是重复的边界判断与类型转换。",
+          "cost": "提到循环外会增加寄存器占用。",
+          "verify": "compute 区间的总时长下降而输出逐位一致；fi_binsim 的基本块增幅在预算内。"
+        },
+        {
+          "fix": "消除 C++/HIP K-loop 插桩分支膨胀（+591% 基本块）与实现 <= 10.0% 闭环扰动控制（v14 四大支柱）",
+          "how": "(1) Pillar I 双锚点仿射局部时钟校准 (FI_TIMER=1)：K-loop 内用 2-cycle %clock64 / readcyclecounter 替代 35-45 cycle 跨芯片 %globaltimer（避免 ptxas 投机取消谓词生成全 warp CS2R SR_GLOBALTIMERLO 停顿），由 FI_OPEN/FI_CLOSE 同步锚点对 (t_global, c_local) 线性插值 t_ns(c) = t_open_ns + (c - c_open)*(t_close_ns - t_open_ns)/(c_close - c_open)；(2) Pillar II 零 clobber 谓词化 + WarpGroup 角色 Leader 选举 + Host L2 隔离：fi_lite.cuh 的 @%p asm volatile 去掉 : \"memory\" clobber（保持 ~166 regs 与 LDSM/HMMA/LDGSTS 流水），用 FI_OPEN_BY((lin_tid & 127u) == 0u, role) 每 128 线程 WarpGroup 选 1 个写线程（流量降 4 倍），将 overflow atomicOr 提升至 FI_CLOSE，并将 host fi_reset 移出稳态计时循环避免刷掉 L2 缓存；(3) Pillar III 闭环 <= 10.0% 步长控制器 (G5)：auto_gemm.py 在 S in {full(1), stride4(4), stride8(8)} 中自动选择满足 Measured_Overhead(S*) <= 10.0% 的最密步长 S*。",
+          "cost": "无额外分支指令，K-loop 基本块膨胀为 0，spill 字节数不增加，全区间 [t_start, t_end] 连续可观测且稳态插桩开销严格 <= 10.0%。",
+          "verify": "用两侧编译记录检查 delta_spill_bytes = spill_inst - spill_l0 <= 0，用 fi_binsim / fi_binsim_hip 计算 assembly_change_rate。C2 全量输出 max |C_FI - C_L0| == 0。fi_trace_gate.py G1-G5 全量通过（含 G5 overhead_selected_pct <= 10.0%）。"
+        },
+        {
+          "fix": "已经贴近 T_min 时，把它记为硬件下界",
+          "how": "若 kernel_us 与 tmin_model.t_min_us 的差在容差内，报告里写“已达计算/内存下界”，剩余部分归到硬件与启动边界，不再当作可优化空泡；要再快只能换算法或换精度（bf16 -> fp8）。",
+          "cost": "换精度必须先证明数值可接受（全量比对的 max_abs/max_rel 要给出来）。",
+          "verify": "attrib.json 的 accounting.unaccounted_us 接近 0，peak_loss 小于容差。"
+        }
+      ]
+    }
+  ],
+  "observability": [
+    {
+      "when": "primary in (bubble_idle, unknown)",
+      "fix": "先补齐可观测性再谈改法",
+      "how": "给每个角色和关键阶段加 FI_B/FI_E（名字写进 names.json，必须是真实语义），对照 knowledge/operators/operators.json 的 stage 列表逐个确认 load/compute/wait/tail 都有区间覆盖，然后重跑 fi_attrib。",
+      "cost": "打点越多转储越大，注意每 warp cap 与 --max-records 预算。",
+      "verify": "fi_check C3 结构错误=0、未命名事件=0；attrib 的 bubble 被拆成具名等待类型。"
+    },
+    {
+      "when": "sparse_sample1_in_sw_hw_trace",
+      "fix": "禁止在 spans <= 2,000,000 时回退到 sample1 (kt=0) 导致 99.6% 空白时间线",
+      "how": "sw_hw_capture 在总区间数 spans <= 2,000,000 时严禁回退到 sample1 (FI_SAMPLE=1, kt=0)，必须采集全量 K-loop (FI_LEVEL=2 FI_SAMPLE=0, fi-l2-s0)，并由 4_validate/tools/fi_trace_gate.py (G1) 强制校验密集 K-tile 覆盖。",
+      "cost": "全量 K-loop 转储体积略大（如 B300 Triton 66,048 spans、CuTeDSL 526,336 spans），但仍在 2,000,000 spans 门限内且硬件时间线无空白。",
+      "verify": "fi_trace_gate.py G1 检查通过：0 import errors、0 slice_spill、全部 K-tile 密集覆盖无 99.6% 空白。"
+    },
+    {
+      "when": "perfetto_tid0_pid_collision_or_duplicate_bands",
+      "fix": "修复 Perfetto tid=0 -> pid 碰撞 (slice_spill) 与假重复条带 (实例0..15)",
+      "how": "在 4_validate/tools/fi_lite_decode.py 中统一使用 1-based tid = 1 + s * 64 + j（杜绝 tid=0 与 process track 碰撞），采用 stack-aware assign_sublanes 处理嵌套区间，并在 group=\"cu\" / group=\"sm_resident\" / group=\"sm\" 下按 CTA 生命周期复用泳道。",
+      "cost": "无运行期开销，仅解码器轨道分配修正。",
+      "verify": "trace_processor_shell 导入 slice_spill_overlapping_complete_event = 0，4_validate/tools/fi_trace_gate.py G1 与 G4（物理 SM/CU 驻留上限）通过。"
+    },
+    {
+      "when": "buried_hw_tracks_or_raw_cycle_counters",
+      "fix": "实施 Rendering Contract R6 置顶 [0-100%] 硬件利用率与 12-buffer cold-HBM 环",
+      "how": "硬件轨道固定写入 pid=1 / upid=1 / sort_index=-1000（软件泳道 pid >= 100），将原始周期/字节计数全部转换为 [0-100%] 硬件吞吐百分比（Tensor Active [Throughput %]、DRAM Read/Write/Total Bandwidth [Throughput %]、SMs Active [Throughput %]、SM Issue [Throughput %] 或 MI308X compute_util/memory_util），并在采集时使用 12-buffer cold-HBM 环（As[12], Bs[12]）消除 L2 暖缓存失真（MI308X 3.2% warm L2 -> 13.2% cold HBM）。",
+      "cost": "12 组输入缓冲多占显存，但可真实反映冷 HBM 带宽。",
+      "verify": "4_validate/tools/fi_trace_gate.py (G1-G4) 全量通过：G1 零导入/溢出/稀疏错误，G2 [0-100%] compute% & memory% 轨道齐全，G3 pid=1 / upid=1 置顶，G4 物理 SM/CU 占用不超硬件上限。"
+    },
+    {
+      "when": "hardware_metrics.present == false",
+      "fix": "补一次带 GPU metrics 的采集",
+      "how": "NVIDIA：nsys profile --gpu-metrics-devices=cuda-visible --gpu-metrics-frequency=200000 --gpu-metrics-set=<按 fi_metric_map 查到的集合> --capture-range-end=none，再用 fi_align_nsys 合并；AMD：用同一 run 的 rocprof-sys-run --rocm-events 采 raw ROCm PM counters 与 kernel dispatch slices 到同一个 Perfetto proto，再按 same-dispatch start timestamp 配对并用 build_rocprof_sys_sw_hw.py 合并。rocprofv3 --pmc 只作显式标注的 fallback/calibration；amd-smi 粗采样不得当 compute/memory utilization。",
+      "cost": "NVIDIA metrics 采样是全卡平均、间隔约 4–5 us；AMD raw ROCm events 是 per-dispatch aggregate，没有 200 kHz PM 时间轴等价物。两者都不能替代软件区间，只能交叉验证。",
+      "verify": "NVIDIA：attrib.json 的 hardware_metrics.samples_min > 0，used 里出现 tensor/issue/dram 语义。AMD：核对 same-run/same-dispatch 配对、raw counter provenance、stable curve IDs、64 B/request + 3684 GB/s HBM estimate 标注，以及缺少 interconnect counter 时 communication_util 为 unavailable + reason 而非 0。"
+    },
+    {
+      "when": "short_lived_roles_present",
+      "fix": "核对短命控制角色是否被误当成主因",
+      "how": "短命的调度/辅助 warp 尾差大不代表主 kernel 拖尾；按 CTA 归并后的结束分布判断（fi_attrib 已这样做），把这类角色只当辅助证据。",
+      "cost": "无。",
+      "verify": "attrib.json 的 cta_stats 与 roles[] 对照，slowest_cta 落在主角色上。"
+    }
+  ]
+}

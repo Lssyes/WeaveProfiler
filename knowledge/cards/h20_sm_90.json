@@ -1,0 +1,712 @@
+{
+  "schema": "weaveprofiler.card-machine/v1",
+  "version": 1,
+  "kind": "machine_profile",
+  "card": "h20",
+  "arch": "sm_90",
+  "vendor": "nvidia",
+  "platform": "nv",
+  "warp_size": 32,
+  "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+  "date": "2026-11-08",
+  "evidence_status": "measured",
+  "granularity": [
+    "SM",
+    "warp"
+  ],
+  "evidence_policy": "每条 isa_mnemonics 来自本机真实编译产物的 PTX/SASS 反汇编（探针见 probes 字段）；勘误已合并进对应条目的 placement_rule，不单列 errata。",
+  "profiler": {
+    "primary": "nsys",
+    "fallback": [],
+    "sampling_model": "periodic_pm",
+    "preferred_sample_hz": 50000,
+    "evidence": "measured_sampling_gap",
+    "note": "H20 measured at 200 kHz can contain gaps; 50 kHz can remain continuous. Final rate and gaps must come from the capture manifest."
+  },
+  "entries": [
+    {
+      "construct": "cp.async.ca.shared.global -> shared memory",
+      "isa_mnemonics": [
+        "PTX: cp.async.ca.shared.global",
+        "SASS: LDGSTS.E.128"
+      ],
+      "placement_rule": "同步语义：B 放在 cp.async 发射前，E 放在 cp.async.wait_group 返回后。异步语义：发射处记 FI_M，不把发射时刻当作数据就绪。",
+      "evidence": {
+        "snippet": "cp.async.ca.shared.global [%r3], [%rd3], 16;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "cp.async.bulk.tensor.2d TMA load",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.tensor.2d.shared::cta.global.tile.mbarrier::complete_tx::bytes",
+        "SASS: UTMALDG.2D"
+      ],
+      "placement_rule": "发射线程记瞬时 B/M；完成事件的 E 放在 mbarrier.try_wait 循环返回之后。多线程等待时把 E 放在统一等待返回处，避免每个轮询分支重复记一对。",
+      "evidence": {
+        "snippet": "cp.async.bulk.tensor.2d.shared::cta.global.tile.mbarrier::complete_tx::bytes [%r5], [%rd3, {%r7, %r7}], [%r3];",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "mbarrier.try_wait.parity spin loop",
+      "isa_mnemonics": [
+        "PTX: mbarrier.try_wait.parity.shared::cta.b64",
+        "SASS: SYNCS.PHASECHK.TRANS64.TRYWAIT"
+      ],
+      "placement_rule": "B 放在进入自旋/try_wait 循环之前，E 放在循环退出且所有消费线程到达统一汇合点之后；一次逻辑等待只产生一对记录。 勘误（实测）：匹配时用具体形态 SYNCS.PHASECHK.TRANS64.TRYWAIT，不要用笼统的“SYNCS 类”；arrive/expect_tx 另有 SYNCS.ARRIVE.TRANS64 与 SYNCS.EXCH.64（属同步，不是等待）。等待区间仍以 wait 返回为准。",
+      "evidence": {
+        "snippet": "mbarrier.try_wait.parity.shared::cta.b64 p, [%r10], 0;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "cp.async.wait_group 0",
+      "isa_mnemonics": [
+        "PTX: cp.async.wait_group 0",
+        "SASS: LDGDEPBAR; DEPBAR.LE"
+      ],
+      "placement_rule": "B 放在 wait_group 之前，E 放在 wait_group 返回之后；不要在编译器拆出的每个依赖检查处重复打点。",
+      "evidence": {
+        "snippet": "cp.async.wait_group 0;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "wgmma.wait_group.sync.aligned 0",
+      "isa_mnemonics": [
+        "PTX: wgmma.wait_group.sync.aligned 0",
+        "SASS: WARPGROUP.DEPBAR.LE",
+        "SASS: WARPGROUP.ARRIVE"
+      ],
+      "placement_rule": "B 放在 wgmma.wait_group 前，E 放在同一 warpgroup 统一 wait 返回后；MMA 发射处另记瞬时事件。 勘误（实测）：本机实测 wgmma.wait_group 落为 WARPGROUP.DEPBAR.LE（wgmma fence/commit 相关还会出现 WARPGROUP.ARRIVE）；完成事件以 wait_group 返回为准，不以 commit_group 为准。 勘误（实测）：Triton 侧同样是 WARPGROUP.DEPBAR.LE；等待区间 E 记在它返回之后。",
+      "evidence": {
+        "snippet": "wgmma.wait_group.sync.aligned 0;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "等待",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "wgmma.mma_async m64n8k16 f32.f16.f16",
+      "isa_mnemonics": [
+        "PTX: wgmma.mma_async.sync.aligned.m64n8k16.f32.f16.f16",
+        "SASS: HGMMA.64x8x16.F32"
+      ],
+      "placement_rule": "MMA 发射处记 B/瞬时事件；完成语义与 wgmma.wait_group 绑定，E 记在 wait 返回后。不要把 commit_group 当完成。",
+      "evidence": {
+        "snippet": "wgmma.mma_async.sync.aligned.m64n8k16.f32.f16.f16",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "scalar fma.rn.f32",
+      "isa_mnemonics": [
+        "PTX: fma.rn.f32",
+        "SASS: FFMA"
+      ],
+      "placement_rule": "非 Tensor Core 主循环：默认每 tile/chunk 一对 B/E；确需每 k-step 时单独编译 FI_GROUP 并重测扰动。",
+      "evidence": {
+        "snippet": "fma.rn.f32 \t%f11, %f1, %f10, %f9;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "semantic_legacy": "计算",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "bar.sync / bar.arrive named barriers",
+      "isa_mnemonics": [
+        "PTX: bar.sync; bar.arrive",
+        "SASS: BAR.SYNC.DEFER_BLOCKING; BAR.ARV"
+      ],
+      "placement_rule": "B 放在 barrier 调用前，E 放在 barrier 返回后；按角色分支时记录点放分支内部，泳道由角色决定。",
+      "evidence": {
+        "snippet": "bar.sync 1, %r5;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "mbarrier.arrive / mbarrier.arrive.expect_tx",
+      "isa_mnemonics": [
+        "PTX: mbarrier.arrive.expect_tx.shared::cta.b64",
+        "SASS: SYNCS.ARRIVE.TRANS64",
+        "SASS: SYNCS.EXCH.64"
+      ],
+      "placement_rule": "arrive 本身是瞬时同步信号，用 FI_M 记；不要把它当异步数据完成，完成事件记在等待方 wait 返回后。 勘误（实测）：本机实测 arrive/expect_tx 落为 SYNCS.ARRIVE.TRANS64 与 SYNCS.EXCH.64，与 try_wait 的 SYNCS.PHASECHK.TRANS64.TRYWAIT 区分开：前者是到达（瞬时），后者才是等待区间。",
+      "evidence": {
+        "snippet": "mbarrier.arrive.expect_tx.shared::cta.b64 _, [%r3], %r4;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "st.global.f32",
+      "isa_mnemonics": [
+        "PTX: st.global.f32",
+        "SASS: STG.E"
+      ],
+      "placement_rule": "B 放在 store 指令前，E 放在最后一个同步 store 返回后；多个向量 store 属于同一个 tile 写回时可只在 tile 边界打点。",
+      "evidence": {
+        "snippet": "st.global.f32 \t[%rd8], %f11;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "plain cp.async.bulk.global shared->global",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.global.shared::cta.bulk_group",
+        "SASS: UBLKCP.G.S; UTMACMDFLUSH",
+        "SASS: UBLKCP.G.S",
+        "SASS: UTMACMDFLUSH"
+      ],
+      "placement_rule": "发射处记 B/瞬时事件；E 放在 cp.async.bulk.wait_group.read 或 flush 返回后。本机实测该 plain bulk store 不是 UTMASTG。 勘误（实测）：本机 CUDA 13.3 / sm_90a 实测：plain 的 cp.async.bulk.global shared::cta -> global 不是 UTMASTG，而是 UBLKCP.G.S，随后 UTMACMDFLUSH；只有 tensor 形态（cp.async.bulk.tensor.2d）的 TMA store 才实测为 UTMASTG.2D。写回匹配规则要把 plain bulk copy 与 tensor TMA store 分开。",
+      "evidence": {
+        "snippet": "cp.async.bulk.global.shared::cta.bulk_group [%rd2], [%r11], %r12;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "tl.load simple global load",
+      "isa_mnemonics": [
+        "PTX: ld.global.b32",
+        "SASS: LDG.E"
+      ],
+      "placement_rule": "B 放在 tl.load 源语句前，E 放在得到寄存器值后；简单 load 是同步语义。",
+      "evidence": {
+        "snippet": "@%p1 ld.global.b32 { %r1 }, [ %rd1 + 0 ];\n@%p2 ld.global.b32 { %r2 }, [ %rd2 + 0 ];",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "tl.load in num_stages=2 pipeline",
+      "isa_mnemonics": [
+        "PTX: cp.async.ca.shared.global",
+        "SASS: LDGSTS.E"
+      ],
+      "placement_rule": "编译器流水化的 k 循环默认只在每 tile 外打 B/E；进入 k-step 必须单独构建并重测 C1/C2，防止破坏流水。",
+      "evidence": {
+        "snippet": "cp.async.ca.shared.global [ %r20 + 0 ], [ %rd3 + 0 ], 0x4, %r21;\ncp.async.ca.shared.global [ %r22 + 0 ], [ %rd4 + 0 ], 0x4, %r21;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "Tensor descriptor TMA load",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes",
+        "SASS: UTMALDG.2D"
+      ],
+      "placement_rule": "descriptor.load 发射处记瞬时事件；E 放在 mbarrier wait 返回后。若 Triton 展开 try_wait 循环，只在循环外打一对。",
+      "evidence": {
+        "snippet": "@%p2 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%r2], [%rd1, {%r3, %r4}], [%r1];",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "cp.async.wait_group",
+      "isa_mnemonics": [
+        "PTX: cp.async.wait_group 0",
+        "SASS: LDGDEPBAR; DEPBAR.LE"
+      ],
+      "placement_rule": "B 放在流水等待前，E 放在 wait 返回后；编译器生成的重复依赖检查不要逐个打点。",
+      "evidence": {
+        "snippet": "cp.async.wait_group \t0;\ncp.async.wait_group \t0;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "TMA mbarrier try_wait",
+      "isa_mnemonics": [
+        "PTX: mbarrier.try_wait.parity.shared.b64",
+        "SASS: SYNCS.PHASECHK.TRANS64.TRYWAIT"
+      ],
+      "placement_rule": "B 放在进入 try_wait 轮询前，E 放在轮询成功后；一次 TMA tile 完成只对应一对等待区间。",
+      "evidence": {
+        "snippet": "mbarrier.try_wait.parity.shared.b64 complete, [%r1], %r5;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "wgmma.wait_group",
+      "isa_mnemonics": [
+        "PTX: wgmma.wait_group.sync.aligned",
+        "SASS: WARPGROUP.DEPBAR.LE"
+      ],
+      "placement_rule": "B 放在 wgmma.wait_group 前，E 放在 warpgroup 统一返回后；MMA 发射处记瞬时事件。 勘误（实测）：Triton 侧同样是 WARPGROUP.DEPBAR.LE；等待区间 E 记在它返回之后。",
+      "evidence": {
+        "snippet": "wgmma.wait_group.sync.aligned 1;\nwgmma.wait_group.sync.aligned 0;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "等待",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "tl.dot -> wgmma m64n128k8 tf32",
+      "isa_mnemonics": [
+        "PTX: wgmma.mma_async.sync.aligned.m64n128k8.f32.tf32.tf32",
+        "SASS: HGMMA.64x128x8.F32.TF32"
+      ],
+      "placement_rule": "tl.dot 发射处记 B/瞬时事件；完成 E 与 wgmma.wait_group 返回绑定，num_stages>1 默认外层 tile 粒度。",
+      "evidence": {
+        "snippet": "wgmma.mma_async.sync.aligned.m64n128k8.f32.tf32.tf32 {%r222,%r223,%r224,%r225,%r226,%r227,%r228,%r229,%r230,%r231,%r232,%r233,%r234,%r235,%r236,%r237,%r238,%r239,%r240,%r241,%r242,%r243,%r244,%r245,%r246,%r247,%r248,%r249,%r250,%r251,%r252,%r253,%r254,%r255,%r256,%r257,%r258,%r259,%r260,%r261,%r262,%r263,%r264,%r265,%r266,%r267,%r268,%r269,%r270,%r271,%r272,%r273,%r274,%r275,%r276,%r277,%r278,%r279,%r280,%r281,%r282,%r283,%r284,%r285}, %rd37, %rd38, %p1, 1, 1;\nwgmma.mma_async.sync.aligned.m64n128k8.f32.tf32.tf32 {%r222,%r223,%r224,%r225,%r226,%r227,%r228,%r229,%r230,%r231,%r232,%r233,%r234,%r235,%r236,%r237,%r238,%r239,%r240,%r241,%r242,%r243,%r244,%r245,%r246,%r247,%r248,%r249,%r250,%r251,%r252,%r253,%r254,%r255,%r256,%r257,%r258,%r259,%r260,%r261,%r262,%r263,%r264,%r265,%r266,%r267,%r268,%r269,%r270,%r271,%r272,%r273,%r274,%r275,%r276,%r277,%r278,%r279,%r280,%r281,%r282,%r283,%r284,%r285}, %rd39, %rd40, %p1, 1, 1;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "tl.debug_barrier",
+      "isa_mnemonics": [
+        "PTX: bar.sync 0",
+        "SASS: BAR.SYNC.DEFER_BLOCKING 0x0"
+      ],
+      "placement_rule": "B 放在 debug_barrier 前，E 放在 barrier 返回后；不要在 barrier 前后插入额外同步以“保护”记录点。",
+      "evidence": {
+        "snippet": "bar.sync \t0;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "tl.store simple global store",
+      "isa_mnemonics": [
+        "PTX: st.global.b32",
+        "SASS: STG.E"
+      ],
+      "placement_rule": "B 放在 tl.store 前，E 放在同步 store 完成；mask 分支由编译器生成谓词，不需要按谓词重复打点。",
+      "evidence": {
+        "snippet": "@%p1 st.global.b32 [ %rd9 + 0 ], { %r9 };\n@%p2 st.global.b32 [ %rd10 + 0 ], { %r10 };",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "Tensor descriptor TMA store",
+      "isa_mnemonics": [
+        "PTX: cp.async.bulk.tensor.2d.global.shared::cta.bulk_group",
+        "SASS: UTMASTG.2D"
+      ],
+      "placement_rule": "descriptor.store 发射处记瞬时事件；E 放在对应 bulk_group wait/flush 返回后。Triton tensor TMA store 本机实测为 UTMASTG.2D。 勘误（实测）：对照：Triton 的 tensor TMA store 在本机实测确实是 UTMASTG.2D；plain cp.async.bulk 才是 UBLKCP.G.S。",
+      "evidence": {
+        "snippet": "@%p3 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [%rd1, {%r3, %r4}], [%r2];",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "Tensor scalar indexing mX[tidx]",
+      "isa_mnemonics": [
+        "PTX: ld.global.b32",
+        "SASS: LDG.E"
+      ],
+      "placement_rule": "B 放在 Tensor 读前，E 放在值进入寄存器后；这是简单同步 load，不等同于 TMA atom 的异步完成。 勘误（实测）：范围修正：CuTeDSL 的简单 cute.Tensor 标量索引在本机 lowers 为 ld.global.b32 / LDG.E（同步语义），不是 TMA；cute.copy(TMA atom) 与完整 pipeline/producer-consumer、cute.gemm 未在本探针集里展开，不能把所有 CuTeDSL load 当异步 TMA 打点。",
+      "evidence": {
+        "snippet": "ld.global.b32 \t%r2, [%rd4];",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "cutedsl",
+      "language_display_name": "CUTLASS CuTeDSL",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "cute.arch.mbarrier_wait(mbar, phase)",
+      "isa_mnemonics": [
+        "PTX: mbarrier.try_wait.parity.shared.b64",
+        "SASS: SYNCS.PHASECHK.TRANS64.TRYWAIT"
+      ],
+      "placement_rule": "mbarrier_wait 内部展开 try_wait/timeout 循环；B 放在调用前，E 放在调用返回后，一次调用只产生一对记录。",
+      "evidence": {
+        "snippet": "mbarrier.try_wait.parity.shared.b64 P1, [%r7], 0, 10000000;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "cutedsl",
+      "language_display_name": "CUTLASS CuTeDSL",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "Float32 multiply-add expression",
+      "isa_mnemonics": [
+        "PTX: fma.rn.f32",
+        "SASS: FFMA"
+      ],
+      "placement_rule": "B 放在表达式/循环前，E 放在表达式结果可用于 store 或归约时；细粒度表达式打点会显著改变代码，需单独验证。",
+      "evidence": {
+        "snippet": "fma.rn.f32 \t%r3, %r2, 0f3F800347, 0f3F000000;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "semantic_legacy": "计算",
+      "language": "cutedsl",
+      "language_display_name": "CUTLASS CuTeDSL",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "cute.arch.sync_threads()",
+      "isa_mnemonics": [
+        "PTX: bar.sync 0",
+        "SASS: BAR.SYNC.DEFER_BLOCKING 0x0"
+      ],
+      "placement_rule": "B 放在 sync_threads 前，E 放在返回后；确保所有线程都到达该调用，记录点放统一控制流。",
+      "evidence": {
+        "snippet": "bar.sync \t0;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "cutedsl",
+      "language_display_name": "CUTLASS CuTeDSL",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "mbarrier init / arrive wrappers",
+      "isa_mnemonics": [
+        "PTX: mbarrier.init.shared.b64; mbarrier.arrive.shared.b64",
+        "SASS: SYNCS.EXCH.64; SYNCS.ARRIVE.TRANS64"
+      ],
+      "placement_rule": "init 只由 elect_one/thread 0 执行，不打完成区间；arrive 用瞬时 FI_M。消费者完成记在 mbarrier_wait 返回后。",
+      "evidence": {
+        "snippet": "mbarrier.arrive.shared.b64 %rd2, [%r7], %r6;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "cutedsl",
+      "language_display_name": "CUTLASS CuTeDSL",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    },
+    {
+      "construct": "Tensor scalar store mY[tidx]",
+      "isa_mnemonics": [
+        "PTX: st.global.b32",
+        "SASS: STG.E"
+      ],
+      "placement_rule": "B 放在 Tensor 写前，E 放在同步写完成后；多个元素写同一个 tile 时默认 tile 外层打点。",
+      "evidence": {
+        "snippet": "st.global.b32 \t[%rd5], %r3;",
+        "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "cutedsl",
+      "language_display_name": "CUTLASS CuTeDSL",
+      "arch": "sm_90",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled PTX/SASS on H20; instruction-form evidence only"
+    }
+  ],
+  "device": {
+    "sm_count": 78,
+    "note": "本机 H20 实测 78 个 SM（machine 记录与 nsys TARGET_INFO_GPU 一致）"
+  },
+  "toolchain": {
+    "cuda": "13.3",
+    "python_stack": "torch 2.12.1 / triton 3.6.0 / cutlass 4.6.0.dev0（mail-12）"
+  },
+  "timer": {
+    "globaltimer_min_step_ns": 32,
+    "clock64_min_step_ns": 42,
+    "clock64_lane_mhz": {
+      "min": 1829.1,
+      "max": 1830.1
+    },
+    "measurement": {
+      "date": "2026-11-08",
+      "machine": "mail-12 H20（78 SM，CUDA 13.3，nvcc V13.3.73，驱动 580.105.08）",
+      "how": "knowledge/examples/demo/demo_two_roles.cu 三档构建（FI_LEVEL=0 / FI_LEVEL=2 FI_TIMER=0 / FI_LEVEL=2 FI_TIMER=1），每档 25 次 launch 取后 20 次的中位数；插桩两档的 FILITE02 转储用 4_validate/tools/fi_lite_decode.py 解码，最小步长与每泳道频率取解码 summary 的 timer_min_step_ns 与 clock_mhz_per_lane",
+      "iter_us_median": {
+        "fi_level0": 859.81,
+        "fi_level2_globaltimer": 873.63,
+        "fi_level2_clock64": 872.16
+      },
+      "iter_us_min_max": {
+        "fi_level0": [
+          859.42,
+          859.97
+        ],
+        "fi_level2_globaltimer": [
+          873.28,
+          874.05
+        ],
+        "fi_level2_clock64": [
+          871.84,
+          877.02
+        ]
+      },
+      "overhead_pct_vs_fi_level0": {
+        "globaltimer": 1.61,
+        "clock64": 1.44
+      },
+      "decoded": {
+        "globaltimer": {
+          "span_us": 868.5,
+          "records": 71792,
+          "spans": 35584,
+          "lanes": 312,
+          "errors": 0
+        },
+        "clock64": {
+          "span_us": 867.0,
+          "records": 71792,
+          "spans": 35584,
+          "lanes": 312,
+          "errors": 0
+        }
+      },
+      "shape": "grid=78（69 链 CTA + 9 辅助 CTA），128 线程/CTA，FI_GRAN=0（每 warp 的 lane0 记录），312 泳道 = 78 × 4 warp；开销是同口径 launch 中位数对比",
+      "evidence": [
+        "runs/skill-merge/gpu_h20/logs/demo_l0.log",
+        "runs/skill-merge/gpu_h20/logs/demo_gtimer.log",
+        "runs/skill-merge/gpu_h20/logs/demo_clock64.log",
+        "runs/skill-merge/gpu_h20/out/demo_gtimer.perfetto.summary.json",
+        "runs/skill-merge/gpu_h20/out/demo_clock64.perfetto.summary.json"
+      ]
+    }
+  },
+  "probes": {
+    "tests/cuda_basic_probe.cu": [
+      "cp.async.ca.shared.global -> shared memory",
+      "cp.async.wait_group 0",
+      "scalar fma.rn.f32",
+      "bar.sync / bar.arrive named barriers",
+      "st.global.f32"
+    ],
+    "tests/cuda_tma_probe.cu": [
+      "cp.async.bulk.tensor.2d TMA load",
+      "mbarrier.try_wait.parity spin loop",
+      "mbarrier.arrive / mbarrier.arrive.expect_tx",
+      "plain cp.async.bulk.global shared->global"
+    ],
+    "tests/cuda_wgmma_probe.cu": [
+      "wgmma.wait_group.sync.aligned 0",
+      "wgmma.mma_async m64n8k16 f32.f16.f16"
+    ],
+    "tests/triton_semantic_probe.py": [
+      "tl.load simple global load",
+      "tl.load in num_stages=2 pipeline",
+      "Tensor descriptor TMA load",
+      "cp.async.wait_group",
+      "TMA mbarrier try_wait",
+      "wgmma.wait_group",
+      "tl.dot -> wgmma m64n128k8 tf32",
+      "tl.debug_barrier",
+      "tl.store simple global store",
+      "Tensor descriptor TMA store"
+    ],
+    "tests/cutedsl_semantic_probe.py": [
+      "Tensor scalar indexing mX[tidx]",
+      "cute.arch.mbarrier_wait(mbar, phase)",
+      "Float32 multiply-add expression",
+      "cute.arch.sync_threads()",
+      "mbarrier init / arrive wrappers",
+      "Tensor scalar store mY[tidx]"
+    ]
+  },
+  "limits": [
+    "CuTeDSL 只实测了 Tensor 标量 load/store、FFMA、sync_threads 与 mbarrier init/arrive/wait；cute.copy(TMA atom)、完整 pipeline producer/consumer 与 cute.gemm 未形成最小可运行探针。",
+    "CUDA wgmma 探针用 dummy shared-memory descriptor，只提供编译与 PTX/SASS 证据，不做数值正确性结论。",
+    "知识库不预测编译器优化后的所有形态：同一语言在不同 tile/layout/num_stages 下可能落成不同指令，插桩后必须用 cuobjdump -sass 回查（4_validate/tools/fi_binsim.py）。",
+    "本 arch 的条目不含 cluster launch / tcgen05（那是 sm_100、sm_103 的语义）。"
+  ]
+}

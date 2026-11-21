@@ -1,0 +1,60 @@
+{
+  "id": "weaveprofiler",
+  "version": "1.0.0",
+  "api_version": 1,
+  "tools": {
+    "profile": {
+      "description": "Run shadow-copy intra-kernel GPU profiling with 4-gate verification (SASS/spill, bitwise output, events, overhead), HMAC seal, and SW+HW causal bottleneck report.",
+      "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "profile"],
+      "input_schema": "weaveprof/aka_schemas/profile.input.json",
+      "output_schema": "weaveprof/aka_schemas/generic.output.json",
+      "timeout_seconds": 1800
+    },
+    "megakernel-audit": {
+      "description": "Fast shadow-copy, L0-cached Sparse Attention / GDN / MoE megakernel profiler and 4-gate verifier returning cross-SM straggler skew, causal opportunities, and HMAC seal.",
+      "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "megakernel-audit"],
+      "input_schema": "weaveprof/aka_schemas/megakernel_audit.input.json",
+      "output_schema": "weaveprof/aka_schemas/generic.output.json",
+      "timeout_seconds": 1800
+    },
+    "analyze": {
+      "description": "Run deterministic SW+HW causal bottleneck attribution (calibrated roofline ceilings, straggler correlation, overlap headroom, negative-ROI guardrails) on a captured trace/summary JSON.",
+      "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "analyze"],
+      "input_schema": "weaveprof/aka_schemas/analyze.input.json",
+      "output_schema": "weaveprof/aka_schemas/generic.output.json",
+      "timeout_seconds": 120
+    },
+    "compare-rounds": {
+      "description": "Compute round-to-round optimization diff between incumbent and candidate causal reports (eliminated/persisting/new bottlenecks, revert flag, next-round directive).",
+      "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "compare-rounds"],
+      "input_schema": "weaveprof/aka_schemas/compare_rounds.input.json",
+      "output_schema": "weaveprof/aka_schemas/generic.output.json",
+      "timeout_seconds": 60
+    },
+    "plan-context": {
+      "description": "Plan D2 low-overhead recorder context (1-reg bit-packed WpCtx1R vs 16B FI_SMEM_ZREG fallback and setmaxnreg pre/post placement search space) from kernel source and resource limits.",
+      "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "plan-context"],
+      "input_schema": "weaveprof/aka_schemas/plan_context.input.json",
+      "output_schema": "weaveprof/aka_schemas/generic.output.json",
+      "timeout_seconds": 30
+    },
+    "verify-seal": {
+      "description": "Fail-closed HMAC-SHA256 verification of a WeaveProfiler episode seal and bound artifact digests.",
+      "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "verify-seal"],
+      "input_schema": "weaveprof/aka_schemas/verify_seal.input.json",
+      "output_schema": "weaveprof/aka_schemas/generic.output.json",
+      "timeout_seconds": 30
+    }
+  },
+  "skills": {
+    "weaveprofiler": {
+      "path": ".",
+      "description": "Intra-kernel GPU profiling (CUDA/HIP/Triton/CuTeDSL on H20/B300/MI308X) with 1-reg bit-packed capture, compiler spill/STL gates, and SW+HW causal bottleneck attribution."
+    }
+  },
+  "instructions": {
+    "common": "weaveprof/aka_instructions/common.md",
+    "episode": "weaveprof/aka_instructions/episode.md",
+    "fast_episode": "weaveprof/aka_instructions/episode.md"
+  }
+}

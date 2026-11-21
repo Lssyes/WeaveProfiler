@@ -1,0 +1,1261 @@
+{
+  "schema": "weaveprofiler.recipe/v1",
+  "version": 1,
+  "recipe_id": "nv/h20/triton",
+  "target": {
+    "card": "h20",
+    "display_name": "NVIDIA H20",
+    "vendor": "nvidia",
+    "platform": "nv",
+    "arch": "sm_90",
+    "architectures": [
+      "sm_90"
+    ],
+    "arch_selection_required": false,
+    "warp_size": 32,
+    "profiler": {
+      "primary": "nsys",
+      "fallback": [],
+      "sampling_model": "periodic_pm",
+      "preferred_sample_hz": 50000,
+      "evidence": "measured_sampling_gap",
+      "note": "H20 measured at 200 kHz can contain gaps; 50 kHz can remain continuous. Final rate and gaps must come from the capture manifest."
+    },
+    "toolchain": "CUDA 13.3; torch 2.12.1; Triton 3.6.0; CUTLASS CuTeDSL 4.6.0.dev0"
+  },
+  "language": "triton",
+  "language_display_name": "Triton",
+  "platform_note": "H20 is sm_90. Do not reuse Blackwell tcgen05 conclusions on this target.",
+  "machine_profiles": [
+    "knowledge/cards/h20_sm_90.json"
+  ],
+  "evidence_status": "compiled",
+  "evidence_policy": {
+    "authority": "knowledge/semantic_ids.json",
+    "display_name_equals_semantic_id": true,
+    "measured_requires_on_card_measurement": true,
+    "compiled_is_not_measured": true,
+    "unverified_is_explicit": true,
+    "source_patterns_are_hints_only": true
+  },
+  "evidence_summary": {
+    "counts": {
+      "compiled": 5,
+      "unverified": 11
+    },
+    "machine_profiles_status": "measured",
+    "scope": "Per-semantic statuses describe the availability of target-specific evidence for ISA/recorder guidance; correctness of an instrumented user kernel still requires a new run."
+  },
+  "instruction_families": {
+    "wgmma": {
+      "evidence_status": "compiled",
+      "supporting_evidence": [
+        "wgmma.mma_async -> HGMMA",
+        "wgmma.wait_group -> WARPGROUP.DEPBAR.LE"
+      ],
+      "guidance": "H20 evidence supports wgmma in CUDA/Triton probes. CuTeDSL cute.gemm was not exercised, so its wgmma path remains unverified."
+    },
+    "tcgen05": {
+      "evidence_status": "unverified",
+      "supporting_evidence": [],
+      "guidance": "No sm_90 tcgen05 evidence; treat the family as unavailable unless a new target probe proves otherwise."
+    }
+  },
+  "recorder": {
+    "path": "2_instrument/recorders/triton/fi_triton.py",
+    "api_family": "FI_B / FI_E / FI_M / FI_OPEN / FI_CLOSE",
+    "backend": "nvidia_globaltimer",
+    "build_gates": "FiCfg(level, timer, gran, groups)",
+    "event_id_range": [
+      1,
+      4095
+    ],
+    "event_id_zero": "reserved empty-record sentinel",
+    "open_close": "FI_OPEN installs the lane/wave/CTA recorder predicate; FI_CLOSE is required on every executed exit path.",
+    "fits": [
+      "ABI tag fields must match the selected recorder. Do not invent a new event layout in the recipe."
+    ],
+    "notes": [
+      "Use one logical begin/end pair per selected semantic interval.",
+      "Keep aux stable between pair members so waits and phases can be correlated.",
+      "The device recorder can only carry a 32-bit aux; move larger descriptors to names.json or the capture metadata."
+    ]
+  },
+  "event_contract": {
+    "event_ids": {
+      "load": 1,
+      "wait": 2,
+      "mma": 3,
+      "compute": 4,
+      "epilogue": 5,
+      "store": 6,
+      "barrier": 7,
+      "dispatch": 8,
+      "communication": 9,
+      "gemm": 10,
+      "attention": 11,
+      "reduction": 12,
+      "moe": 13,
+      "convolution": 14,
+      "megakernel": 15,
+      "softmax": 16
+    },
+    "semantic_ids": [
+      {
+        "semantic_id": "load",
+        "display_name": "load",
+        "event_id": 1
+      },
+      {
+        "semantic_id": "wait",
+        "display_name": "wait",
+        "event_id": 2
+      },
+      {
+        "semantic_id": "mma",
+        "display_name": "mma",
+        "event_id": 3
+      },
+      {
+        "semantic_id": "compute",
+        "display_name": "compute",
+        "event_id": 4
+      },
+      {
+        "semantic_id": "epilogue",
+        "display_name": "epilogue",
+        "event_id": 5
+      },
+      {
+        "semantic_id": "store",
+        "display_name": "store",
+        "event_id": 6
+      },
+      {
+        "semantic_id": "barrier",
+        "display_name": "barrier",
+        "event_id": 7
+      },
+      {
+        "semantic_id": "dispatch",
+        "display_name": "dispatch",
+        "event_id": 8
+      },
+      {
+        "semantic_id": "communication",
+        "display_name": "communication",
+        "event_id": 9
+      },
+      {
+        "semantic_id": "gemm",
+        "display_name": "gemm",
+        "event_id": 10
+      },
+      {
+        "semantic_id": "attention",
+        "display_name": "attention",
+        "event_id": 11
+      },
+      {
+        "semantic_id": "reduction",
+        "display_name": "reduction",
+        "event_id": 12
+      },
+      {
+        "semantic_id": "moe",
+        "display_name": "moe",
+        "event_id": 13
+      },
+      {
+        "semantic_id": "convolution",
+        "display_name": "convolution",
+        "event_id": 14
+      },
+      {
+        "semantic_id": "megakernel",
+        "display_name": "megakernel",
+        "event_id": 15
+      },
+      {
+        "semantic_id": "softmax",
+        "display_name": "softmax",
+        "event_id": 16
+      }
+    ]
+  },
+  "required_semantic_ids": [
+    "load",
+    "wait",
+    "mma",
+    "compute",
+    "epilogue",
+    "store",
+    "barrier",
+    "dispatch",
+    "communication"
+  ],
+  "source_recognition_policy": {
+    "hints_only": true,
+    "resolution": "Assign a semantic ID only after reading the enclosing dataflow and the operator/task boundary.",
+    "unknown_fails_closed": true,
+    "ambiguous_fails_closed": true
+  },
+  "correctness_hazards": [
+    "SASS/ISA disturbance: instrumentation and surrounding code motion can change instruction count, register allocation, spills, vector width, and the selected tensor-core or copy family. Compile FI_LEVEL=0/1/2 and compare the final SASS.",
+    "Divergence/mask: a recorder in a divergent branch can produce unpaired records or deadlock a barrier. Preserve the original predicate and use the target wave size for lane selection.",
+    "Buffer overflow: fixed slots can fill or point out of range. Require the device overflow bits to be zero, records per lane to stay below cap, and no ring/wrap behavior.",
+    "Asynchronous completion: cp.async, TMA, wgmma, and collectives have issue and completion boundaries that are not interchangeable on sm_90.",
+    "Correctness drift: moving code across predicates, fences, or waits can change numerical results or visibility even when the kernel still runs."
+  ],
+  "validation_requirements": [
+    "Parse all JSON and validate this document against knowledge/validation/schemas/recipe.schema.json.",
+    "Use only semantic IDs present in knowledge/semantic_ids.json; display names must exactly equal their IDs.",
+    "Compile off, entry-only, and full builds with Python 3.10 orchestration where applicable; compare final SASS and register/spill metrics.",
+    "Run full-output correctness against an uninstrumented reference with tail, mask, dtype, and shape cases for the selected operator.",
+    "Verify cap, slot count, records per lane, overflow bits, and trace completeness.",
+    "Capture the selected hardware evidence with nsys and keep H20 sm_90 evidence separate."
+  ],
+  "semantics": [
+    {
+      "semantic_id": "load",
+      "display_name": "load",
+      "kind": "phase",
+      "attribution": "load",
+      "description": "Global-to-register/shared data movement, including asynchronous copy issue or completion boundaries.",
+      "operator_level": false,
+      "source_recognition": [
+        "tl.load(...)",
+        "tl.make_tensor_descriptor(...).load(...)",
+        "descriptor.load(...)",
+        "load feeding tl.dot or a staged pipeline"
+      ],
+      "placement": {
+        "begin": "Immediately before the selected load issue or first synchronous load instruction for the tile.",
+        "end": "For synchronous loads, after the loaded value is available. For cp.async/TMA, after the matching wait makes data visible to consumers, not at issue.",
+        "async_completion_caveat": "A cp.async/TMA issue timestamp is not a completion timestamp. Use FI_M at issue when issue latency matters and pair FI_B/FI_E with the consumer-side wait.",
+        "scope": "phase inside the enclosing operator; default one span per tile or work item"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_LOAD, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_LOAD, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_LOAD, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 1,
+        "event_id_const": "EV_LOAD",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Do not move a load into a mask predicate or change shared-memory staging; that can alter vector width and cache policy."
+      ],
+      "validation": [
+        "Compare the full loaded tile and halo/tail elements against the reference. Re-run with the instrumented build and confirm every async load has a matching consumer-side wait.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "compiled",
+      "evidence": {
+        "status": "compiled",
+        "basis": "Compiled PTX/SASS evidence exists in the cited machine profile; this is not a runtime measurement of this semantic.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [
+          "tl.load simple global load",
+          "tl.load in num_stages=2 pipeline",
+          "Tensor descriptor TMA load"
+        ],
+        "isa_mnemonics": [
+          "PTX: ld.global.b32",
+          "SASS: LDG.E",
+          "PTX: cp.async.ca.shared.global",
+          "SASS: LDGSTS.E",
+          "PTX: cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes",
+          "SASS: UTMALDG.2D"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "kind": "phase",
+      "attribution": "wait",
+      "description": "Time spent waiting for data, a producer, or an asynchronous operation to complete.",
+      "operator_level": false,
+      "source_recognition": [
+        "compiler-generated cp.async/TMA/mbarrier wait in PTX/SASS",
+        "tl.dot or descriptor consumer after a staged load",
+        "no explicit user-level wait in many Triton sources",
+        "spin loop on a volatile/atomic flag"
+      ],
+      "placement": {
+        "begin": "Immediately before entering the wait primitive or spin loop.",
+        "end": "After the wait returns and participating consumers reach a common continuation point.",
+        "async_completion_caveat": "mbarrier arrive, TMA issuer return, commit_group, and WGMMA commit are not completion. The end anchor belongs after the matching wait.",
+        "scope": "phase; one interval per logical wait, never one per compiler-expanded poll branch"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_WAIT, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_WAIT, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_WAIT, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 2,
+        "event_id_const": "EV_WAIT",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Bound every spin with a timeout or an independently observable completion condition; duplicate polling branches can produce unpaired records."
+      ],
+      "validation": [
+        "Inject or observe producer delay and prove the wait returns only after data visibility; verify one paired wait span per logical wait.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "compiled",
+      "evidence": {
+        "status": "compiled",
+        "basis": "Compiled PTX/SASS evidence exists in the cited machine profile; this is not a runtime measurement of this semantic.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [
+          "cp.async.wait_group",
+          "TMA mbarrier try_wait"
+        ],
+        "isa_mnemonics": [
+          "PTX: cp.async.wait_group 0",
+          "SASS: LDGDEPBAR; DEPBAR.LE",
+          "PTX: mbarrier.try_wait.parity.shared.b64",
+          "SASS: SYNCS.PHASECHK.TRANS64.TRYWAIT"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "kind": "phase",
+      "attribution": "compute",
+      "description": "Tensor-core matrix-multiply work on sm_90, normally wgmma or a warp-level MMA instruction selected by the compiler.",
+      "operator_level": false,
+      "source_recognition": [
+        "tl.dot",
+        "tl.dot_scaled",
+        "inline asm tensor-core operation",
+        "tl.dot lowered to wgmma/HGMMA or a warp-level MMA on sm_90"
+      ],
+      "placement": {
+        "begin": "At the sm_90 wgmma or warp-level MMA issue boundary for the selected tile and K stage.",
+        "end": "After completion: synchronous warp-level MMA after the call; asynchronous wgmma after the matching wgmma.wait_group and any required dependency or visibility synchronization.",
+        "async_completion_caveat": "For asynchronous wgmma, issue and completion are separate. Do not close the span at wgmma.commit_group or the launch call; close it after the matching wgmma.wait_group and required synchronization. tcgen05 is not an sm_90 path.",
+        "scope": "phase nested in gemm/attention/moe/convolution, or task when the selected segment is only MMA"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_MMA, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_MMA, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_MMA, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 3,
+        "event_id_const": "EV_MMA",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "MMA layout, accumulator fragment, and pipeline depth changes can alter register allocation and tensor-core instruction family."
+      ],
+      "validation": [
+        "Compare every output element and accumulator dtype against the reference; inspect SASS/ISA to identify the emitted MMA family.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "compiled",
+      "evidence": {
+        "status": "compiled",
+        "basis": "Compiled PTX/SASS evidence exists in the cited machine profile; this is not a runtime measurement of this semantic.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [
+          "wgmma.wait_group",
+          "tl.dot -> wgmma m64n128k8 tf32"
+        ],
+        "isa_mnemonics": [
+          "PTX: wgmma.wait_group.sync.aligned",
+          "SASS: WARPGROUP.DEPBAR.LE",
+          "PTX: wgmma.mma_async.sync.aligned.m64n128k8.f32.tf32.tf32",
+          "SASS: HGMMA.64x128x8.F32.TF32"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "kind": "phase",
+      "attribution": "compute",
+      "description": "Non-MMA arithmetic such as scaling, masking, activation, type conversion, or index calculation.",
+      "operator_level": false,
+      "source_recognition": [
+        "tl.exp2 / tl.exp",
+        "tl.maximum / tl.where",
+        "elementwise arithmetic with tl operators",
+        "type conversion such as .to(tl.float16)",
+        "tl.fma"
+      ],
+      "placement": {
+        "begin": "Immediately before the selected non-MMA arithmetic or elementwise stage.",
+        "end": "After the result is materialized and before the next consumer begins.",
+        "async_completion_caveat": "Arithmetic itself is normally synchronous. If the stage consumes an async load or MMA result, place the begin after that completion wait.",
+        "scope": "phase or tile-level work segment; one span per tile/chunk unless a finer loop is explicitly justified"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_COMPUTE, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_COMPUTE, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_COMPUTE, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 4,
+        "event_id_const": "EV_COMPUTE",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Masking, dtype conversion, and fast-math flags can change both behavior and generated instruction count."
+      ],
+      "validation": [
+        "Compare all elementwise outputs, including masked and special-value cases, against a reference implementation.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "epilogue",
+      "display_name": "epilogue",
+      "kind": "phase",
+      "attribution": "store",
+      "description": "Accumulator readback, conversion, bias/activation, or writeback preparation after the main loop.",
+      "operator_level": false,
+      "source_recognition": [
+        "acc.to(...)",
+        "acc * scale / acc + bias",
+        "activation applied after tl.dot",
+        "descriptor or tile store preparation"
+      ],
+      "placement": {
+        "begin": "After the main loop completes and immediately before accumulator readback, conversion, bias, or activation.",
+        "end": "After the epilogue value is ready for the final store or communication step.",
+        "async_completion_caveat": "Accumulator readback and conversion can depend on a preceding MMA or copy completion. End only after the accumulator data is usable; an MMA issue point does not cover the epilogue.",
+        "scope": "phase inside an operator; typically one span per output tile"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_EPILOGUE, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_EPILOGUE, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_EPILOGUE, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 5,
+        "event_id_const": "EV_EPILOGUE",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Accumulator layout and conversion order must remain identical to the reference path; readback can change register pressure."
+      ],
+      "validation": [
+        "Compare the pre-store epilogue tensor, accuracies, shapes, and NaNs against the reference path.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "store",
+      "display_name": "store",
+      "kind": "phase",
+      "attribution": "store",
+      "description": "Global writeback, including TMA store completion boundaries.",
+      "operator_level": false,
+      "source_recognition": [
+        "tl.store(...)",
+        "descriptor.store(...)",
+        "TMA store generated from a descriptor",
+        "masked output write"
+      ],
+      "placement": {
+        "begin": "Immediately before the first store in the selected writeback segment.",
+        "end": "For scalar global stores, after the last store instruction. For TMA or bulk-group stores, after the matching wait_group.read/flush makes the copy complete.",
+        "async_completion_caveat": "Enqueueing a TMA/bulk store is not completion. Ordinary st.global completes as an instruction but downstream visibility may still require a fence or kernel boundary.",
+        "scope": "phase; one span per tile instead of per vector element"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_STORE, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_STORE, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_STORE, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 6,
+        "event_id_const": "EV_STORE",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Masked tails and vector alignment affect which lanes write; moving the end anchor can hide an unwritten tail."
+      ],
+      "validation": [
+        "Compare the entire output tensor and confirm no tail element is dropped or written twice.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "compiled",
+      "evidence": {
+        "status": "compiled",
+        "basis": "Compiled PTX/SASS evidence exists in the cited machine profile; this is not a runtime measurement of this semantic.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [
+          "tl.store simple global store",
+          "Tensor descriptor TMA store"
+        ],
+        "isa_mnemonics": [
+          "PTX: st.global.b32",
+          "SASS: STG.E",
+          "PTX: cp.async.bulk.tensor.2d.global.shared::cta.bulk_group",
+          "SASS: UTMASTG.2D"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "kind": "phase",
+      "attribution": "wait",
+      "description": "CTA, warpgroup, cluster, or grid synchronization and fence wait.",
+      "operator_level": false,
+      "source_recognition": [
+        "tl.debug_barrier()",
+        "atomic counter handed off to a spin wait",
+        "cooperative grid-sync helper",
+        "generated bar.sync between shared-memory stages"
+      ],
+      "placement": {
+        "begin": "Immediately before the barrier arrive/wait or fence.",
+        "end": "After every participating thread/wave returns from the barrier and can consume the published data.",
+        "async_completion_caveat": "For split arrive/wait protocols, arrive is an instant or mark; the barrier interval covers the wait. Do not place a barrier inside divergent control flow.",
+        "scope": "phase; one span per logical synchronization point"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_BARRIER, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_BARRIER, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_BARRIER, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 7,
+        "event_id_const": "EV_BARRIER",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Placing a barrier or its recorder in a divergent branch can deadlock a CTA/wavegroup; arrivals and waits must stay in convergent control flow."
+      ],
+      "validation": [
+        "Run with multiple CTAs/waves and a deliberately delayed producer; prove no deadlock and no consumer reads published data early.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "compiled",
+      "evidence": {
+        "status": "compiled",
+        "basis": "Compiled PTX/SASS evidence exists in the cited machine profile; this is not a runtime measurement of this semantic.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [
+          "tl.debug_barrier"
+        ],
+        "isa_mnemonics": [
+          "PTX: bar.sync 0",
+          "SASS: BAR.SYNC.DEFER_BLOCKING 0x0"
+        ],
+        "notes": []
+      }
+    },
+    {
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "kind": "phase",
+      "attribution": "control",
+      "description": "Task routing, work claiming, or token dispatch/combine control work.",
+      "operator_level": false,
+      "source_recognition": [
+        "tl.atomic_add ticket",
+        "persistent program-id loop claiming work",
+        "top-k routing or scatter/gather indices",
+        "atomic counter plus volatile/load spin",
+        "expert permutation dispatch"
+      ],
+      "placement": {
+        "begin": "Immediately before work claiming, routing, expert selection, or scatter/gather control work.",
+        "end": "After the claim/route decision is published and visible to its consumer.",
+        "async_completion_caveat": "If claiming uses asynchronous try_cancel or a remote queue, end after the queue completion wait. A losing atomic worker is still a distinct execution path; pair its event consistently or record it as a mark.",
+        "scope": "task for a scheduler/dispatch segment; phase when nested in moe or megakernel"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_DISPATCH, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_DISPATCH, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_DISPATCH, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 8,
+        "event_id_const": "EV_DISPATCH",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Workers that lose an atomic race, route to no expert, or observe an empty queue still need a deterministic begin/end pairing."
+      ],
+      "validation": [
+        "Compare claimed work IDs, routes, and output bins against the reference; prove each work item is claimed at most once.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "communication",
+      "display_name": "communication",
+      "kind": "shared",
+      "attribution": "memory",
+      "description": "Cross-CTA, cross-GPU, or cross-host communication boundaries; external NIC/fabric evidence remains separate.",
+      "operator_level": false,
+      "source_recognition": [
+        "host-side torch.distributed all_reduce/all_gather/reduce_scatter",
+        "NCCL call surrounding the Triton launch",
+        "explicit peer-memory exchange",
+        "rank/group argument passed into the kernel",
+        "NVSHMEM or custom NVLink exchange"
+      ],
+      "placement": {
+        "begin": "Immediately before the collective, peer exchange, or communication protocol boundary.",
+        "end": "After the matching stream/event completion, collective completion, or remote-visibility fence.",
+        "async_completion_caveat": "Collective enqueue and kernel launch are not completion. Host collectives need a completion event or synchronized boundary; in-kernel exchange needs a fence/wait before the end event.",
+        "scope": "shared boundary; one span per collective or logical peer exchange, not per packet"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_COMMUNICATION, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_COMMUNICATION, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_COMMUNICATION, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 9,
+        "event_id_const": "EV_COMMUNICATION",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Rank/group ordering and stream ordering must be preserved; timing enqueue as completion hides communication latency."
+      ],
+      "validation": [
+        "Compare collective results across ranks and verify completion events and rank/group metadata align with the capture timeline.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "gemm",
+      "display_name": "gemm",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "A GEMM or matrix-multiply task, including persistent-tile GEMM.",
+      "operator_level": true,
+      "source_recognition": [
+        "@triton.jit persistent_mm or matmul",
+        "tl.dot in a K loop",
+        "A/B tile loads plus accumulator update",
+        "grouped/persistent GEMM scheduling"
+      ],
+      "placement": {
+        "begin": "Before the first A/B tile load or staging operation for the selected GEMM task.",
+        "end": "After the final K-stage completion, epilogue readiness, and required output-store completion.",
+        "async_completion_caveat": "For persistent or asynchronous MMA, the task end waits for the final MMA completion and output visibility; the last issue point is not the end.",
+        "scope": "task for a complete GEMM segment; nested load/mma/epilogue/store spans remain phases"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_GEMM, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_GEMM, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_GEMM, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 10,
+        "event_id_const": "EV_GEMM",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Persistent tile scheduling and tail tiles must not change accumulator ownership or skip output completion."
+      ],
+      "validation": [
+        "Compare the full GEMM output for all M, N, K and tail shapes; verify task spans enclose every nested MMA and store.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "attention",
+      "display_name": "attention",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "An attention task such as flash attention, MHA, or FMHA.",
+      "operator_level": true,
+      "source_recognition": [
+        "attention / flash attention kernel",
+        "tl.dot(Q, K) then tl.dot(P, V)",
+        "online softmax with running max and sum",
+        "causal or block-sparse mask"
+      ],
+      "placement": {
+        "begin": "Before Q staging or the first QK score work for the selected attention task.",
+        "end": "After the final PV accumulation, normalization, and output visibility.",
+        "async_completion_caveat": "QK, softmax, and PV may overlap across stages. The attention task closes only after all in-flight MMA and copy completions that feed its output.",
+        "scope": "task for one complete attention segment; QK, softmax, PV, and store are nested phases"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_ATTENTION, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_ATTENTION, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_ATTENTION, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 11,
+        "event_id_const": "EV_ATTENTION",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Causal masks, KV tails, and online-softmax rescaling must remain numerically equivalent; overlap must not reorder dependencies."
+      ],
+      "validation": [
+        "Compare full attention output for causal/non-causal shapes, KV tails, masks, and dtype variants.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "reduction",
+      "display_name": "reduction",
+      "kind": "shared",
+      "attribution": "compute",
+      "description": "A sum, max, mean, or other reduction task at warp, CTA, or grid scope.",
+      "operator_level": true,
+      "source_recognition": [
+        "tl.sum / tl.max / tl.min",
+        "tl.reduce",
+        "row max or row sum",
+        "atomic_add for cross-program combine"
+      ],
+      "placement": {
+        "begin": "Immediately before the first lane/wave/CTA combine for the selected reduction.",
+        "end": "After the final combine and after the reduced value is visible to its consumer.",
+        "async_completion_caveat": "Cross-CTA reductions need the final atomic/fence/rendezvous to complete. A wave-local shuffle result is not a full CTA or grid result.",
+        "scope": "phase for warp/wave, CTA, or grid reduction; task only when reduction is the whole segment"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_REDUCTION, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_REDUCTION, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_REDUCTION, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 12,
+        "event_id_const": "EV_REDUCTION",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Wave size, mask width, and lane participation must match the hardware; an inactive lane cannot close a collective span."
+      ],
+      "validation": [
+        "Compare every reduced value and verify the scope (wave/warp, CTA, grid) matches the declared semantic.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "moe",
+      "display_name": "moe",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "Mixture-of-experts routing, expert compute, or combine.",
+      "operator_level": true,
+      "source_recognition": [
+        "moe / fused_moe kernel",
+        "topk routing",
+        "expert token permutation",
+        "grouped GEMM metadata",
+        "weighted combine"
+      ],
+      "placement": {
+        "begin": "Before routing logits or expert selection for the selected token tile.",
+        "end": "After selected expert computation and weighted combine output are visible.",
+        "async_completion_caveat": "Grouped expert MMA and token permutes may be asynchronous or independently scheduled. Wait for all selected experts that contribute to the tile before closing the MoE span.",
+        "scope": "task for routing+fused expert execution; use dispatch/compute/mma phases when they are separately instrumented"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_MOE, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_MOE, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_MOE, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 13,
+        "event_id_const": "EV_MOE",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Dropped or duplicated tokens, top-k ties, and uneven expert load can change both routing and observed spans."
+      ],
+      "validation": [
+        "Compare expert indices, routing weights, permutation counts, and final output; verify no token is lost or duplicated.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "convolution",
+      "display_name": "convolution",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "A convolution or implicit-GEMM convolution task.",
+      "operator_level": true,
+      "source_recognition": [
+        "conv2d / convolution kernel",
+        "implicit-GEMM convolution with tl.dot",
+        "halo or patch loads",
+        "output-tile epilogue"
+      ],
+      "placement": {
+        "begin": "Before the first input patch or halo load for the selected output tile.",
+        "end": "After the final accumulation and the output write or async store completion.",
+        "async_completion_caveat": "Implicit-GEMM convolution can have staged MMA and TMA completion. The convolution task ends after the final output tile is visible, not after the last tile issue.",
+        "scope": "task for a convolution segment; tile phases may be nested"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_CONVOLUTION, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_CONVOLUTION, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_CONVOLUTION, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 14,
+        "event_id_const": "EV_CONVOLUTION",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Halo bounds, padding, and output-tile tails must match the reference; implicit-GEMM reordering must preserve accumulation."
+      ],
+      "validation": [
+        "Compare all output positions, padding/boundary cases, dtypes, and fprop/dgrad/wgrad variants.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "megakernel",
+      "display_name": "megakernel",
+      "kind": "operator",
+      "attribution": "compute",
+      "description": "A fused persistent kernel with a device-side task scheduler.",
+      "operator_level": true,
+      "source_recognition": [
+        "persistent kernel with work counter",
+        "program-id loop over tasks",
+        "atomic dispatch of fused tasks",
+        "task queue metadata"
+      ],
+      "placement": {
+        "begin": "Before the task claim for one persistent task; use a separate enclosing span only when measuring whole-kernel residency.",
+        "end": "After the task result is published and its completion notification is visible.",
+        "async_completion_caveat": "Task-claim completion, dependency wait, all nested MMA completions, and output publication are distinct. Close the task after all of them; kernel launch return does not imply device-side task completion.",
+        "scope": "task per work item/task id; dispatch, wait, compute, store, and communication are nested phases"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_MEGAKERNEL, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_MEGAKERNEL, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_MEGAKERNEL, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
+        ]
+      },
+      "parameterization": {
+        "event_id": 15,
+        "event_id_const": "EV_MEGAKERNEL",
+        "aux": "packed uint32 tile id or work id; waits, ends, and nested phases must reuse the producer value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep both dimensions in metadata if they are needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "SASS/ISA disturbance: recompile off/entry/full builds, compare instruction counts, registers, spills, and generated MMA/TMA forms; do not infer an ISA opcode from a semantic label.",
+        "Divergence/mask: keep begin/end in matching convergent control flow, preserve the original predicate, and use the architecture wave size when selecting a recorder.",
+        "Buffer overflow: every event consumes a fixed slot; budget OPEN/CLOSE and timer anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "A stalled task, duplicate claim, or missing completion notification can orphan the task span or deadlock the persistent scheduler."
+      ],
+      "validation": [
+        "Verify every scheduled task completes exactly once, all dependencies are satisfied, and the final output matches the non-persistent reference.",
+        "Validate full output correctness against an uninstrumented reference build and require the instrumented build to pass the same tolerance.",
+        "Verify one paired begin/end per logical interval, event tags map to the canonical semantic_id, and the capture has no missing or truncated records.",
+        "Confirm assembly_change_rate stays within the project threshold and record any change in instruction family or register pressure."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct recipe-specific hardware probe was found for this semantic in the owned card evidence. The source patterns and boundaries are review guidance only and must remain unverified until compiled or run.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a probe is not evidence that the compiler emits a different form. Re-probe before claiming an instruction family."
+        ]
+      }
+    },
+    {
+      "semantic_id": "softmax",
+      "display_name": "softmax",
+      "kind": "shared",
+      "attribution": "compute",
+      "description": "Row max, exponentiation, normalization, or another softmax subtask.",
+      "operator_level": false,
+      "source_recognition": [
+        "tl.max(...) / tl.exp or tl.exp2 / tl.sum(...) along the softmax axis",
+        "online-softmax running max and denominator rescaling",
+        "normalized probabilities consumed by tl.dot with the value tile"
+      ],
+      "placement": {
+        "begin": "Immediately before the selected row max, exponentiation, or normalization step for the score tile.",
+        "end": "After the normalized probabilities are ready for their consumer; use one matching interval per selected softmax subtask.",
+        "async_completion_caveat": "Softmax itself has no asynchronous completion boundary. If it consumes asynchronously loaded scores, begin only after the matching wait makes those scores visible and account for the wait separately.",
+        "scope": "phase inside the enclosing attention or operator; one span per selected row max, exponentiation, normalization, or fused softmax region"
+      },
+      "recorder": {
+        "begin": "n = fi_b(rec_ptr, ovf_ptr, pid, n, FI, EV_SOFTMAX, aux)",
+        "end": "n = fi_e(rec_ptr, ovf_ptr, pid, n, FI, EV_SOFTMAX, aux)",
+        "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_SOFTMAX, aux)",
+        "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
+        "notes": [
+          "Import the NVIDIA frontend from 2_instrument/recorders/triton/fi_triton.py.",
+          "EV_SOFTMAX must be a tl.constexpr from the canonical event constants; keep and return the loop-carried n."
+        ]
+      },
+      "parameterization": {
+        "event_id": 16,
+        "event_id_const": "EV_SOFTMAX",
+        "aux": "packed uint32 tile id, row id, or work id; the matching begin/end/mark records must reuse the same value",
+        "tile": "linear_tile = tile_m * num_n_tiles + tile_n; keep row and tile dimensions in metadata when needed for attribution",
+        "work_id": "for persistent/megakernel paths use the claimed work id; do not substitute the CTA id",
+        "note": "Canonical event_id and event_id_const come only from knowledge/semantic_ids.json; 0 is the empty record sentinel."
+      },
+      "correctness_hazards": [
+        "Do not change score scaling, masking, running-max order, or denominator handling when adding begin/end anchors; softmax can overflow or change numerics under semantically equivalent rewrites.",
+        "Keep begin and end in matching convergent control flow and preserve the original mask so inactive rows do not emit paired records from divergent paths.",
+        "Every event consumes a fixed slot; budget softmax subtask anchors, check cap and n_slots, and require both overflow bits to remain zero.",
+        "Validate logits-to-probability tolerance and downstream attention output against an uninstrumented reference; do not infer a compiler-generated softmax opcode from the semantic label."
+      ],
+      "validation": [
+        "Compare row maxima, denominators, probabilities, and the final operator output against an uninstrumented reference with the original dtype and mask behavior.",
+        "Verify one paired begin/end per selected softmax interval, canonical tag EV_SOFTMAX, matching aux values, and no missing or truncated records.",
+        "Confirm the capture keeps wait time separate from softmax compute and that asynchronous score loads are complete before the softmax interval begins.",
+        "Record assembly_change_rate and reject the instrumented build if softmax numerics or the surrounding attention/operator output exceeds the project tolerance."
+      ],
+      "evidence_status": "unverified",
+      "evidence": {
+        "status": "unverified",
+        "basis": "No direct softmax probe was found in the cited machine profile; source guidance remains unverified.",
+        "machine_profiles": [
+          "knowledge/cards/h20_sm_90.json"
+        ],
+        "supporting_constructs": [],
+        "isa_mnemonics": [],
+        "notes": [
+          "Absence of a recipe-specific softmax probe is not evidence that a compiler emits a particular form. Keep the semantic unverified until exact-architecture compiled or measured evidence is recorded."
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "schema": "weaveprofiler-scan/v1",
+  "purpose": "Source reconnaissance only. This file contains no measurements and grants no permission to modify code.",
+  "required": [
+    "schema",
+    "status",
+    "target",
+    "language",
+    "files",
+    "candidates",
+    "ambiguities",
+    "operators",
+    "phases",
+    "unknown",
+    "required_checks",
+    "delivery_evidence"
+  ],
+  "status": {
+    "enum": [
+      "PASS",
+      "BLOCKED",
+      "FAIL"
+    ],
+    "rules": [
+      "PASS requires no unresolved ambiguity and no unknown candidate.",
+      "BLOCKED is mandatory when any source line has multiple canonical candidate semantics.",
+      "FAIL is reserved for a scan that could not produce a valid result."
+    ]
+  },
+  "target": {
+    "required": [
+      "card",
+      "arch",
+      "platform"
+    ],
+    "card": [
+      "h20",
+      "b300",
+      "mi308x"
+    ],
+    "platform": [
+      "nv",
+      "amd"
+    ],
+    "arch": {
+      "h20": [
+        "sm_90"
+      ],
+      "b300": [
+        "sm_100a",
+        "sm_103a"
+      ],
+      "mi308x": [
+        "gfx942"
+      ]
+    }
+  },
+  "language": [
+    "cuda_cpp",
+    "hip_cpp",
+    "triton",
+    "cutedsl"
+  ],
+  "operators": "Canonical operator semantic IDs from knowledge/semantic_ids.json.",
+  "semantic_event_ids": {
+    "authority": "knowledge/semantic_ids.json",
+    "load": 1,
+    "wait": 2,
+    "mma": 3,
+    "compute": 4,
+    "epilogue": 5,
+    "store": 6,
+    "barrier": 7,
+    "dispatch": 8,
+    "communication": 9,
+    "gemm": 10,
+    "attention": 11,
+    "reduction": 12,
+    "moe": 13,
+    "convolution": 14,
+    "megakernel": 15,
+    "softmax": 16,
+    "unknown": null
+  },
+  "events": {
+    "fields": {
+      "event_id": "Positive integer in 1..4095 written by the recorder; it must equal semantic_event_ids[semantic_id]. Zero is the empty-record sentinel and is never a semantic event.",
+      "event_id_const": "Recorded C/C++ identifier EV_<SEMANTIC_ID>, for example EV_MMA.",
+      "semantic_id": "Canonical ID from knowledge/semantic_ids.json; unknown is forbidden in a deliverable event.",
+      "display_name": "Must equal semantic_id exactly.",
+      "source_line": "Integer line number in the exact source SHA recorded in files[].",
+      "source_sha256": "SHA256 of the source file that was read.",
+      "symbol": "Function or device helper containing the insertion point.",
+      "boundary": "begin | completion | end | mark, with source-level evidence."
+    },
+    "rules": [
+      "A task or phase interval has exactly one begin and one end event.",
+      "Every event has a stable canonical event_id; IDs are never reused for different semantics.",
+      "Display labels come from semantic_id; no free-form label is accepted at capture time.",
+      "An explicit semantic selection may resolve a multi-candidate scan line only when the selected ID is one of that line's candidates.",
+      "A semantic ID not present in semantic_event_ids is unknown and cannot receive a device event ID."
+    ]
+  },
+  "ambiguities": {
+    "fields": [
+      "path",
+      "line",
+      "column",
+      "candidates",
+      "reason",
+      "source_excerpt"
+    ],
+    "rule": "Each ambiguity also emits an unknown record with reason=ambiguous_semantic_candidates and forces status=BLOCKED. Never choose a winner silently."
+  },
+  "required_checks": [
+    "full_output_correctness",
+    "instrumentation_overhead",
+    "assembly_change_rate",
+    "hardware_software_alignment",
+    "buffer_completeness"
+  ],
+  "unknown": "List of unresolved language, target, operator, event or check decisions. Any entry blocks 2_instrument; ambiguity uses reason=ambiguous_semantic_candidates.",
+  "evidence_status": [
+    "measured",
+    "compiled",
+    "simulated",
+    "unverified"
+  ],
+  "delivery_evidence": "Always false for a source scan."
+}

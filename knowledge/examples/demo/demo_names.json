@@ -1,0 +1,5 @@
+{"events": {"1": "等块就绪", "2": "块计算", "3": "生产块"},
+ "roles": {"0": "链 CTA", "1": "辅助 CTA"},
+ "aux": {"1": "chunk", "2": "chunk", "3": "chunk"},
+ "label_aux": true,
+ "group": "role"}

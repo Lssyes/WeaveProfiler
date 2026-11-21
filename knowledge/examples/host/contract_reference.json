@@ -1,0 +1,67 @@
+{
+  "_doc": "插桩契约。每个项目一份，放在 <项目>/profile/contract.json。skill 的判据脚本自动加载它，人只填一次，避免每次命令行手敲 --expect-* 传错。所有字段都是这个 kernel 的客观属性，不是阈值调参。",
+  "_usage": "validate_capability.py --contract <项目>/profile/contract.json <trace>  （命令行显式传的参数优先级更高，可覆盖契约）",
+
+  "kernel_name_contains": "填 nsys CUPTI 里目标 kernel 的名字片段，如 MiniMaxM3Megakernel / KdaMegakernel。extract_gpu_metrics 用它定位 launch。",
+
+  "grid": 78,
+  "warps_per_block": 12,
+  "phases": 6,
+
+  "kloop_per_warp": null,
+  "kloop_task_pattern": "wgmma|mma_compute|mma|attn_qk_mma|attn_softmax_pv",
+  "_kloop_doc": "kloop_per_warp = kernel 主循环每个打点 warp 的迭代次数(如 K_TILES)。填了就检查观测到的 kloop task 实例数是否接近它，防止只在 phase 首尾打一对代表。用了采样打点就填 K/sampling_rate。填 null 跳过这条判据。",
+
+  "require_task_layer": true,
+  "require_hw": true,
+  "hw_required_metrics": ["SMs Active", "DRAM"],
+
+  "target": {
+    "_doc": "SPEC-1/SPEC-3：目标身份。model/stage 拼进 trace 文件名前缀；scheduling_model 决定 deliver_gate 用哪套调度判据。每个目标各填一次。",
+    "model": "mega_moe",
+    "stage": "decode",
+    "scheduling_model": "work_claiming",
+    "_scheduling_model_doc": "取值 work_claiming（有设备端 claim ledger 的动态领取式，默认，跑严格 scheduler-claim 审计）或 static_phase_chain（固定 P0..PN 顺序的静态相位链，改跑相位链闭合判据）。缺省视为 work_claiming。",
+    "kernel_name_contains": "MegaMoE"
+  },
+
+  "input": {
+    "_doc": "SPEC-1：这次 launch 的输入形状/精度，进 trace 文件名。attention 类填 seqlen_kv；MoE/无 KV cache 的把 seqlen_kv 设为 null（文件名里 _kv 段自动省略）。",
+    "batch": 32,
+    "seqlen_q": 1,
+    "seqlen_kv": null,
+    "dtype": "fp8"
+  },
+
+  "runtime_launch": {
+    "_doc": "SPEC-1：文件名 grid/warp/ph 段的取值来源；缺省时回退到顶层 grid/warps_per_block/phases，再回退到从 trace 实测的拓扑。三者应一致。",
+    "grid": 78,
+    "warps_per_block": 12,
+    "phases": 6
+  },
+
+  "capture": {
+    "_doc": "采集范围。information_bundle 描述整轮 run（sw/hw/sw+hw）；单个 trace 文件名的 bundle 段由生成脚本按产物类型决定：build_perfetto=sw，build_hw_perfetto=hw，合并产物=sw_hw。",
+    "information_bundle": "sw+hw"
+  },
+
+  "execution": {
+    "_doc": "编排/GPU 选择。allowed_gpu_ids 是可选白名单（非空、非负整数列表）；给了就只在这些卡里等空闲卡再绑定，绝不杀进程。设为 null 或删掉则保持整机 gpu_idle_command 行为不变。",
+    "allowed_gpu_ids": [0],
+    "gpu_idle_policy": {
+      "utilization_max_percent": 5,
+      "memory_max_mib": null,
+      "poll_interval_sec": 15,
+      "timeout_sec": 1800
+    }
+  },
+
+  "perfetto": {
+    "_doc": "SPEC-1：产物 trace 的规范文件名。生成脚本按 target/input/runtime_launch 自动拼，禁止把 warps/phases 硬编码进名字而漏掉 model/stage/batch/seqlen/dtype。",
+    "filename_schema": "trace__<model>_<stage>__bs<batch>_sq<seqlen_q>[_kv<seqlen_kv>]__<dtype>__grid<grid>_warp<warps_per_block>_ph<phases>__<sw|hw|sw_hw>.perfetto.json.gz",
+    "filename_regex": "^trace__[a-z0-9]+_[a-z0-9]+__bs[a-z0-9]+_sq[a-z0-9]+(_kv[a-z0-9]+)?__[a-z0-9]+__grid\\d+_warp\\d+_ph\\d+__(sw|hw|sw_hw)\\.perfetto\\.json\\.gz$",
+    "example": "trace__megamoe_decode__bs32_sq1__fp8__grid78_warp12_ph6__sw.perfetto.json.gz"
+  },
+
+  "_not_a_criterion": "counter 数值的高低(SMs Active 是 5% 还是 95%)不作判据 —— 那是 kernel 的真实属性，profile 的意义正是暴露它。工具只判「hw 采的和 sw 是不是同一个 build」(时长匹配)，不替 kernel 判断该有多少占用。"
+}

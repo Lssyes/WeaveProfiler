@@ -1,0 +1,81 @@
+{
+  "schema": "weaveprofiler.card/v1",
+  "version": 1,
+  "kind": "card_wrapper",
+  "card": "mi308x",
+  "display_name": "AMD Instinct MI308X",
+  "vendor": "amd",
+  "platform": "amd",
+  "visibility": "public",
+  "warp_size": 64,
+  "architectures": [
+    "gfx942"
+  ],
+  "machine_profiles": [
+    {
+      "arch": "gfx942",
+      "profile": "mi308x_gfx942.json",
+      "evidence_status": "measured",
+      "evidence_scope": "rocminfo/device facts, timer behavior, HW_ID mapping, recorder correctness, overhead, and the same-run rocprof-sys-run --rocm-events GEMM hardware-metric route were measured on MI308X; other operators and individual instruction forms are not raised by that GEMM measurement."
+    }
+  ],
+  "profiler": {
+    "primary": "rocprof-sys",
+    "fallback": [
+      "rocprofv3"
+    ],
+    "sampling_model": "per_dispatch_rocm_events",
+    "preferred_sample_hz": null,
+    "amd_smi_coarse_hz_range": [
+      2,
+      5
+    ],
+    "source": "rocprof-sys-run --rocm-events",
+    "counter_granularity": "per_dispatch",
+    "same_run_same_dispatch_pairing": true,
+    "canonical_trace_card_token": "card-mi308x",
+    "evidence": "measured_on_mi308x_gemm_route",
+    "note": "Primary MI308X route: rocprof-sys-run --rocm-events collects raw ROCm PM counter tracks and kernel dispatch slices in the same Perfetto proto, paired by same-dispatch start timestamp with a declared tolerance. ROCm PM evidence is per dispatch; there is no periodic PM sampling equivalent to nsys at 200 kHz. Optional amd-smi polling is coarse debug context only, never compute or memory utilization. rocprofv3 MfmaUtil is optional independent calibration/fallback, not the primary source."
+  },
+  "languages": [
+    "hip_cpp",
+    "triton"
+  ],
+  "summary": {
+    "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+    "date": "2026-11-08",
+    "device": {
+      "marketing_name": "AMD Instinct MI308X",
+      "isa_agent_name": "gfx942",
+      "compute_units_reported": "80",
+      "simds_per_cu": "4",
+      "shader_engines_reported": "16",
+      "max_waves_per_cu": "32",
+      "max_clock_mhz": "1850",
+      "cacheline_size": "128(0x80)",
+      "wavefront_size": 64,
+      "gfx942_agents_in_rocminfo": 8,
+      "system_timestamp_freq_mhz": "1000.000000",
+      "xcc_count": 4,
+      "hip_device_props": {
+        "name": "AMD Instinct MI308X",
+        "arch": "gfx942:sramecc+:xnack-",
+        "cu_count": 80,
+        "wavefront_size": 64,
+        "clock_rate_khz": 1850000,
+        "max_threads_per_cu": 2048,
+        "shared_mem_per_cu": 65536,
+        "hip_runtime": "7.2"
+      },
+      "rocminfo_gfx942_block_raw": "  Marketing Name:          AMD Instinct MI308X\n  Cacheline Size:          128(0x80)\n  Max Clock Freq. (MHz):   1850\n  Compute Unit:            80\n  SIMDs per CU:            4\n  Shader Engines:          16\n  Workgroup Max Size:      1024(0x400)\n  Max Waves Per CU:        32(0x20)\n      Workgroup Max Size:      1024(0x400)\n      Workgroup Max Size:      1024(0x400)",
+      "note": "rocminfo 的 Compute Unit / Shader Engines 是驱动报的数；物理 CU 号要用 ((XCC_ID<<2)|SE_ID)<<4|CU_ID 合成（见条目“物理位置”），只读 HW_ID 会在 XCD 之间撞号。"
+    },
+    "toolchain": {
+      "hipcc": "HIP version: 7.2.26015-fc0010cf6a / AMD clang version 22.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-7.2.0 26014 7b800a19466229b8479a78de19143dc33c3ab9b5) / Target: x86_64-unknown-linux-gnu",
+      "llvm_objdump": "AMD LLVM version 22.0.0git /   Optimized build.",
+      "python_stack": "torch 2.10.0+rocm7.2.0.gitb6ee5fde | triton 3.6.0+rocm7.2.0.gitba5c1517"
+    },
+    "validation_verdict": "PASS",
+    "profile_metadata": "Full validation, overhead, topology, limits, and reproduction steps are preserved in mi308x_gfx942.json."
+  }
+}

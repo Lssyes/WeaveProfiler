@@ -1,0 +1,56 @@
+{
+  "schema": "weaveprofiler.card/v1",
+  "version": 1,
+  "kind": "card_wrapper",
+  "card": "h20",
+  "display_name": "NVIDIA H20",
+  "vendor": "nvidia",
+  "platform": "nv",
+  "visibility": "public",
+  "warp_size": 32,
+  "architectures": [
+    "sm_90"
+  ],
+  "machine_profiles": [
+    {
+      "arch": "sm_90",
+      "profile": "h20_sm_90.json",
+      "evidence_status": "measured",
+      "evidence_scope": "78-SM device query, timer measurements, recorder overhead, and compiled PTX/SASS probes; per-entry instruction forms remain compiled evidence."
+    }
+  ],
+  "profiler": {
+    "primary": "nsys",
+    "fallback": [],
+    "sampling_model": "periodic_pm",
+    "preferred_sample_hz": 50000,
+    "evidence": "measured_sampling_gap",
+    "note": "H20 measured at 200 kHz can contain gaps; 50 kHz can remain continuous. Final rate and gaps must come from the capture manifest."
+  },
+  "languages": [
+    "cuda_cpp",
+    "triton",
+    "cutedsl"
+  ],
+  "summary": {
+    "machine": "mail-12 H20 sm_90 (78 SM, CUDA 13.3)",
+    "date": "2026-11-08",
+    "device": {
+      "sm_count": 78,
+      "note": "本机 H20 实测 78 个 SM（machine 记录与 nsys TARGET_INFO_GPU 一致）"
+    },
+    "toolchain": {
+      "cuda": "13.3",
+      "python_stack": "torch 2.12.1 / triton 3.6.0 / cutlass 4.6.0.dev0（mail-12）"
+    },
+    "timer_facts": {
+      "globaltimer_min_step_ns": 32,
+      "clock64_min_step_ns": 42,
+      "clock64_lane_mhz": {
+        "min": 1829.1,
+        "max": 1830.1
+      }
+    },
+    "profile_metadata": "Full probes, limits, timer protocol, and evidence paths are preserved in h20_sm_90.json."
+  }
+}

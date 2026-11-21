@@ -1,0 +1,546 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weaveprofiler.local/schemas/generated-edits.schema.json",
+  "title": "Weaveprofiler generated edits",
+  "description": "Extends weaveprofiler.patch-plan v1 with optional target, scan selection, event, and semantic metadata. Core fields remain compatible with 2_instrument/apply_plan.py; edit IDs must be globally unique and occurrence must not exceed expect_count, which are checked by the companion sanity tool because JSON Schema cannot express those cross-object relations.",
+  "type": "object",
+  "required": [
+    "schema",
+    "version",
+    "project_root",
+    "files"
+  ],
+  "properties": {
+    "schema": {
+      "const": "weaveprofiler.patch-plan"
+    },
+    "version": {
+      "const": 1
+    },
+    "project_root": {
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^/"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "base_sha256",
+          "edits"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$)).+$"
+          },
+          "base_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "edits": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/edit"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "card",
+        "arch",
+        "platform"
+      ],
+      "properties": {
+        "card": {
+          "enum": [
+            "h20",
+            "b300",
+            "mi308x"
+          ]
+        },
+        "arch": {
+          "enum": [
+            "sm_90",
+            "sm_100a",
+            "sm_103a",
+            "gfx942"
+          ]
+        },
+        "platform": {
+          "enum": [
+            "nv",
+            "amd"
+          ]
+        },
+        "language": {
+          "enum": [
+            "cuda_cpp",
+            "triton",
+            "cutedsl",
+            "hip_cpp"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "scan_selection": {
+      "type": [
+        "string",
+        "object"
+      ]
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/semanticBinding"
+      }
+    },
+    "semantics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/semanticBinding"
+      }
+    },
+    "generated_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "knownSemanticId": {
+      "enum": [
+        "gemm",
+        "attention",
+        "softmax",
+        "reduction",
+        "moe",
+        "convolution",
+        "megakernel",
+        "load",
+        "wait",
+        "mma",
+        "compute",
+        "epilogue",
+        "store",
+        "barrier",
+        "dispatch",
+        "communication"
+      ]
+    },
+    "semanticIdentity": {
+      "oneOf": [
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "gemm"
+            },
+            "display_name": {
+              "const": "gemm"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "attention"
+            },
+            "display_name": {
+              "const": "attention"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "softmax"
+            },
+            "display_name": {
+              "const": "softmax"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "reduction"
+            },
+            "display_name": {
+              "const": "reduction"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "moe"
+            },
+            "display_name": {
+              "const": "moe"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "convolution"
+            },
+            "display_name": {
+              "const": "convolution"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "megakernel"
+            },
+            "display_name": {
+              "const": "megakernel"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "load"
+            },
+            "display_name": {
+              "const": "load"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "wait"
+            },
+            "display_name": {
+              "const": "wait"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "mma"
+            },
+            "display_name": {
+              "const": "mma"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "compute"
+            },
+            "display_name": {
+              "const": "compute"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "epilogue"
+            },
+            "display_name": {
+              "const": "epilogue"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "store"
+            },
+            "display_name": {
+              "const": "store"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "barrier"
+            },
+            "display_name": {
+              "const": "barrier"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "dispatch"
+            },
+            "display_name": {
+              "const": "dispatch"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "communication"
+            },
+            "display_name": {
+              "const": "communication"
+            }
+          }
+        }
+      ]
+    },
+    "semanticBinding": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "semantic_id",
+        "display_name"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4095
+        },
+        "semantic_id": {
+          "enum": [
+            "gemm",
+            "attention",
+            "softmax",
+            "reduction",
+            "moe",
+            "convolution",
+            "megakernel",
+            "load",
+            "wait",
+            "mma",
+            "compute",
+            "epilogue",
+            "store",
+            "barrier",
+            "dispatch",
+            "communication"
+          ]
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$)).+$"
+        },
+        "aux": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$ref": "#/$defs/semanticIdentity"
+        }
+      ]
+    },
+    "edit": {
+      "type": "object",
+      "required": [
+        "id",
+        "anchor",
+        "position",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "anchor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "position": {
+          "enum": [
+            "before",
+            "after",
+            "replace"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "occurrence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expect_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "indent": {
+          "const": "anchor"
+        },
+        "event_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4095
+        },
+        "semantic_id": {
+          "enum": [
+            "gemm",
+            "attention",
+            "softmax",
+            "reduction",
+            "moe",
+            "convolution",
+            "megakernel",
+            "load",
+            "wait",
+            "mma",
+            "compute",
+            "epilogue",
+            "store",
+            "barrier",
+            "dispatch",
+            "communication"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "position": {
+                "enum": [
+                  "before",
+                  "after"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "text": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "event_id"
+            ]
+          },
+          "then": {
+            "required": [
+              "semantic_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "then": {
+            "required": [
+              "event_id"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

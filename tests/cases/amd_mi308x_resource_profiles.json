@@ -1,0 +1,964 @@
+{
+  "schema": "weaveprofiler.amd-resource-profiles",
+  "version": 1,
+  "platform": "amd",
+  "card": "mi308x",
+  "arch": "gfx942",
+  "case_count": 18,
+  "note": "AMD C1 离线回归夹具。数字全部来自 mail-14（MI308X/gfx942）amd-checkers 任务的实测 C1 产物，本机（H20，无 ROCm）用它们回归 fi_check.py 的 AMD 判据，不需要上卡。",
+  "provenance": "archive/mail-14/amd-checkers-20261108T073123Z.tar.gz -> artifacts/c1_*.json",
+  "fault_definitions": {
+    "correct_instrumentation": "输出经 C3 全量比对一致，C2 结构校验通过的插桩构建。",
+    "record_point_in_spin_loop": "记录点放在 LDS 标志自旋循环内部；由行为或结构检查拦截。",
+    "scratch_spill": "插桩引入 scratch spill；C1 资源预算应拦截。",
+    "event_unpaired": "begin/end 事件未配对；由 C2/C3 拦截。",
+    "buffer_too_small": "记录缓冲容量过小；由 C2/C3 拦截。",
+    "buffer_overlap": "记录缓冲与输出缓冲重叠；由 C2/C3 拦截。",
+    "injected_sync": "记录宏中加入 __syncthreads()；C1 同步条数检查应拦截。",
+    "vgpr_collapse": "VGPR 增长被硬件 allowlist/cap 截断，寄存器文件计算显示下降但真实 occupancy 不变。",
+    "dynamic_lds": "动态 LDS 限制每 CU 驻留 CTA 数，必须按真实 occupancy 判定。",
+    "real_occupancy_collapse": "VGPR 增长在硬件截断后仍显著降低可驻留 wave 数。"
+  },
+  "targets": {
+    "demo": {
+      "description": "demo kernel 的 AMD MI308X/gfx942 资源画像",
+      "cases": {
+        "correct_instrumentation": {
+          "kernel": "_Z4demoPKfPfPjiii",
+          "description": "正确插桩的 demo 基线。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo_check.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 53,
+                "sgpr": 29,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 12,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/demo_l2g",
+            "provenance": "mail-14 amd-checkers c1_demo_check.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 63,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 92,
+                "lds": 0,
+                "vgpr_spill_count": 42,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 62,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "正确插桩：VGPR/scratch/waves 变化都是插桩固有代价，s_barrier 与 LDS 未变",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 92",
+            "waves/SIMD dropped: 9 -> 8 (VGPR 53 -> 63)"
+          ]
+        },
+        "record_point_in_spin_loop": {
+          "kernel": "_Z4demoPKfPfPjiii",
+          "description": "记录点放在 LDS 标志自旋循环内部。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo_F1.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 53,
+                "sgpr": 29,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 12,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/demo_F1",
+            "provenance": "mail-14 amd-checkers c1_demo_F1.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 63,
+                "sgpr": 46,
+                "agpr": 0,
+                "scratch": 116,
+                "lds": 0,
+                "vgpr_spill_count": 52,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 67,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 116",
+            "waves/SIMD dropped: 9 -> 8 (VGPR 53 -> 63)"
+          ]
+        },
+        "scratch_spill": {
+          "kernel": "_Z4demoPKfPfPjiii",
+          "description": "插桩引入 scratch spill。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo_F2.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 53,
+                "sgpr": 29,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 12,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/demo_F2",
+            "provenance": "mail-14 amd-checkers c1_demo_F2.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 64,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 352,
+                "lds": 0,
+                "vgpr_spill_count": 36,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 86,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "FAIL",
+          "why": "注入的 scratch 故障：scratch 增量超预算",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 352",
+            "waves/SIMD dropped: 9 -> 8 (VGPR 53 -> 64)"
+          ]
+        },
+        "event_unpaired": {
+          "kernel": "_Z4demoPKfPfPjiii",
+          "description": "begin/end 事件未配对。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo_F3.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 53,
+                "sgpr": 29,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 12,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/demo_F3",
+            "provenance": "mail-14 amd-checkers c1_demo_F3.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 63,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 76,
+                "lds": 0,
+                "vgpr_spill_count": 34,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 56,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 76",
+            "waves/SIMD dropped: 9 -> 8 (VGPR 53 -> 63)"
+          ]
+        },
+        "buffer_too_small": {
+          "kernel": "_Z4demoPKfPfPjiii",
+          "description": "记录缓冲容量过小。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo_F4.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 53,
+                "sgpr": 29,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 12,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/demo_F4",
+            "provenance": "mail-14 amd-checkers c1_demo_F4.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 63,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 92,
+                "lds": 0,
+                "vgpr_spill_count": 42,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 62,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 92",
+            "waves/SIMD dropped: 9 -> 8 (VGPR 53 -> 63)"
+          ]
+        },
+        "buffer_overlap": {
+          "kernel": "_Z4demoPKfPfPjiii",
+          "description": "记录缓冲与输出缓冲重叠。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo_F5.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 53,
+                "sgpr": 29,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 12,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/demo_F5",
+            "provenance": "mail-14 amd-checkers c1_demo_F5.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 63,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 92,
+                "lds": 0,
+                "vgpr_spill_count": 42,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 62,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 92",
+            "waves/SIMD dropped: 9 -> 8 (VGPR 53 -> 63)"
+          ]
+        },
+        "injected_sync": {
+          "kernel": "_Z4demoPKfPfPjiii",
+          "description": "记录宏中注入 __syncthreads()。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo_F6.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 53,
+                "sgpr": 29,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 12,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/demo_F6",
+            "provenance": "mail-14 amd-checkers c1_demo_F6.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPKfPfPjiii": {
+                "vgpr": 63,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 92,
+                "lds": 0,
+                "vgpr_spill_count": 42,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 5,
+                  "waitcnt": 61,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "FAIL",
+          "why": "记录宏引入同步：s_barrier 静态条数变化",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 92",
+            "s_barrier changed: 2 -> 5",
+            "waves/SIMD dropped: 9 -> 8 (VGPR 53 -> 63)"
+          ]
+        },
+        "vgpr_collapse": {
+          "kernel": "_Z4demoPfPjiii",
+          "description": "VGPR 7→27；硬件 cap 将两臂都截到 8 waves/SIMD，不能判真实占用崩塌。",
+          "l0": {
+            "source": "fixtures/amd-checkers/fast-instrument-hip/build/demo_l0",
+            "provenance": "mail-14 amd-checkers c1_demo.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPfPjiii": {
+                "vgpr": 7,
+                "sgpr": 32,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 6,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/fast-instrument-hip/build/demo_l2g",
+            "provenance": "mail-14 amd-checkers c1_demo.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z4demoPfPjiii": {
+                "vgpr": 27,
+                "sgpr": 36,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 50,
+                  "sleep": 1,
+                  "cache_flush": 1
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "VGPR 7->27 按寄存器文件算出 64->16 waves/SIMD，但硬件一个 SIMD 只跑得下 8 个 wave，两臂相同：记 warning 不判崩塌（fi_bugs_amd-sk-qwen B15 的假阳性就是这一类）",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "waves/SIMD dropped: 64 -> 16 (VGPR 7 -> 27)"
+          ],
+          "expect_warning_contains": [
+            "超过寄存器预算",
+            "动态 LDS"
+          ],
+          "new_c1_reasons": [
+            "occupancy_effective.register_file_only_waves_per_simd 64->16，register_ceiling_waves_per_simd 8->8，ratio 1.0"
+          ]
+        },
+        "real_occupancy_collapse": {
+          "kernel": "_Z4demoPfPjiii",
+          "description": "VGPR 20→200；截断后 register ceiling 8→2 waves/SIMD，真实占用崩塌。",
+          "l0": {
+            "source": "fixtures/amd-checkers/fast-instrument-hip/build/demo_l0",
+            "provenance": "合成用例（不是实测产物）：把 demo 的资源画像改成 VGPR 20->200，用来锁住“按 gfx942 硬件并发上限 8 waves/SIMD 截断之后，真实的占用率崩塌仍然会被拦住”；本文件是 l0 臂",
+            "kernels": {
+              "_Z4demoPfPjiii": {
+                "vgpr": 20,
+                "sgpr": 32,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 6,
+                  "sleep": 1,
+                  "cache_flush": 1,
+                  "timer_read": 0,
+                  "record_store": 0
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/fast-instrument-hip/build/demo_l2g",
+            "provenance": "合成用例（不是实测产物）：把 demo 的资源画像改成 VGPR 20->200，用来锁住“按 gfx942 硬件并发上限 8 waves/SIMD 截断之后，真实的占用率崩塌仍然会被拦住”；本文件是 fi 臂",
+            "kernels": {
+              "_Z4demoPfPjiii": {
+                "vgpr": 200,
+                "sgpr": 36,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 0,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 2,
+                  "waitcnt": 50,
+                  "sleep": 1,
+                  "cache_flush": 1,
+                  "timer_read": 4,
+                  "record_store": 4
+                }
+              }
+            }
+          },
+          "expect_c1": "FAIL",
+          "why": "VGPR 20->200：寄存器上限 8->2 waves/SIMD，ratio 0.25 低于 --min-occupancy-ratio 0.5，判崩塌",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "waves/SIMD dropped: 64 -> 16 (VGPR 7 -> 27)（旧口径的同类判定，数字不同）"
+          ],
+          "expect_warning_contains": []
+        }
+      }
+    },
+    "ring": {
+      "description": "ring_pipeline kernel 的 AMD MI308X/gfx942 资源画像",
+      "cases": {
+        "correct_instrumentation": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "正确插桩的 ring_pipeline 基线。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/ring_l0",
+            "provenance": "mail-14 amd-checkers c1_t1.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 77,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/ring_l2g",
+            "provenance": "mail-14 amd-checkers c1_t1.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 84,
+                "sgpr": 42,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 95,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "正确插桩：VGPR/scratch/waves 变化都是插桩固有代价，s_barrier 与 LDS 未变",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "waves/SIMD dropped: 6 -> 5 (VGPR 77 -> 84)"
+          ]
+        },
+        "record_point_in_spin_loop": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "记录点放在 LDS 标志自旋循环内部。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/ring_l0",
+            "provenance": "mail-14 amd-checkers c1_ring_F1.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 77,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/ring_F1",
+            "provenance": "mail-14 amd-checkers c1_ring_F1.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 85,
+                "sgpr": 46,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 104,
+                  "sleep": 2,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "waves/SIMD dropped: 6 -> 5 (VGPR 77 -> 85)"
+          ]
+        },
+        "scratch_spill": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "插桩引入 scratch spill。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/ring_l0",
+            "provenance": "mail-14 amd-checkers c1_ring_F2.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 77,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/ring_F2",
+            "provenance": "mail-14 amd-checkers c1_ring_F2.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 84,
+                "sgpr": 42,
+                "agpr": 0,
+                "scratch": 272,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 117,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "expect_c1": "FAIL",
+          "why": "注入的 scratch 故障：scratch 增量超预算",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "scratch changed: 0 -> 272",
+            "waves/SIMD dropped: 6 -> 5 (VGPR 77 -> 84)"
+          ]
+        },
+        "event_unpaired": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "begin/end 事件未配对。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/ring_l0",
+            "provenance": "mail-14 amd-checkers c1_ring_F3.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 77,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/ring_F3",
+            "provenance": "mail-14 amd-checkers c1_ring_F3.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 84,
+                "sgpr": 42,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 91,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "waves/SIMD dropped: 6 -> 5 (VGPR 77 -> 84)"
+          ]
+        },
+        "buffer_too_small": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "记录缓冲容量过小。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/ring_l0",
+            "provenance": "mail-14 amd-checkers c1_ring_F4.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 77,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/ring_F4",
+            "provenance": "mail-14 amd-checkers c1_ring_F4.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 84,
+                "sgpr": 42,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 95,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "waves/SIMD dropped: 6 -> 5 (VGPR 77 -> 84)"
+          ]
+        },
+        "buffer_overlap": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "记录缓冲与输出缓冲重叠。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/ring_l0",
+            "provenance": "mail-14 amd-checkers c1_ring_F5.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 77,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/ring_F5",
+            "provenance": "mail-14 amd-checkers c1_ring_F5.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 84,
+                "sgpr": 42,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 95,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "该故障是行为/结构类（记录点位置、事件配对、缓冲容量/重叠），由 C2/C3 拦，不是 C1 的资源判据",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "waves/SIMD dropped: 6 -> 5 (VGPR 77 -> 84)"
+          ]
+        },
+        "injected_sync": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "记录宏中注入 __syncthreads()。",
+          "l0": {
+            "source": "fixtures/amd-checkers/build/ring_l0",
+            "provenance": "mail-14 amd-checkers c1_ring_F6.json rows[0].baseline（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 77,
+                "sgpr": 38,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fixtures/amd-checkers/build/ring_F6",
+            "provenance": "mail-14 amd-checkers c1_ring_F6.json rows[0].instrumented（MI308X 实测）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 84,
+                "sgpr": 42,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 64,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 12,
+                  "waitcnt": 95,
+                  "sleep": 0,
+                  "cache_flush": 2
+                }
+              }
+            }
+          },
+          "expect_c1": "FAIL",
+          "why": "记录宏引入同步：s_barrier 静态条数变化",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "s_barrier changed: 8 -> 12",
+            "waves/SIMD dropped: 6 -> 5 (VGPR 77 -> 84)"
+          ]
+        },
+        "dynamic_lds": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "3×16 KiB 动态 LDS；按 49152 B 动态共享内存评估真实并发。",
+          "l0": {
+            "source": "fi_bugs_amd-sk-ds B08 原文数字（mail-14 ring_pipeline，动态 LDS 49152 B）/l0",
+            "provenance": "mail-14 fi_bugs_amd-sk-ds B08：waves/SIMD 21->10、静态 LDS 48 B、动态 LDS 49152 B（3x16 KiB 环）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 24,
+                "sgpr": 40,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 48,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2,
+                  "timer_read": 0,
+                  "record_store": 0
+                }
+              }
+            }
+          },
+          "fi": {
+            "source": "fi_bugs_amd-sk-ds B08 原文数字（mail-14 ring_pipeline，动态 LDS 49152 B）/fi",
+            "provenance": "mail-14 fi_bugs_amd-sk-ds B08：waves/SIMD 21->10、静态 LDS 48 B、动态 LDS 49152 B（3x16 KiB 环）",
+            "kernels": {
+              "_Z13ring_pipelinePKfPfS1_Pjii": {
+                "vgpr": 48,
+                "sgpr": 40,
+                "agpr": 0,
+                "scratch": 0,
+                "lds": 48,
+                "vgpr_spill_count": 0,
+                "sgpr_spill_count": 0,
+                "instructions": {
+                  "barrier": 8,
+                  "waitcnt": 76,
+                  "sleep": 0,
+                  "cache_flush": 2,
+                  "timer_read": 4,
+                  "record_store": 21
+                }
+              }
+            }
+          },
+          "expect_c1": "PASS",
+          "why": "动态 LDS 49152 B 让每 CU 只可能驻留 1 个 CTA（4 waves/CU = 1 wave/SIMD），寄存器上限 21->10 waves/SIMD 并不改变真实并发度；旧判据只看 VGPR，误报崩塌",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "每 SIMD 可驻留 wave 数崩塌：21->10（低于基线的 0.5）"
+          ],
+          "extra_args": [
+            "--dynamic-smem",
+            "49152",
+            "--block-threads",
+            "256"
+          ]
+        },
+        "dynamic_lds_without_smem_metadata": {
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pjii",
+          "description": "同一动态 LDS 资源画像，但不提供 --dynamic-smem 元数据。",
+          "resource_case": "dynamic_lds",
+          "expect_c1": "PASS",
+          "why": "同一对资源画像但不给动态 LDS：VGPR 24->48 的寄存器上限按硬件截断后两臂都是 8 waves/SIMD，没有证据说明真实并发度下降，改判 PASS 并记“未给 --dynamic-smem”的 warning；真崩塌由 demo_hwcap_real_collapse 这条用例锁住",
+          "old_c1_verdict": "FAIL",
+          "old_c1_reasons": [
+            "每 SIMD 可驻留 wave 数崩塌：21->10（低于基线的 0.5）"
+          ],
+          "expect_warning_contains": [
+            "动态 LDS"
+          ]
+        }
+      }
+    }
+  }
+}

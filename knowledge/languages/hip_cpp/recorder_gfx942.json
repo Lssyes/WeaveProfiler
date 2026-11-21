@@ -1,0 +1,332 @@
+{
+  "arch": "gfx942",
+  "vendor": "amd",
+  "warp_size": 64,
+  "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+  "date": "2026-11-08",
+  "semantic_taxonomy": [
+    "记录点",
+    "计时",
+    "物理位置"
+  ],
+  "note": "这里放的是“工具自身怎么记录”的知识（记录点/计时/物理位置），不属于 装载/等待/计算/同步/写回 五类语义。业务打点请查 knowledge/cards/mi308x.json。",
+  "entries": [
+    {
+      "semantic": "记录点",
+      "language": "HIP",
+      "construct": "__shfl 的广播范围（wave 内 64 lane，不是整个 CTA）",
+      "isa_mnemonics": [
+        "v_mbcnt_lo_u32_b32",
+        "v_mbcnt_hi_u32_b32",
+        "ds_bpermute_b32"
+      ],
+      "placement_rule": "HIP 的 __shfl(var, srcLane, width) 默认 width = warpSize，AMD 上 warpSize = 64，所以它只在**本 wave 的 64 条 lane 内**广播，跨不出 wave。落成的指令是 v_mbcnt_lo_u32_b32 + v_mbcnt_hi_u32_b32 算 lane 号、再 ds_bpermute_b32 按 lane 索引取值——全程没有任何跨 wave 的东西。想把 tid0 的值发给整个 CTA（例如“最后一个 CTA 做全局归约”的票号），必须走 LDS + __syncthreads，或者 __shfl 之后再经 shared memory 中转；只用 __shfl 会让 wave1..3 拿到自己的旧值。 注意：width=32 时索引算式的掩码从 0x100 变成 0x180（k_p18_shfl_w32），一个 wave 被拆成两半、各自广播自己的 lane0 与 lane32，这是 wave64 上“按 32 分组”的唯一正确写法；width=64 与不写 width 逐字节等价（k_p18_shfl_default 与 k_p18_shfl_width 的反汇编相同）。 勘误（实测）：wave64 上把一个标量发给整个 CTA 只能用 LDS：tid0 写 __shared__ -> __syncthreads() -> 全体读回。凡是分支条件来自“每个 CTA 一个”的标量（票号、归约结果、tile 归属），必须先把这个标量广播到全部 wave 再做分支，保证同 CTA 的所有 wave 判定一致；分支内部再出现 __syncthreads / s_barrier 就是危险信号。分支内用到的 shared 数组要在分支外声明，并确认全部线程都会写（或先清零）。需要按 32 分组时用 __shfl(x, src, 32)（掩码 0x180，一个 wave 拆两半），别用 width=64 再自己算偏移。（实测细节：两处缺口，都在“最后一个 CTA 做全局归约”这个草案点名的结构里踩到了：(1) __shfl(x, 0) 在 HIP 上默认 width = warpSize = 64，只在**本 wave 内**广播 lane0，落为 v_mbcnt_lo/hi + ds_bpermute_b32，没有任何跨 wave 语义。用它广播 atomicAdd 拿到的票号时，wave1..3 的 lane0 取到的是自己的 0（票号只有 tid0 有），于是最后一个 CTA 只有 wave0 进了归约分支。(2) 归约分支内部还有一个 __syncthreads()：只有 1/4 的 wave 执行 s_barrier，到不齐，行为未定义；同时分支里声明的 __shared__ double thread_sum[256] 只有 wave0 的 tid 0..63 写过，tid0 却把 256 项全加了一遍，[64..255] 是从没被写过的 LDS。实测症状（修复前，oncard/results/prev2/fi_l2.out）：每个 CTA 的 partial 全对（bad=0, max_abs_err=0），只有 final_got 是垃圾（-inf / 7.89e+36 / -3.52e+33 / 9.23e+34，四个档各不相同），verdict=FAIL；而且 FI_LEVEL=0 的基线档反而比插桩档慢 29%（877.0 us vs 678.7 us）——那是部分 wave 卡在到不齐的 s_barrier 上，不是插桩的开销。修复后四档全部 PASS，l0 回到最快（664.0 us），开销才显出真实的 +19.8%~+20.5%。）",
+      "evidence": {
+        "snippet": "v_mbcnt_lo_u32_b32 v2, -1, 0 | v_mbcnt_hi_u32_b32 v2, -1, v2 | ds_bpermute_b32 v1, v2, v1",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "计时",
+      "language": "Triton",
+      "construct": "Triton 侧读全局计时器：tl.extra.hip.memrealtime()",
+      "isa_mnemonics": [
+        "s_memrealtime",
+        "s_waitcnt vmcnt(N)"
+      ],
+      "placement_rule": "Triton 没有 %globaltimer，AMD 后端用 tl.extra.hip.memrealtime()（内部就是 inline asm s_memrealtime $0 + s_waitcnt vmcnt(0)）。记录点自己写 inline asm 时必须照抄那句 s_waitcnt，否则读到的值可能还没就绪。 注意：官方实现文件：$PYTHON_ENV/lib/python3.10/site-packages/triton/language/extra/hip/utils.py 勘误（实测）：对齐脚本 fi_align_rocprof 用 s_memrealtime 时基；meta JSON 必须写 timer_hz 与 arch，Triton 前端读 CU 号走 inline asm。（实测细节：AMD 侧对齐 rocprofv3 的 kernel 条时，软件时间轴应该用 s_memrealtime（跨 CU 同基、恒定频率），它对应 rocprofv3 时间戳所用的系统时钟域；s_memtime 会随功耗调频，不能直接对 profiler。Triton 侧没有 %globaltimer，只能用 tl.extra.hip.memrealtime()（inline asm s_memrealtime + s_waitcnt vmcnt(0)）。另外 Triton 的 extra.hip 只导出 libdevice 与 memrealtime，没有 NVIDIA extra.cuda 里的 smid，物理 CU 号要自己用 inline asm 读 hwreg。）",
+      "evidence": {
+        "snippet": "s_memrealtime s[0:1] | s_waitcnt vmcnt(0)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "物理位置",
+      "language": "Triton",
+      "construct": "Triton 侧读物理 CU 号（没有 %smid 等价物）",
+      "isa_mnemonics": [
+        "s_getreg_b32"
+      ],
+      "placement_rule": "triton.language.extra.hip 只导出 libdevice 与 memrealtime，没有 smid（NVIDIA 的 extra.cuda 才有）。要按物理 CU 归组，只能用 tl.inline_asm_elementwise 读 s_getreg_b32 hwreg(HW_REG_HW_ID, 8, 4)（CU_ID）与 hwreg(HW_REG_XCC_ID, 0, 4)（XCC），自己合成 CU 号；否则解码出来的“CU 时间条”只能按 program_id 分组。",
+      "evidence": {
+        "snippet": "s_getreg_b32 s6, hwreg(HW_REG_HW_ID, 8, 4) | s_getreg_b32 s7, hwreg(HW_REG_XCC_ID, 0, 4)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "Triton",
+      "construct": "Triton 的记录粒度：一个 program 一条，拿不到 wave 内 lane 控制",
+      "isa_mnemonics": [
+        "s_and_saveexec_b64",
+        "global_store_dword"
+      ],
+      "placement_rule": "Triton 的编程模型是“整块张量”，没有 lane/wave 概念，也没有 __lane_id()。因此 AMD 上的 Triton 记录粒度只能到 program（= 一个 CTA），等价于 HIP 侧的 FI_GRAN=1；要 wave 粒度必须改用 HIP/Gluon 手写。",
+      "evidence": {
+        "snippet": "s_and_saveexec_b64 s[0:1], vcc | global_store_dword v[0:1], v2, off",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "计时",
+      "language": "HIP",
+      "construct": "s_memrealtime（全卡实时时钟，跨 CU 同一时基，FI_TIMER=0 默认用它）",
+      "isa_mnemonics": [
+        "s_memrealtime"
+      ],
+      "placement_rule": "每个记录点读一次；值落在 SGPR 对里，写全局前要用 v_mov_b32_e32/v_mov_b64_e32 搬到 VGPR，这三条搬运指令就是 AMD 上记录点的主要固定成本之一。 注意：草案说“固定约 100 MHz、跨 CU 同基”，本机实测见 measured；若与 100 MHz 不符，以实测为准并写进 kb_errata。 本机实测：frequency_hz=99996884.2；frequency_mhz=99.9969；ns_per_tick=10.0003；unit=原始值是 tick（不是 ns）；ns = tick x ns_per_tick；min_nonzero_step_ticks=8；min_nonzero_step_ns=80.0；min_step_caveat=这是“连续读两次的紧循环”里观察到的最小非零增量，反映一次迭代的耗时下限，不是计数器固有刻度；固有刻度就是 ns_per_tick。；read_cost_cycles_local=80.024；read_cost_ns_local=43.3；cross_cu_spread_ticks_after_global_barrier=9；cross_cu_spread_ns_after_global_barrier=90.0；cross_cu_spread_note=全部 CTA 在全局到达栅栏之后同时读；这是“同一时基”的直接证据。；method=kernel 内读两次 s_memrealtime，除以 hipEvent 量到的 kernel 时长；跨 CU 离散度用“所有 CTA 在全局到达栅栏后同时读”来量 勘误（实测）：FI_TIMER=0 用 s_memrealtime（跨 CU 同一时基，可直接对 rocprofv3 时间轴）；FI_TIMER=1 用 s_memtime 并在 OPEN/CLOSE 记锚点换算；两者都要把实测频率写进 meta JSON 的 timer_hz / clock_mhz 字段，解码器优先用 meta 里的实测值。还有三件事必须写清楚。(1) s_memrealtime 的原始单位是 tick 不是 ns：本机实测 99.9969 MHz，1 tick = 10.0003 ns，解码器必须按 meta.timer_hz 换算，否则整条时间轴短 10 倍——我们第一版就踩了这个坑，真实 1.24 us 的转储被报成 0.124 us。(2) “连续读两次的最小非零增量”（本机实测 s_memrealtime 8 tick = 80.0 ns、s_memtime 216 周期 = 116.9 ns）量的是紧循环一次迭代的耗时下限，不是计数器固有刻度；固有刻度是 s_memrealtime 1 tick = 10.0003 ns、s_memtime 1 周期 = 0.5414 ns。(3) 读一次 s_memrealtime 实测要 80.024 个着色器周期（≈ 43.3 ns），这是记录点的主要固定成本，比那条 16B nt 写贵得多；事件密的 kernel 按这个数估预算。选择：默认 FI_TIMER=0（跨 CU 同基、不随 DVFS 漂移、10 ns 刻度）；只有需要 sub-10 ns 分辨率时才用 FI_TIMER=1，代价是每泳道锚点换算，且 s_memtime 的频率随功耗状态变（本机 rocm-smi 看到空闲卡 sclk 只有 92 MHz，跑起来 1850 MHz），kernel 内部也会漂。（实测细节：builtin 名字与助记符正确（s_memrealtime s[0:1] / s_memtime s[4:5]），并且实测确认 HIP 的 clock64() 与 clock() 都落成 s_memtime——也就是说 AMD 上 clock64() 不是 NVIDIA 那种 per-SM 周期计数器语义。本机实测：s_memrealtime = 99.9969 MHz（草案说的“约 100 MHz”成立，1 tick = 10.0003 ns），连续读的紧循环里最小非零增量 8 tick = 80.0 ns；s_memtime = 1847.0942 MHz（贴着 sclk 峰值 1850 MHz，1 周期 = 0.5414 ns），最小非零增量 216 周期 = 116.9 ns。全局到达栅栏后 80 个 CTA 同时读两个计时器：s_memrealtime 的跨 CU 离散度 9 tick = 90.0 ns（同一时基，可直接横比、可对 rocprofv3 时间轴）；s_memtime 的离散度 6705302167652 个周期（每个 CU 各有各的纪元，跨 CU 完全不可比，只能靠锚点换算）。） 勘误（实测）：对齐脚本 fi_align_rocprof 用 s_memrealtime 时基；meta JSON 必须写 timer_hz 与 arch，Triton 前端读 CU 号走 inline asm。（实测细节：AMD 侧对齐 rocprofv3 的 kernel 条时，软件时间轴应该用 s_memrealtime（跨 CU 同基、恒定频率），它对应 rocprofv3 时间戳所用的系统时钟域；s_memtime 会随功耗调频，不能直接对 profiler。Triton 侧没有 %globaltimer，只能用 tl.extra.hip.memrealtime()（inline asm s_memrealtime + s_waitcnt vmcnt(0)）。另外 Triton 的 extra.hip 只导出 libdevice 与 memrealtime，没有 NVIDIA extra.cuda 里的 smid，物理 CU 号要自己用 inline asm 读 hwreg。）",
+      "evidence": {
+        "snippet": "s_memrealtime s[2:3]",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "计时",
+      "language": "HIP",
+      "construct": "s_memtime（CU 本地着色器时钟；HIP 的 clock64() 与 clock() 都落成它）",
+      "isa_mnemonics": [
+        "s_memtime"
+      ],
+      "placement_rule": "FI_TIMER=1 时每个事件读它，并在 FI_OPEN/FI_CLOSE 各记一对 (s_memrealtime, s_memtime) 锚点，解码时按泳道线性换算到实时时钟时基；不要单独拿它跨 CU 比较。 注意：反汇编证据：k_p13_timer 里 clock64() 与 clock() 与 __builtin_amdgcn_s_memtime() 三个写法都落成 s_memtime（三条 s_memtime 紧挨着），所以 AMD 上 clock64() 不是 NVIDIA 那种 per-SM cycle counter 语义，它是着色器时钟，频率随功耗/温度变化，必须用锚点换算。 本机实测：frequency_hz=1847094196.0；frequency_mhz=1847.0942；min_step_cycles=216；cross_cu_spread_cycles_after_global_barrier=6705302167652；reported_peak_clock_khz=None 勘误（实测）：FI_TIMER=0 用 s_memrealtime（跨 CU 同一时基，可直接对 rocprofv3 时间轴）；FI_TIMER=1 用 s_memtime 并在 OPEN/CLOSE 记锚点换算；两者都要把实测频率写进 meta JSON 的 timer_hz / clock_mhz 字段，解码器优先用 meta 里的实测值。还有三件事必须写清楚。(1) s_memrealtime 的原始单位是 tick 不是 ns：本机实测 99.9969 MHz，1 tick = 10.0003 ns，解码器必须按 meta.timer_hz 换算，否则整条时间轴短 10 倍——我们第一版就踩了这个坑，真实 1.24 us 的转储被报成 0.124 us。(2) “连续读两次的最小非零增量”（本机实测 s_memrealtime 8 tick = 80.0 ns、s_memtime 216 周期 = 116.9 ns）量的是紧循环一次迭代的耗时下限，不是计数器固有刻度；固有刻度是 s_memrealtime 1 tick = 10.0003 ns、s_memtime 1 周期 = 0.5414 ns。(3) 读一次 s_memrealtime 实测要 80.024 个着色器周期（≈ 43.3 ns），这是记录点的主要固定成本，比那条 16B nt 写贵得多；事件密的 kernel 按这个数估预算。选择：默认 FI_TIMER=0（跨 CU 同基、不随 DVFS 漂移、10 ns 刻度）；只有需要 sub-10 ns 分辨率时才用 FI_TIMER=1，代价是每泳道锚点换算，且 s_memtime 的频率随功耗状态变（本机 rocm-smi 看到空闲卡 sclk 只有 92 MHz，跑起来 1850 MHz），kernel 内部也会漂。（实测细节：builtin 名字与助记符正确（s_memrealtime s[0:1] / s_memtime s[4:5]），并且实测确认 HIP 的 clock64() 与 clock() 都落成 s_memtime——也就是说 AMD 上 clock64() 不是 NVIDIA 那种 per-SM 周期计数器语义。本机实测：s_memrealtime = 99.9969 MHz（草案说的“约 100 MHz”成立，1 tick = 10.0003 ns），连续读的紧循环里最小非零增量 8 tick = 80.0 ns；s_memtime = 1847.0942 MHz（贴着 sclk 峰值 1850 MHz，1 周期 = 0.5414 ns），最小非零增量 216 周期 = 116.9 ns。全局到达栅栏后 80 个 CTA 同时读两个计时器：s_memrealtime 的跨 CU 离散度 9 tick = 90.0 ns（同一时基，可直接横比、可对 rocprofv3 时间轴）；s_memtime 的离散度 6705302167652 个周期（每个 CU 各有各的纪元，跨 CU 完全不可比，只能靠锚点换算）。）",
+      "evidence": {
+        "snippet": "s_memrealtime s[2:3] | s_memtime s[4:5] | s_memtime s[6:7] | s_memtime s[8:9]",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "物理位置",
+      "language": "HIP",
+      "construct": "HW_ID / XCC_ID：SE、CU、SIMD、WAVE、XCC 字段（FI_GRAN=1 按物理 CU 归组靠它）",
+      "isa_mnemonics": [
+        "s_getreg_b32"
+      ],
+      "placement_rule": "只在 FI_OPEN 时读一次，作为 aux 存进 OPEN 记录（解码器按它把泳道归到物理 CU）；不要每个事件都读，三条 s_getreg 加上 SGPR->VGPR 搬运会明显抬高单点成本。 本机实测：waves_sampled=640；distinct_simd=4；distinct_cu=6；distinct_se=4；distinct_xcc=4；distinct_xcc_se_cu_simd=320；distinct_smid_ours=80；distinct_smid_hip=80；our_compose_equals_hip_smid=True；se_values=[0, 1, 2, 3]；cu_values=[0, 1, 2, 3, 4, 5]；xcc_values=[0, 1, 2, 3] field_layout_gfx942：HW_ID.WAVE_ID=3:0（wave 槽号 0-9）；HW_ID.SIMD_ID=5:4（CU 内 4 个 SIMD）；HW_ID.PIPE_ID=7:6；HW_ID.CU_ID=11:8（SE 内 CU 号，4 bit）；HW_ID.SH_ID=12（SE 内 shader array）；HW_ID.SE_ID=14:13（gfx942 是 2 bit；gfx908/gfx90a 是 15:13）；HW_ID.TG_ID=19:16；HW_ID.VM_ID=23:20；HW_ID.QUEUE_ID=26:24；HW_ID.ME_ID=31:30；XCC_ID(独立寄存器 hwreg 20).XCC_ID=3:0（gfx942 有 8 个 XCC/XCD）；source=/opt/rocm-7.2.0/include/hip/amd_detail/amd_device_functions.h（HIP 头文件里的权威注释）；asm_syntax=s_getreg_b32 sX, hwreg(HW_REG_HW_ID, offset, size)；裸写 hw_id 会被 llvm-mc 拒收；compose=物理 CU 号 = ((xcc << 2) | se) << 4 | cu，与 HIP __smid() 在 gfx942 上的合成一致 勘误（实测）：实测口径修正：本机 MI308X 是 4 个 XCC、每 XCC 4 个 SE、SE 内 CU 号 0-5、每 CU 4 个 SIMD，合计 80 个 CU（rocminfo 与 HIP cu_count 都是 80）。文档常说的“8 个 XCD”是 MI300X 的形态，照抄会把 CU 号上限算错；只读 HW_ID 最多得到 4x6=24 个 (se,cu) 组合，必然撞号，必须再读独立的 XCC_ID（hwreg 20, bits 3:0）。 勘误（实测）：物理 CU 号 = ((xcc << 2) | se) << 4 | cu（与 HIP __smid() 在 gfx942 上的合成一致）；FI_OPEN 的 aux 存这个值，FI_GRAN=1 解码时按它归组。（实测细节：只读 HW_ID 不够：gfx942 是多 XCC/XCD 封装——本机 MI308X 实测 4 个 XCC、每 XCC 4 个 SE、SE 内 CU 号 0-5、每 CU 4 个 SIMD，合计 80 个 CU（草案和不少文档说的“8 个 XCD”是 MI300X 的形态，照抄会算错 CU 号上限）。HW_ID 里的 SE_ID(14:13)+CU_ID(11:8) 只在单个 XCD 内唯一：本机实测只读 HW_ID 最多得到 4x6=24 个 (se,cu) 组合，而设备有 80 个 CU，必然撞号；必须再读独立的 XCC_ID 寄存器（hwreg 20，bits 3:0），合成后实测 80 个 CU 号互不相同，且与 HIP __smid() 逐个相等。另外 SE_ID 在 gfx942 是 2 bit（14:13），不是 gfx908/gfx90a 的 3 bit（15:13）；CU_ID 是 SE 内编号（11:8），不是全设备 CU 号；SIMD_ID 在 5:4。汇编语法必须是 s_getreg_b32 sX, hwreg(HW_REG_HW_ID, off, size)，裸写 s_getreg_b32 s1, hw_id 会被 llvm-mc 拒收。）",
+      "evidence": {
+        "snippet": "s_getreg_b32 s3, hwreg(HW_REG_HW_ID, 4, 2) | s_getreg_b32 s6, hwreg(HW_REG_HW_ID, 8, 4) | s_getreg_b32 s7, hwreg(HW_REG_HW_ID, 12, 1) | s_getreg_b32 s8, hwreg(HW_REG_HW_ID, 13, 2) | s_getreg_b32 s9, hwreg(HW_REG_XCC_ID, 0, 4) | s_getreg_b32 s10, hwreg(HW_REG_HW_ID, 0, 4)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "HIP",
+      "construct": "wave64 下“每 wave 一条记录”的 lane 0 判定",
+      "isa_mnemonics": [
+        "v_mbcnt_lo_u32_b32",
+        "v_mbcnt_hi_u32_b32",
+        "v_cmp_eq_u32_e32",
+        "s_and_saveexec_b64"
+      ],
+      "placement_rule": "记录线程判定用 __lane_id()==0（落为 v_mbcnt_lo_u32_b32 + v_mbcnt_hi_u32_b32）或 (threadIdx.x & 63)==0（落为 v_and_b32_e32 + v_cmp_eq_u32_e32）；两者都会用 s_and_saveexec_b64 + s_cbranch_execz 把写记录关进 exec 掩码里。绝不能用 NVIDIA 的 (threadIdx.x & 31)==0 或 %laneid：wave64 下会每个 wave 记两条。 注意：想避开 exec 掩码（例如在已经有 exec 收敛问题的位置打点），可以用标量分支：v_readfirstlane_b32 + s_cmp_lg_u32 + s_cbranch_scc0，它不改 exec，见 k_p15_elect。 勘误（实测）：头文件里 FI_WAVE_SIZE 默认 64，FI_OPEN 的泳道计算与记录线程判定都按它来；alloc 时 waves_per_cta 必须按 64 上取整。（实测细节：wave64 下必须用 __lane_id()==0（v_mbcnt_lo_u32_b32 + v_mbcnt_hi_u32_b32）或 (threadIdx.x & 63)==0；泳道号是 tid >> 6；waves_per_cta = 线程数 / 64。照搬 NVIDIA 的 &31 / >>5 会让每个 wave 出两条泳道，解码器不报错但时间条数量翻倍（C1 检查能抓到，前提是它知道 wave 大小）。）",
+      "evidence": {
+        "snippet": "v_mbcnt_lo_u32_b32 v1, -1, 0 | v_mbcnt_hi_u32_b32 v1, -1, v1 | v_cmp_eq_u32_e32 vcc, 0, v1 | s_and_saveexec_b64 s[4:5], vcc",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "HIP",
+      "construct": "一个事件的指令构成（FI_B/FI_E）",
+      "isa_mnemonics": [
+        "s_memrealtime",
+        "global_store_dwordx4"
+      ],
+      "placement_rule": "每事件 = 1 次 s_memrealtime + 把 64 位时间从 SGPR 搬到 VGPR + 1 条 global_store_dwordx4（16B, nt）。没有全局读、没有原子、没有分支到慢路径；缓冲写满时才对溢出标志做一次 global_atomic_or。 本机实测：per_event_overhead_pct=0.5528；kernel_us_level0=661.757；kernel_us_level2=797.338；note=明细见 kb.validation.overhead（rocprof_kernel_trace 是权威口径，authoritative 是结论数字，source_agreement 是与 hipEvent 交错计时的一致性核对）。rec_every_0 = 插桩代码在但记录写被 fi_attach(nullptr) 短路，rec_every_1 = 每次 launch 都真写记录。；total_overhead_pct=20.488；records_per_lane=37.062；per_event_overhead_definition=总开销% / 每条泳道执行的记录点数（本 kernel 每泳道 37.06 条记录）。这是按记录点数摊出来的归因值，不是单独测的每事件成本：kernel 时长里绝大部分是计算与握手，记录点只占其中一小部分。单独实测的每事件成本是 s_memrealtime 一次读，见 semantic=计时 那条的 read_cost_*。；records_off_overhead_pct=19.915；source=rocprofv3 --kernel-trace，同一 DVFS 时钟态内配对，工具全开（每次 launch 都写记录）",
+      "evidence": {
+        "snippet": "s_memrealtime s[10:11] | global_store_dwordx4 v[6:7], v[2:5], off nt | s_memrealtime s[6:7] | global_store_dwordx4 v[10:11], v[2:5], off nt",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "HIP",
+      "construct": "缓冲写满的溢出标志（atomicOr）",
+      "isa_mnemonics": [
+        "global_atomic_or"
+      ],
+      "placement_rule": "溢出只在 n==cap 那一次报，之后把计数推到 cap+1 避免重复原子；解码器读到 overflow 的 bit0/bit1 要在 check.json 里报错，不能静默截断。 勘误（实测）：溢出报一次即可；解码器必须把 overflow 的 bit0（泳道写满）与 bit1（slot 越界）都写进 check.json 并判 fail。（实测细节：AMD 上溢出标志的 atomicOr 落为 global_atomic_or（不是 buffer_atomic_or），且编译器会在已收敛的 exec 掩码里再做一次“取第一个活跃 lane”（v_mbcnt_lo/hi with exec_lo/exec_hi），所以别把它放进热路径；只在 n==cap 那一次触发。记录写本身是 global_store_dwordx4 ... nt，16B 对齐由 slot 布局保证（每 slot cap*16B，hipMalloc 基址 256B 对齐）。）",
+      "evidence": {
+        "snippet": "global_atomic_or v0, v1, s[0:1]",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "通用",
+      "construct": "粒度开关 FI_GRAN：0=wave 粒度，1=CU 粒度",
+      "isa_mnemonics": [
+        "宏: FI_GRAN",
+        "宏: FI_WAVE_SIZE",
+        "设备函数: fi_cu_id()"
+      ],
+      "placement_rule": "FI_GRAN=0：泳道 slot = cta * waves_per_cta + (tid >> 6)，记录线程 = 该 wave 的 lane 0；FI_GRAN=1：只有 threadIdx.x==0 记录，落在该 CTA 的 0 号泳道，解码时按 OPEN 里 aux 的物理 CU 归组，每个 CU 一条时间条。wave 数 = 线程数 / 64（不是 /32），alloc 时给错会 slot 越界（overflow bit1）。 本机实测：gran0_slots_with_records=32；gran0_records=256；gran0_records_per_slot_hist={\"8\": 32}；gran0_expected_slots=8 CTA x 4 wave = 32；gran1_slots_with_records=8；gran1_expected_slots=8 CTA x 1 = 8（每 CTA 只有 threadIdx.x==0 记）",
+      "evidence": {
+        "snippet": "FI_GRAN == 1 -> w = 0；否则 w = tid / FI_WAVE_SIZE(64)；FI_OPEN 的 aux = fi_cu_id()",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "HIP",
+      "construct": "插桩代价（E2 扰动）：同一 kernel 在 FI_LEVEL=0/2 下的寄存器、spill、指令条数",
+      "isa_mnemonics": [
+        "v_mov_b32_e32",
+        "s_memrealtime",
+        "global_store_dwordx4"
+      ],
+      "placement_rule": "改档（FI_LEVEL / FI_TIMER / FI_GRAN）后必须重测这三项：VGPR 数（占用率阈值）、private_seg_size（>0 就是 spill）、tile 循环指令条数。gfx942 上一个记录点约 30+ 条指令（含泳道判定、s_memrealtime + s_waitcnt、64 位时间从 SGPR 搬到 VGPR、槽位越界检查与溢出冷路径、16B nt 写、exec 掩码恢复），事件密的 kernel 要先算总预算。 注意：FI_GRAN=1 比 FI_GRAN=0 少 1 个 VGPR（不用算泳道号），tile 循环指令条数相同；FI_TIMER=1 多 2 次计时器读（OPEN/CLOSE 各多一个 s_memtime 锚点），整 kernel 多 65 条指令。 本机实测：l0={\"num_vgpr\": 34, \"num_agpr\": 0, \"numbered_sgpr\": 23, \"private_seg_size_bytes\": 0, \"spill\": false, \"instr_total\": 263, \"tile_loop_instr\": 105, \"waitcnt\": {\"vmcnt\": 8, \"lgkmcnt\": 22, \"expcnt\": 0, \"total\": 27}}；l2={\"num_vgpr\": 48, \"num_agpr\": 0, \"numbered_sgpr\": 35, \"private_seg_size_bytes\": 0, \"spill\": false, \"instr_total\": 921, \"tile_loop_instr\": 186, \"record_sites_total\": 17, \"record_store_dwordx4_nt\": 16, \"waitcnt\": {\"vmcnt\": 26, \"lgkmcnt\": 60, \"expcnt\": 0, \"total\": 83}}；l2_delta_vs_l0={\"num_vgpr\": 14, \"numbered_sgpr\": 12, \"instr_total\": 658, \"main_loop_instr_largest_region\": 726, \"tile_loop_instr\": 81, \"waitcnt_total\": 56, \"spill\": false, \"tile_loop_instr_per_record_site\": 20.2}；l2t1_delta_vs_l0={\"num_vgpr\": 14, \"numbered_sgpr\": 12, \"instr_total\": 723, \"main_loop_instr_largest_region\": 789, \"tile_loop_instr\": 81, \"waitcnt_total\": 62, \"spill\": false, \"tile_loop_instr_per_record_site\": 20.2}；l2gran1_delta_vs_l0={\"num_vgpr\": 13, \"numbered_sgpr\": 12, \"instr_total\": 648, \"main_loop_instr_largest_region\": 280, \"tile_loop_instr\": 81, \"waitcnt_total\": 54, \"spill\": false, \"tile_loop_instr_per_record_site\": 20.2}；method=hipcc -O3 -std=c++17 --offload-arch=gfx942 --cuda-device-only -S（命令见 disasm/perturb.sh）；寄存器/spill 取汇编里的 .set <kernel>.num_vgpr / private_seg_size / uses_flat_scratch，指令条数与循环体条数按 kernel 正文统计（向后跳视为循环回边）。tile 循环 = 同时含自旋 s_sleep 与 LDS 环读写 ds_write_b32/ds_read_b32 的最小回边区域，四个构建档比的是同一个语义循环（编译器排布会变，不能直接比“最大的那个循环”）。",
+      "evidence": {
+        "snippet": "fi_validate_l0 vs fi_validate_l2：num_vgpr 34->48，numbered_sgpr 23->35，private_seg_size 0->0（spill=False），tile 循环指令 105->186",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "计时",
+      "language": "Triton inline asm",
+      "construct": "AMD GPU 固定频率统一时基计时器（Triton 前端）：tl.inline_asm_elementwise(asm=\"s_waitcnt vmcnt(0)\\ns_memrealtime $0\\ns_waitcnt lgkmcnt(0)\", constraints=\"=s\", dtype=tl.int64, is_pure=False)",
+      "isa_mnemonics": [
+        "s_memrealtime"
+      ],
+      "placement_rule": "读取结果写入 int64 缓冲；每次读取按 s_waitcnt vmcnt(0)、s_memrealtime、s_waitcnt lgkmcnt(0) 的顺序执行，并让搬运或存储在 lgkmcnt 之后。前置等待清空 outstanding VMEM，后置等待保证 64 位 SGPR 结果就绪。",
+      "evidence": {
+        "snippet": "_fi_time(): asm=\"s_waitcnt vmcnt(0); s_memrealtime $0; s_waitcnt lgkmcnt(0)\"; constraints=\"=s\"; is_pure=False",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "物理位置",
+      "language": "Triton inline asm",
+      "construct": "gfx942 物理 wave/SIMD/CU/SE/XCC 标识（Triton 前端）：s_getreg_b32 hwreg(4,0,4); hwreg(4,4,2); hwreg(4,8,4); hwreg(4,13,2); hwreg(20,0,4)",
+      "isa_mnemonics": [
+        "s_getreg_b32"
+      ],
+      "placement_rule": "在 kernel 入口读取；OPEN.aux 打包为 XCC[15:12]|SE[9:8]|SIMD[5:4]|CU[3:0]。",
+      "evidence": {
+        "snippet": "_fi_hw_id(): five s_getreg_b32 scalar reads followed by packed hwid",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "Triton inline asm",
+      "construct": "wave64 lane 0 单记录者（Triton 前端）：v_mbcnt_lo_u32_b32 / v_mbcnt_hi_u32_b32 with pack=1",
+      "isa_mnemonics": [
+        "v_mbcnt_lo_u32_b32",
+        "v_mbcnt_hi_u32_b32"
+      ],
+      "placement_rule": "返回 lane 0..63；所有记录 store 的 mask 必须与 lane==0 相与。",
+      "evidence": {
+        "snippet": "_fi_lane(THREADS): v_mbcnt_lo...; v_mbcnt_hi...",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "物理位置",
+      "language": "Triton",
+      "construct": "wave 粒度唯一槽位（Triton 前端）：slot=cta*64+((simd<<4)|wave)",
+      "isa_mnemonics": [
+        "s_lshl_b32",
+        "s_or_b32",
+        "s_add_i32"
+      ],
+      "placement_rule": "WAVE_ID 只在 SIMD 内唯一；WPC 至少 64，把 SIMD 编入槽号，禁止只加 wave。",
+      "evidence": {
+        "snippet": "wave_key = (simd << 4) | wave; slot = cta * WPC + wave_key",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "物理位置",
+      "language": "Triton",
+      "construct": "SM/CU 粒度唯一物理记录者（Triton 前端）：min_simd=tl.min(simd); min_wave=tl.min(tl.where(simd==min_simd,wave,INT_MAX))",
+      "isa_mnemonics": [
+        "v_min_i32",
+        "v_mov_b32_dpp",
+        "ds_write_b32",
+        "s_barrier"
+      ],
+      "placement_rule": "不能只对一个 CTA 内的 wave 取最小；先选 SIMD 再选该 SIMD 内 WAVE_ID，并只允许 lane 0 写。",
+      "evidence": {
+        "snippet": "selected=(lane==0) & in_min_simd & (wave==min_wave)",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "Triton host Python",
+      "construct": "FILITE02 兼容转储（Triton 前端）：magic FILITE02; u32 n_slots,cap,wpc,overflow,timer,meta_len; counts; 16B records",
+      "isa_mnemonics": [
+        "格式 magic: FILITE02",
+        "host: FiBuffer.dump()",
+        "打包: struct.pack('<6I', ...)"
+      ],
+      "placement_rule": "设备只写 SoA time/tag/aux；host 同步后按 slot 顺序打包紧凑 16B 记录，meta 增加 AMD 字段。",
+      "evidence": {
+        "snippet": "FiBuffer.dump(): write FILITE02, struct.pack(\"<6I\", ...), then <QII records",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "计时",
+      "language": "Python decoder",
+      "construct": "AMD tick 转纳秒（Triton 前端）：timer=0 and meta.timer_hz => (tick*1e9+timer_hz/2)//timer_hz",
+      "isa_mnemonics": [
+        "meta 字段: timer_hz",
+        "解码函数: _ticks_to_ns"
+      ],
+      "placement_rule": "只有带 timer_hz 的 timer=0 转储按 s_memrealtime 解释；无该字段的旧版转储仍按 globaltimer ns，保持兼容。",
+      "evidence": {
+        "snippet": "if timer == 0 and meta.get(\"timer_hz\"): d[\"slots\"] = ... _ticks_to_ns",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "记录点",
+      "language": "Python analyzer",
+      "construct": "插桩前后 AMDGCN 相似度（Triton 前端）：parse .file/.loc, strip fi_triton.py instructions, strict/opcode LCS, key mnemonic sequence",
+      "isa_mnemonics": [
+        "行表: .file/.loc",
+        "分析函数: lcs_pairs"
+      ],
+      "placement_rule": "先剔除前端探针指令，再对 baseline 与剩余指令做 LCS；同时报告原始指令数、VGPR/SGPR/spill 和关键 load/dot/store 是否仍存在。",
+      "evidence": {
+        "snippet": "stripped=[x for x in fi if basename(source_file) not in strips]; lcs_pairs(...)",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    },
+    {
+      "semantic": "计时",
+      "language": "HIP host C API via ctypes",
+      "construct": "s_memrealtime 频率查询（Triton 前端）：hipDeviceGetAttribute(&v, hipDeviceAttributeWallClockRate=10017, device)",
+      "isa_mnemonics": [
+        "HIP API: hipDeviceGetAttribute",
+        "枚举: hipDeviceAttributeWallClockRate=10017"
+      ],
+      "placement_rule": "属性单位是 kHz，转 Hz 写 meta.timer_hz；不可用时才允许 FI_TIMER_HZ 显式覆盖。",
+      "evidence": {
+        "snippet": "rc = fn(byref(value), 10017, int(device)); return int(value.value)*1000",
+        "machine": "mail-14, AMD Instinct MI308X, gfx942, wave64",
+        "date": "2026-11-08"
+      }
+    }
+  ]
+}

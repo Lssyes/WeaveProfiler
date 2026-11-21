@@ -1,0 +1,20 @@
+{
+  "_PROJECT_HOOK": "===== PROJECT HOOK: map these preset knobs to YOUR device build flags/macros =====",
+  "_how_to_fill": "entry_only compiles in ONLY the entry-rendezvous anchor (task example_entry_sync / sync_anchors.entry_rendezvous). It is the cheapest build that still yields a cross-rank + SW/HW alignment zero, and is the middle point of the overhead sweep. Fill compile_defines/compile_flags to gate everything except the entry anchor.",
+  "schema": "profiler-preset/v1",
+  "name": "entry_only",
+  "description": "Only the entry rendezvous anchor is recorded (one paired start/end per CTA on the dispatch track). Enough to align SW/HW and across ranks; negligible per-phase overhead.",
+  "enable_profiler": true,
+  "record_entry_anchor": true,
+  "record_all_events": false,
+  "buffer_required": true,
+  "compile_defines": {
+    "REPLACE_WITH_YOUR_PROFILER_ENABLE_MACRO": 1,
+    "REPLACE_WITH_YOUR_ENTRY_ANCHOR_ONLY_MACRO": 1
+  },
+  "_compile_defines_note": "The KEYS are project hooks. A macro name that does not exist in your device source compiles cleanly and gates nothing: this preset would then record EVERY event instead of only the entry anchor, and the overhead sweep would report entry_only ~= full without any error. Grep the real guard names out of the device source.",
+  "compile_flags": [],
+  "_compile_flags_note": "Empty only if no extra build args are needed. Verify by decoding an entry_only capture: it must contain exactly one paired anchor event per CTA on the dispatch track and nothing else.",
+  "expected_overhead_vs_off": "REPLACE_WITH_MEASURED_RATIO_FROM_validate_overhead.py",
+  "_expected_overhead_note": "Must be a measured number (full-vs-off style ratio for this preset), not a guess. A plausible-looking invented value reads like evidence in the delivered contract while proving nothing; leave the placeholder until you have actually run the sweep."
+}
