@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import run_measurement as runner
+import weaveprof.pipeline.core.run_measurement as runner
 
 
 GPU_STAGES = ("correctness", "overhead", "sw_capture", "hw_capture")

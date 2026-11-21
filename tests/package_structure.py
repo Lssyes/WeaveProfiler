@@ -22,41 +22,40 @@ HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 TEXT_EXT = {".py", ".md", ".json", ".cu", ".cuh", ".h", ".hpp", ".cpp", ".cc", ".sh", ".txt", ".jsonl"}
 ALLOWED_TOP = {
-    "README.md", "SKILL.md", "plugin.json", "run.py", "verify.py", "registry.py", "semantics.py", "fast_path.py",
-    "run_measurement.py", "agents", "1_scan", "2_instrument", "3_capture",
-    "4_validate", "knowledge", "tests", "weaveprof", "weaveprof_cli.py", "pyproject.toml",
+    "README.md", "SKILL.md", "plugin.json", "pyproject.toml", "run.py",
+    "recorders", "weaveprof", "configs", "docs", "examples", "tests",
 }
-REQUIRED_TOP = ALLOWED_TOP - {"README.md", "agents", "plugin.json"}
+REQUIRED_TOP = ALLOWED_TOP - {"README.md", "plugin.json"}
 REQUIRED_FILES = [
     "weaveprof/__init__.py", "weaveprof/__main__.py", "weaveprof/replay.py",
-    "run.py", "registry.py", "semantics.py", "fast_path.py", "run_measurement.py",
-    "1_scan/scan.py", "1_scan/quick_scan.py", "1_scan/validate_preflight.py",
-    "2_instrument/apply_plan.py", "2_instrument/generate_edits.py",
-    "2_instrument/recorders/cuda_cpp/fi_lite.cuh",
-    "2_instrument/recorders/hip_cpp/fi_lite_hip.h",
-    "2_instrument/recorders/triton/fi_triton.py",
-    "2_instrument/recorders/triton/fi_triton_amd.py",
-    "2_instrument/recorders/cutedsl/fi_cute.py",
-    "1_scan/get_trace_processor.py",
-    "3_capture/capture_nsys.py", "3_capture/capture_rocm.py",
-    "3_capture/gemm_probe.py",
-    "3_capture/export_perfetto_native.py",
-    "knowledge/templates/gemm_probe/gemm.cu",
-    "knowledge/templates/gemm_probe/names.json",
-    "knowledge/templates/gemm_probe/metrics.json",
-    "knowledge/templates/gemm_probe/gemm_h20.config",
-    "3_capture/build_perfetto.py", "3_capture/build_hw_perfetto.py",
-    "3_capture/extract_gpu_metrics.py",
-    "3_capture/build_rocprof_sw_hw.py", "3_capture/build_rocprof_sys_sw_hw.py",
-    "3_capture/hardware_utilization.py", "3_capture/merge_hw_into_perfetto.py",
-    "4_validate/validate_all.py", "4_validate/validate_run.py",
-    "4_validate/deliver_gate.py", "4_validate/finalize_delivery.py",
-    "4_validate/harness/manifest.py", "4_validate/harness/verify_receipt.py",
-    "knowledge/semantic_ids.json", "knowledge/operators/operators.json",
-    "knowledge/metrics/hardware.json", "knowledge/validation/fixes.json",
-    "knowledge/validation/scan_schema.json",
-    "knowledge/validation/schemas/scan-selection.schema.json",
-    "knowledge/recipes/index.json",
+    "run.py", "weaveprof/pipeline/core/registry.py", "weaveprof/pipeline/core/semantics.py", "weaveprof/pipeline/core/fast_path.py", "weaveprof/pipeline/core/run_measurement.py",
+    "weaveprof/pipeline/scan/scan.py", "weaveprof/pipeline/scan/quick_scan.py", "weaveprof/pipeline/scan/validate_preflight.py",
+    "weaveprof/pipeline/instrument/apply_plan.py", "weaveprof/pipeline/instrument/generate_edits.py",
+    "recorders/cuda_cpp/fi_lite.cuh",
+    "recorders/hip_cpp/fi_lite_hip.h",
+    "recorders/triton/fi_triton.py",
+    "recorders/triton/fi_triton_amd.py",
+    "recorders/cutedsl/fi_cute.py",
+    "weaveprof/pipeline/scan/get_trace_processor.py",
+    "weaveprof/pipeline/capture/capture_nsys.py", "weaveprof/pipeline/capture/capture_rocm.py",
+    "weaveprof/pipeline/capture/gemm_probe.py",
+    "weaveprof/pipeline/capture/export_perfetto_native.py",
+    "configs/templates/gemm_probe/gemm.cu",
+    "configs/templates/gemm_probe/names.json",
+    "configs/templates/gemm_probe/metrics.json",
+    "configs/templates/gemm_probe/gemm_h20.config",
+    "weaveprof/pipeline/capture/build_perfetto.py", "weaveprof/pipeline/capture/build_hw_perfetto.py",
+    "weaveprof/pipeline/capture/extract_gpu_metrics.py",
+    "weaveprof/pipeline/capture/build_rocprof_sw_hw.py", "weaveprof/pipeline/capture/build_rocprof_sys_sw_hw.py",
+    "weaveprof/pipeline/capture/hardware_utilization.py", "weaveprof/pipeline/capture/merge_hw_into_perfetto.py",
+    "weaveprof/pipeline/validate/validate_all.py", "weaveprof/pipeline/validate/validate_run.py",
+    "weaveprof/pipeline/validate/deliver_gate.py", "weaveprof/pipeline/validate/finalize_delivery.py",
+    "weaveprof/pipeline/validate/harness/manifest.py", "weaveprof/pipeline/validate/harness/verify_receipt.py",
+    "configs/semantic_ids.json", "configs/operators/operators.json",
+    "configs/metrics/hardware.json", "configs/validation/fixes.json",
+    "configs/validation/scan_schema.json",
+    "configs/validation/schemas/scan-selection.schema.json",
+    "configs/recipes/index.json",
     "tests/run_all.sh", "tests/package_structure.py",
     "tests/test_contract_consistency.py",
 ]
@@ -66,11 +65,11 @@ CARD_FILES = {
     "mi308x": ("gfx942", ["mi308x_gfx942.json"]),
 }
 LANGUAGE_FILES = [
-    "knowledge/languages/cuda_cpp/patterns.json",
-    "knowledge/languages/hip_cpp/patterns.json",
-    "knowledge/languages/triton/nvidia_patterns.json",
-    "knowledge/languages/triton/amd_patterns.json",
-    "knowledge/languages/cutedsl/patterns.json",
+    "configs/languages/cuda_cpp/patterns.json",
+    "configs/languages/hip_cpp/patterns.json",
+    "configs/languages/triton/nvidia_patterns.json",
+    "configs/languages/triton/amd_patterns.json",
+    "configs/languages/cutedsl/patterns.json",
 ]
 CURVES = {"compute_util", "memory_util", "communication_util", "sm_active"}
 CHECKS = {"correctness", "overhead", "assembly_change_rate", "alignment",
@@ -133,7 +132,7 @@ def _check_skill(fails: list[str]) -> None:
 
 def _check_cards(fails: list[str]) -> None:
     for card, (archs, profiles) in CARD_FILES.items():
-        wrapper = _load(PKG / "knowledge" / "cards" / (card + ".json"), fails)
+        wrapper = _load(PKG / "configs" / "cards" / (card + ".json"), fails)
         if wrapper.get("card") != card:
             fails.append("{} wrapper card mismatch".format(card))
         got = set(wrapper.get("architectures") or [])
@@ -144,7 +143,7 @@ def _check_cards(fails: list[str]) -> None:
         if not set(profiles).issubset(listed):
             fails.append("{} wrapper does not list profiles {}".format(card, profiles))
         for profile in profiles:
-            doc = _load(PKG / "knowledge" / "cards" / profile, fails)
+            doc = _load(PKG / "configs" / "cards" / profile, fails)
             if doc.get("card") != card:
                 fails.append("{} card mismatch in {}".format(profile, card))
             expected_arch = profile.split("_")[-1].removesuffix(".json")
@@ -153,9 +152,9 @@ def _check_cards(fails: list[str]) -> None:
                 fails.append("{} arch={} expected {}".format(profile, doc.get("arch"), expected_arch))
             if not doc.get("entries"):
                 fails.append("{} has no hardware entries".format(profile))
-    h20 = _load(PKG / "knowledge/cards/h20.json", fails)
-    b300 = _load(PKG / "knowledge/cards/b300.json", fails)
-    mi = _load(PKG / "knowledge/cards/mi308x.json", fails)
+    h20 = _load(PKG / "configs/cards/h20.json", fails)
+    b300 = _load(PKG / "configs/cards/b300.json", fails)
+    mi = _load(PKG / "configs/cards/mi308x.json", fails)
     if h20.get("profiler", {}).get("primary") != "nsys":
         fails.append("H20 profiler must be nsys")
     if b300.get("profiler", {}).get("primary") != "nsys":
@@ -168,7 +167,7 @@ def _check_cards(fails: list[str]) -> None:
 
 
 def _check_recipes(fails: list[str]) -> None:
-    index = _load(PKG / "knowledge/recipes/index.json", fails)
+    index = _load(PKG / "configs/recipes/index.json", fails)
     routes = {(row.get("card"), row.get("language")): row for row in index.get("recipes", []) if isinstance(row, dict)}
     expected = {
         ("h20", "cuda_cpp"), ("h20", "triton"), ("h20", "cutedsl"),
@@ -231,7 +230,7 @@ def _check_cross_file_contract(fails: list[str]) -> None:
 
 
 def _check_knowledge(fails: list[str]) -> None:
-    sem = _load(PKG / "knowledge/semantic_ids.json", fails)
+    sem = _load(PKG / "configs/semantic_ids.json", fails)
     ids = {row.get("semantic_id") for row in sem.get("semantics", []) if isinstance(row, dict)}
     required = set(sem.get("required_ids") or [])
     if not required.issubset(ids):
@@ -246,7 +245,7 @@ def _check_knowledge(fails: list[str]) -> None:
         doc = _load(PKG / rel, fails)
         if not doc.get("patterns"):
             fails.append("language pattern library is empty: {}".format(rel))
-    operators = _load(PKG / "knowledge/operators/operators.json", fails)
+    operators = _load(PKG / "configs/operators/operators.json", fails)
     op_ids = {row.get("semantic_id") for row in operators.get("operators", []) if isinstance(row, dict)}
     if not {"gemm", "attention", "reduction", "moe", "convolution", "megakernel"}.issubset(op_ids):
         fails.append("operator KB is missing required operators")
@@ -254,7 +253,7 @@ def _check_knowledge(fails: list[str]) -> None:
     for check in CHECKS:
         if check not in all_text.lower():
             fails.append("operator KB missing correctness check token: {}".format(check))
-    hw = (PKG / "knowledge/metrics/hardware.json").read_text(encoding="utf-8")
+    hw = (PKG / "configs/metrics/hardware.json").read_text(encoding="utf-8")
     if not CURVES.issubset(set(re.findall(r"[a-z_]+", hw))):
         missing = CURVES - set(re.findall(r"[a-z_]+", hw))
         fails.append("hardware metrics missing curve IDs: {}".format(sorted(missing)))
@@ -270,16 +269,16 @@ def _check_run_interface(fails: list[str]) -> None:
                   'heartbeat', '--deadline', 'delivery_evidence'):
         if token not in text and token != 'delivery_evidence':
             fails.append("run.py/capture integration missing {}".format(token))
-    fast = (PKG / "fast_path.py").read_text(encoding="utf-8")
+    fast = (PKG / "weaveprof/pipeline/core/fast_path.py").read_text(encoding="utf-8")
     if '"delivery_evidence": False' not in fast:
-        fails.append("fast_path.py must stamp delivery_evidence=false")
+        fails.append("weaveprof/pipeline/core/fast_path.py must stamp delivery_evidence=false")
     if "_execute_builds" not in fast or "cache_root" not in fast:
-        fails.append("fast_path.py must retain content-addressed build cache")
+        fails.append("weaveprof/pipeline/core/fast_path.py must retain content-addressed build cache")
     print("  CLI and fast-cache contract checked")
 
 
 def _check_manifest(fails: list[str]) -> None:
-    path = PKG / "4_validate/harness/MANIFEST.json"
+    path = PKG / "weaveprof/pipeline/validate/harness/MANIFEST.json"
     doc = _load(path, fails)
     files = doc.get("files")
     if not isinstance(files, dict) or not files:
@@ -289,8 +288,8 @@ def _check_manifest(fails: list[str]) -> None:
     if missing:
         fails.append("harness MANIFEST references missing files: {}".format(missing[:8]))
     stale = sorted(rel for rel in files if rel.startswith("_audit/") or
-                   "/".join(("knowledge", "knowledge")) in rel or
-                   "/".join(("4_validate", "4_validate")) in rel)
+                   "/".join(("knowledge", "configs")) in rel or
+                   "/".join(("weaveprof/pipeline/validate", "weaveprof/pipeline/validate")) in rel)
     if stale:
         fails.append("harness MANIFEST contains stale paths: {}".format(stale[:8]))
     print("  harness manifest: {} files checked".format(len(files)))
@@ -299,7 +298,7 @@ def _check_manifest(fails: list[str]) -> None:
 def _check_source_hygiene(fails: list[str]) -> None:
     junk, crlf, duplicate_paths, old_names = [], [], [], []
     duplicate_patterns = tuple("/".join((name, name)) for name in
-                               ("knowledge", "1_scan", "2_instrument", "3_capture", "4_validate", "tests"))
+                               ("knowledge", "weaveprof/pipeline/scan", "weaveprof/pipeline/instrument", "weaveprof/pipeline/capture", "weaveprof/pipeline/validate", "tests"))
     for path in sorted(PKG.rglob("*")):
         if not path.is_file():
             continue
@@ -322,7 +321,7 @@ def _check_source_hygiene(fails: list[str]) -> None:
         for needle in duplicate_patterns:
             if needle in text:
                 duplicate_paths.append("{} -> {}".format(rel, needle))
-        if (rel in {"SKILL.md", "run.py"} or rel.startswith("agents/")) and "fast-instrument" in text.lower():
+        if (rel in {"SKILL.md", "run.py"} or rel.startswith("configs/agents/")) and "fast-instrument" in text.lower():
             old_names.append(rel)
     if junk:
         fails.append("bytecode/cache residue: {}".format(junk[:10]))

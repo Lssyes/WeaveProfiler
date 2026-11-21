@@ -18,7 +18,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPTURE = ROOT / "3_capture" / "capture_nsys.py"
+CAPTURE = ROOT / "weaveprof/pipeline/capture" / "capture_nsys.py"
 
 
 def _load_capture():

@@ -41,14 +41,14 @@ CANONICAL_IDS = frozenset(EVENT_IDS)
 ALL_SEMANTIC_IDS = CANONICAL_IDS | {"unknown"}
 
 RECIPES = {
-    ("h20", "cuda_cpp"): ("nv/h20/cuda_cpp", "knowledge/recipes/nv/h20/cuda_cpp.json"),
-    ("h20", "triton"): ("nv/h20/triton", "knowledge/recipes/nv/h20/triton.json"),
-    ("h20", "cutedsl"): ("nv/h20/cutedsl", "knowledge/recipes/nv/h20/cutedsl.json"),
-    ("b300", "cuda_cpp"): ("nv/b300/cuda_cpp", "knowledge/recipes/nv/b300/cuda_cpp.json"),
-    ("b300", "triton"): ("nv/b300/triton", "knowledge/recipes/nv/b300/triton.json"),
-    ("b300", "cutedsl"): ("nv/b300/cutedsl", "knowledge/recipes/nv/b300/cutedsl.json"),
-    ("mi308x", "hip_cpp"): ("amd/mi308x/hip_cpp", "knowledge/recipes/amd/mi308x/hip_cpp.json"),
-    ("mi308x", "triton"): ("amd/mi308x/triton", "knowledge/recipes/amd/mi308x/triton.json"),
+    ("h20", "cuda_cpp"): ("nv/h20/cuda_cpp", "configs/recipes/nv/h20/cuda_cpp.json"),
+    ("h20", "triton"): ("nv/h20/triton", "configs/recipes/nv/h20/triton.json"),
+    ("h20", "cutedsl"): ("nv/h20/cutedsl", "configs/recipes/nv/h20/cutedsl.json"),
+    ("b300", "cuda_cpp"): ("nv/b300/cuda_cpp", "configs/recipes/nv/b300/cuda_cpp.json"),
+    ("b300", "triton"): ("nv/b300/triton", "configs/recipes/nv/b300/triton.json"),
+    ("b300", "cutedsl"): ("nv/b300/cutedsl", "configs/recipes/nv/b300/cutedsl.json"),
+    ("mi308x", "hip_cpp"): ("amd/mi308x/hip_cpp", "configs/recipes/amd/mi308x/hip_cpp.json"),
+    ("mi308x", "triton"): ("amd/mi308x/triton", "configs/recipes/amd/mi308x/triton.json"),
 }
 B300_LANGUAGES = ("cuda_cpp", "triton", "cutedsl")
 B300_PROFILES = {
@@ -56,10 +56,10 @@ B300_PROFILES = {
     "sm_103a": "b300_sm_103a.json",
 }
 LANGUAGE_PATTERN_FILES = (
-    "knowledge/languages/cuda_cpp/patterns.json",
-    "knowledge/languages/hip_cpp/patterns.json",
-    "knowledge/languages/triton/nvidia_patterns.json",
-    "knowledge/languages/triton/amd_patterns.json",
+    "configs/languages/cuda_cpp/patterns.json",
+    "configs/languages/hip_cpp/patterns.json",
+    "configs/languages/triton/nvidia_patterns.json",
+    "configs/languages/triton/amd_patterns.json",
 )
 TEXT_SUFFIXES = {
     ".py", ".cu", ".cuh", ".cpp", ".cc", ".h", ".hpp", ".md", ".json",
@@ -106,7 +106,7 @@ def _semantic_row(value: Any) -> str | None:
 
 def check_semantic_id_authority(failures: list[str]) -> None:
     """Check the canonical IDs and the fixed event-id/const mapping."""
-    relative = "knowledge/semantic_ids.json"
+    relative = "configs/semantic_ids.json"
     document = _load_json(relative, failures)
     if not isinstance(document, dict):
         return
@@ -198,7 +198,7 @@ def _matches_recipe_path(value: Any, expected: str) -> bool:
 
 def check_recipe_contracts(failures: list[str]) -> None:
     """Check all eight recipes, their index rows, and per-semantic parameters."""
-    index = _load_json("knowledge/recipes/index.json", failures)
+    index = _load_json("configs/recipes/index.json", failures)
     rows = _index_rows(index)
     route_keys = {
         (row.get("card"), row.get("language"))
@@ -425,7 +425,7 @@ def _b300_routes(row: dict[str, Any]) -> list[tuple[str, Any]]:
 
 def check_b300_exact_arch_routes(failures: list[str]) -> None:
     """Require two exact, separately named B300 profile routes per language."""
-    index = _load_json("knowledge/recipes/index.json", failures)
+    index = _load_json("configs/recipes/index.json", failures)
     rows = _index_rows(index)
     for language in B300_LANGUAGES:
         language_rows = [
@@ -444,12 +444,12 @@ def check_b300_exact_arch_routes(failures: list[str]) -> None:
                     continue
                 profile_text = str(profile).replace("\\", "/")
                 expected_name = B300_PROFILES[arch]
-                allowed = {expected_name, "knowledge/cards/" + expected_name}
+                allowed = {expected_name, "configs/cards/" + expected_name}
                 if profile_text not in allowed:
                     failures.append(
                         "B300 {} {} route points to {!r}; expected {!r} or {!r}".format(
                             language, arch, profile, expected_name,
-                            "knowledge/cards/" + expected_name,
+                            "configs/cards/" + expected_name,
                         )
                     )
                     continue
@@ -473,8 +473,8 @@ def check_b300_exact_arch_routes(failures: list[str]) -> None:
         if not isinstance(recipe, dict):
             continue
         expected_profiles = [
-            "knowledge/cards/" + B300_PROFILES["sm_100a"],
-            "knowledge/cards/" + B300_PROFILES["sm_103a"],
+            "configs/cards/" + B300_PROFILES["sm_100a"],
+            "configs/cards/" + B300_PROFILES["sm_103a"],
         ]
         if recipe.get("machine_profiles") != expected_profiles:
             failures.append("{} must retain both B300 machine profiles in order".format(
@@ -487,7 +487,7 @@ def check_b300_exact_arch_routes(failures: list[str]) -> None:
 
 
 def _example_marker_counts(failures: list[str]) -> dict[str, int]:
-    root = PKG / "knowledge" / "examples"
+    root = PKG / "examples"
     counts: dict[str, int] = {}
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
@@ -499,7 +499,7 @@ def _example_marker_counts(failures: list[str]) -> dict[str, int]:
         for match in SEMANTIC_MARKER.finditer(text):
             marker = match.group(1).rstrip(".,;:)]}`")
             relative = path.relative_to(PKG).as_posix()
-            group = relative.split("/")[2] if relative.startswith("knowledge/examples/") else ""
+            group = relative.split("/")[1] if relative.startswith("examples/") else ""
             counts[group] = counts.get(group, 0) + 1
             if marker not in ALL_SEMANTIC_IDS:
                 failures.append("{} has noncanonical SEMANTIC-ID {!r}".format(
@@ -510,7 +510,7 @@ def _example_marker_counts(failures: list[str]) -> dict[str, int]:
     for group in ("cuda_cpp", "cute_dsl", "triton", "instrumented"):
         if counts.get(group, 0) == 0:
             failures.append(
-                "knowledge/examples/{}/ has no SEMANTIC-ID markers; marker audit would be vacuous".format(
+                "examples/{}/ has no SEMANTIC-ID markers; marker audit would be vacuous".format(
                     group)
             )
     return counts
@@ -524,7 +524,7 @@ def check_example_semantic_ids(failures: list[str]) -> None:
 def check_b300_cutedsl_evidence(failures: list[str]) -> None:
     """Keep B300 CuTeDSL experimental and its examples architecture neutral."""
     allowed_status = {"unverified", "experimental_unverified"}
-    index = _load_json("knowledge/recipes/index.json", failures)
+    index = _load_json("configs/recipes/index.json", failures)
     rows = [
         row for row in _index_rows(index)
         if row.get("card") == "b300" and row.get("language") == "cutedsl"
@@ -554,7 +554,7 @@ def check_b300_cutedsl_evidence(failures: list[str]) -> None:
                 )
 
     arch_assignment = re.compile(r"\bARCH\s*=\s*(['\"])sm_90\1")
-    pattern_relative = "knowledge/languages/cutedsl/patterns.json"
+    pattern_relative = "configs/languages/cutedsl/patterns.json"
     pattern_doc = _load_json(pattern_relative, failures)
     if isinstance(pattern_doc, dict):
         for pattern in _list(pattern_doc.get("patterns")):
@@ -566,8 +566,8 @@ def check_b300_cutedsl_evidence(failures: list[str]) -> None:
                         pattern_relative, semantic_id)
                 )
 
-    for root in (PKG / "knowledge/examples/cute_dsl",
-                 PKG / "knowledge/examples/instrumented/cute_dsl"):
+    for root in (PKG / "examples/cute_dsl",
+                 PKG / "examples/instrumented/cute_dsl"):
         if not root.is_dir():
             continue
         for path in sorted(root.rglob("*.py")):
@@ -582,9 +582,9 @@ def check_b300_cutedsl_evidence(failures: list[str]) -> None:
 
 def _audit_documents() -> list[tuple[Path, str]]:
     paths = [PKG / "SKILL.md"]
-    knowledge = PKG / "knowledge"
-    if knowledge.is_dir():
-        paths.extend(sorted(knowledge.rglob("*.md")))
+    for folder in (PKG / "configs", PKG / "docs"):
+        if folder.is_dir():
+            paths.extend(sorted(folder.rglob("*.md")))
     result: list[tuple[Path, str]] = []
     seen: set[Path] = set()
     for path in paths:
@@ -707,7 +707,7 @@ def check_host_specific_paths(failures: list[str]) -> None:
 
 
 def _selection_schema_constant() -> str:
-    path = PKG / "2_instrument/generate_edits.py"
+    path = PKG / "weaveprof/pipeline/instrument/generate_edits.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -735,7 +735,7 @@ def check_selection_schema_id(failures: list[str]) -> None:
         failures.append("generate_edits.py SELECTION_SCHEMA cannot be read: {}".format(exc))
         return
 
-    relative = "knowledge/validation/schemas/scan-selection.schema.json"
+    relative = "configs/validation/schemas/scan-selection.schema.json"
     schema = _load_json(relative, failures)
     if not isinstance(schema, dict):
         return

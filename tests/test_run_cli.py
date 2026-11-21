@@ -16,7 +16,7 @@ from typing import Any, List, Optional, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / "run.py"
-SEMANTICS = ROOT / "semantics.py"
+SEMANTICS = ROOT / "weaveprof/pipeline/core/semantics.py"
 
 TEMPLATE_MODES = ("scan", "instrument", "capture", "validate", "check", "deliver", "gemm-probe")
 

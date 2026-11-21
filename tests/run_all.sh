@@ -319,7 +319,7 @@ skip_item() {
 PY_RUN=("$PY_LAUNCH" -I -B)
 
 # Knowledge base and canonical semantics.
-run_item "KB tests/validate_kb.py" "${PY_RUN[@]}" tests/validate_kb.py knowledge
+run_item "KB tests/validate_kb.py" "${PY_RUN[@]}" tests/validate_kb.py configs
 run_item "KB tests/semantic_kb_test.py" "${PY_RUN[@]}" tests/semantic_kb_test.py
 run_item "KB tests/test_code_patterns.py" "${PY_RUN[@]}" tests/test_code_patterns.py
 run_item "CONTRACT tests/test_contract_consistency.py" \
@@ -362,10 +362,10 @@ run_item "CAPTURE tests/metrics_window_check.py" \
   "${PY_RUN[@]}" tests/metrics_window_check.py
 run_item "DECODE tests/decode_roundtrip.py" \
   "${PY_RUN[@]}" tests/decode_roundtrip.py
-run_item "ALIGN 4_validate/tools/fi_align_nsys.py --selftest" \
-  "${PY_RUN[@]}" 4_validate/tools/fi_align_nsys.py --selftest
-run_item "GATE 4_validate/tools/fi_trace_gate.py --selftest" \
-  "${PY_RUN[@]}" 4_validate/tools/fi_trace_gate.py --selftest
+run_item "ALIGN weaveprof/pipeline/validate/tools/fi_align_nsys.py --selftest" \
+  "${PY_RUN[@]}" weaveprof/pipeline/validate/tools/fi_align_nsys.py --selftest
+run_item "GATE weaveprof/pipeline/validate/tools/fi_trace_gate.py --selftest" \
+  "${PY_RUN[@]}" weaveprof/pipeline/validate/tools/fi_trace_gate.py --selftest
 run_item "ANALYSIS tests/amd_c1_regression.py" \
   "${PY_RUN[@]}" tests/amd_c1_regression.py
 run_item "RECORDER tests/frontend_api_check.py" \
@@ -390,11 +390,11 @@ run_item "HARNESS tests/test_deterministic_harness.py" \
 run_item "HARNESS tests/test_fidelity_gates_and_causal.py" \
   "${PY_RUN[@]}" tests/test_fidelity_gates_and_causal.py
 run_item "HARNESS tests/test_mcp_hook_installer.py" \
-  "${PY_RUN[@]}" -m unittest tests/test_mcp_hook_installer.py
+  "${PY_RUN[@]}" tests/test_mcp_hook_installer.py
 run_item "HARNESS tests/test_wp_megakernel.py" \
-  "${PY_RUN[@]}" -m unittest tests/test_wp_megakernel.py
-run_item "HARNESS 4_validate/harness/selftest.py" \
-  "${PY_RUN[@]}" 4_validate/harness/selftest.py
+  "${PY_RUN[@]}" tests/test_wp_megakernel.py
+run_item "HARNESS weaveprof/pipeline/validate/harness/selftest.py" \
+  "${PY_RUN[@]}" weaveprof/pipeline/validate/harness/selftest.py
 
 # Package contract intentionally runs last, after every test has had a chance
 # to leave source/cache residue.

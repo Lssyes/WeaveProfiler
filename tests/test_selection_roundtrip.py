@@ -16,9 +16,9 @@ from typing import Any, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GENERATOR_PATH = ROOT / "2_instrument" / "generate_edits.py"
+GENERATOR_PATH = ROOT / "weaveprof/pipeline/instrument" / "generate_edits.py"
 SCHEMA_PATH = (
-    ROOT / "knowledge" / "validation" / "schemas" / "scan-selection.schema.json"
+    ROOT / "configs" / "validation" / "schemas" / "scan-selection.schema.json"
 )
 SPEC = importlib.util.spec_from_file_location(
     "weaveprofiler_selection_roundtrip_generate_edits", GENERATOR_PATH

@@ -1,0 +1,597 @@
+{
+  "schema": "weaveprofiler-code-patterns/v1",
+  "version": 1,
+  "language": "cutedsl",
+  "backend": "nv",
+  "targets": [
+    "h20",
+    "b300"
+  ],
+  "evidence_status": "reference",
+  "semantic_policy": {
+    "canonical_source": "configs/semantic_ids.json",
+    "semantic_id_is_display_name": true,
+    "expected_trace_name_is_semantic_id": true,
+    "unknown_fails_closed": true,
+    "source_marker_is_hint_only": true
+  },
+  "record_contract": {
+    "record_layout": "torch int64 pair (timestamp, (aux << 32) | tag) serialized as 16-byte FILITE02 records",
+    "event_id_range": "1..4095; 0 is the empty-record sentinel",
+    "levels": {
+      "0": "off",
+      "1": "entry_only",
+      "2": "full"
+    },
+    "clock": "CuTeDSL %globaltimer nanoseconds; explicit timer_hz=1e9 in dump meta"
+  },
+  "required_semantic_ids": [
+    "gemm",
+    "attention",
+    "softmax",
+    "reduction",
+    "moe",
+    "convolution",
+    "megakernel",
+    "load",
+    "wait",
+    "mma",
+    "compute",
+    "epilogue",
+    "store",
+    "barrier",
+    "dispatch",
+    "communication"
+  ],
+  "conventions": {
+    "compiler": "CuTeDSL/CUTLASS targeting sm_90 or the explicit B300 architecture sm_100a/sm_103a",
+    "collector": "nsys plus GPU metrics; dump raw CuTeDSL records before Perfetto conversion",
+    "event_ids": "Use event_id and event_id_const exactly as declared in configs/semantic_ids.json; never 0 and never assign a language-local sequence.",
+    "levels": "Measure off, entry-only, and full builds so instrumentation overhead is separable.",
+    "scope_selection": "Use grid_sync and operator boundaries to choose task versus phase; source keywords alone do not decide record_scope.",
+    "name_policy": "display_name and trace name are the semantic_id; aliases are match-only and never rendered.",
+    "evidence_policy": "This file is a reference library. Only a target-card hard run can raise evidence_status to measured.",
+    "safety": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone."
+  },
+  "patterns": [
+    {
+      "semantic_id": "gemm",
+      "display_name": "gemm",
+      "evidence_status": "reference",
+      "source_cues": [
+        "gemm",
+        "matmul",
+        "cute.gemm",
+        "mma atom",
+        "accumulator",
+        "GEMM"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_GEMM = Int32(10)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef gemm_segment(records, overflow, mma_atom, accumulator, tensor_a, tensor_b, gmem_c, store_atom):\n    ctx = fi_open(records, overflow, EV_GEMM, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_GEMM, aux)\n    cute.gemm(mma_atom, accumulator, tensor_a, tensor_b, accumulator)\n    ctx = fi_e(ctx, EV_GEMM, aux)\n    cute.copy(store_atom, accumulator, gmem_c)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_GEMM, aux), META\n",
+      "event_boundaries": {
+        "begin": "Immediately before the first A/B tile load for the selected GEMM segment.",
+        "end": "After the final accumulator update and asynchronous MMA completion wait; close the operator task after the final C write."
+      },
+      "record_scope": "task when the whole grid_sync-separated segment is GEMM; phase only when nested inside a larger operator.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "gemm",
+      "validation": [
+        "Compare every C element for all M, N, K shapes against a reference implementation.",
+        "Check C shape, dtype, element count, and NaN/Inf policy.",
+        "Require a gemm task and nested mma spans to stay inside it.",
+        "Cover tails and non-multiple tiles."
+      ]
+    },
+    {
+      "semantic_id": "attention",
+      "display_name": "attention",
+      "evidence_status": "reference",
+      "source_cues": [
+        "attention",
+        "flash attention",
+        "qk",
+        "softmax",
+        "cute.gemm",
+        "fmha"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_ATTENTION = Int32(11)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef attention_segment(records, overflow, qk_atom, pv_atom, q, k, v, scores, out, gmem_out, store_atom):\n    ctx = fi_open(records, overflow, EV_ATTENTION, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_ATTENTION, aux)\n    cute.gemm(qk_atom, scores, q, k, scores)\n    scores = cute.math.exp2(scores - scores.reduce(cute.ReductionOp.MAX, -Float32.inf, 0), fastmath=True)\n    scores = scores * cute.arch.rcp_approx(scores.reduce(cute.ReductionOp.ADD, Float32.zero, 0))\n    cute.gemm(pv_atom, out, scores, v, out)\n    cute.copy(store_atom, out, gmem_out)\n    ctx = fi_e(ctx, EV_ATTENTION, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_ATTENTION, aux), META\n",
+      "event_boundaries": {
+        "begin": "Before Q staging or the first QK score work for the selected attention segment.",
+        "end": "After the final attention output and store completion are visible."
+      },
+      "record_scope": "task for one complete grid_sync-separated attention segment; qk, softmax, pv, and store are phases inside it.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "attention",
+      "validation": [
+        "Compare every output element against a reference attention implementation.",
+        "Exercise causal and non-causal masks and key tails.",
+        "Require attention to be the visible task and phases to remain nested.",
+        "Verify phases-off still emits attention."
+      ]
+    },
+    {
+      "semantic_id": "softmax",
+      "display_name": "softmax",
+      "evidence_status": "reference",
+      "source_cues": [
+        "softmax",
+        "reduce max",
+        "exp2",
+        "denominator",
+        "online softmax"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_SOFTMAX = Int32(16)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef softmax_segment(records, overflow, fragment):\n    ctx = fi_open(records, overflow, EV_SOFTMAX, Int32(8), fi_level=2, fi_gran=GRAN)\n    values = fragment.load().to(Float32)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_SOFTMAX, aux)\n    row_max = values.reduce(cute.ReductionOp.MAX, -Float32.inf, 0)\n    numerator = cute.math.exp2(values - row_max, fastmath=True)\n    denominator = numerator.reduce(cute.ReductionOp.ADD, Float32.zero, 0)\n    probabilities = numerator * cute.arch.rcp_approx(denominator)\n    ctx = fi_e(ctx, EV_SOFTMAX, aux)\n    fragment.store(probabilities)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_SOFTMAX, aux), META\n",
+      "event_boundaries": {
+        "begin": "Before the row maximum reduction or the first online-softmax update.",
+        "end": "After normalized probabilities are materialized and visible to the consumer."
+      },
+      "record_scope": "phase inside its enclosing operator; task only when a complete grid_sync segment is softmax.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "softmax",
+      "validation": [
+        "Compare all rows and tails against a stable reference softmax.",
+        "Reject NaN/Inf for finite inputs and verify the max-shift path.",
+        "Require one paired softmax span per selected row or segment.",
+        "Verify the consumer starts after the span ends."
+      ]
+    },
+    {
+      "semantic_id": "reduction",
+      "display_name": "reduction",
+      "evidence_status": "reference",
+      "source_cues": [
+        "reduction",
+        "fragment.reduce",
+        "ReductionOp.ADD",
+        "row sum",
+        "归约"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_REDUCTION = Int32(12)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef reduction_segment(records, overflow, fragment):\n    ctx = fi_open(records, overflow, EV_REDUCTION, Int32(8), fi_level=2, fi_gran=GRAN)\n    values = fragment.load().to(Float32)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_REDUCTION, aux)\n    result = values.reduce(cute.ReductionOp.ADD, Float32.zero, 0)\n    ctx = fi_e(ctx, EV_REDUCTION, aux)\n    ctx = fi_close(ctx)\n    return ctx, result, pack_record(EV_REDUCTION, aux), META\n",
+      "event_boundaries": {
+        "begin": "Before the first combine instruction for the selected reduction.",
+        "end": "After the last cross-lane, cross-wave, or cross-CTA combine and result visibility."
+      },
+      "record_scope": "phase for a fragment/warp/CTA reduction inside an operator; task only when the reduction is the complete segment.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "reduction",
+      "validation": [
+        "Compare every reduced value and output shape against the reference result.",
+        "Cover full and partial fragments, warps, and CTAs.",
+        "Verify reduction scope metadata matches the fragment or synchronization scope.",
+        "Check that no lane closes before peer lanes finish."
+      ]
+    },
+    {
+      "semantic_id": "moe",
+      "display_name": "moe",
+      "evidence_status": "reference",
+      "source_cues": [
+        "moe",
+        "expert",
+        "routing",
+        "cute.gemm",
+        "gate",
+        "专家网络"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_MOE = Int32(13)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef moe_segment(records, overflow, expert, mma_atom, accumulator, x, weight0, weight1):\n    ctx = fi_open(records, overflow, EV_MOE, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = expert\n    ctx = fi_b(ctx, EV_MOE, aux)\n    if expert == Int32(0):\n        cute.gemm(mma_atom, accumulator, x, weight0, accumulator)\n    else:\n        cute.gemm(mma_atom, accumulator, x, weight1, accumulator)\n    ctx = fi_e(ctx, EV_MOE, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_MOE, aux), META\n",
+      "event_boundaries": {
+        "begin": "Before routing logits or expert selection for the selected token tile.",
+        "end": "After the selected expert output and combine/write-back are visible."
+      },
+      "record_scope": "task for the routing plus selected-expert segment; phase when routing is internal to a larger fused operator.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "moe",
+      "validation": [
+        "Compare expert indices, routing weights, and final outputs for every token.",
+        "Verify no token is dropped or duplicated across experts.",
+        "Require moe to enclose all selected experts for the tile.",
+        "Check tail tokens and uneven expert loads."
+      ]
+    },
+    {
+      "semantic_id": "convolution",
+      "display_name": "convolution",
+      "evidence_status": "reference",
+      "source_cues": [
+        "convolution",
+        "im2col",
+        "implicit gemm",
+        "cute.gemm",
+        "filter",
+        "卷积"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_CONVOLUTION = Int32(14)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef convolution_segment(records, overflow, mma_atom, accumulator, im2col, weight):\n    ctx = fi_open(records, overflow, EV_CONVOLUTION, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_CONVOLUTION, aux)\n    cute.gemm(mma_atom, accumulator, im2col, weight, accumulator)\n    ctx = fi_e(ctx, EV_CONVOLUTION, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_CONVOLUTION, aux), META\n",
+      "event_boundaries": {
+        "begin": "Before the first input patch load for the selected output tile.",
+        "end": "After the final accumulation and output write or async store completion."
+      },
+      "record_scope": "task for a complete convolution or implicit-GEMM segment; phase only when nested in a fused block.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "convolution",
+      "validation": [
+        "Compare every output element for padding, stride, and dilation variants.",
+        "Check shape, dtype, and element count.",
+        "Require convolution naming even when lowered as implicit GEMM.",
+        "Cover border tiles and channel tails."
+      ]
+    },
+    {
+      "semantic_id": "megakernel",
+      "display_name": "megakernel",
+      "evidence_status": "reference",
+      "source_cues": [
+        "megakernel",
+        "persistent kernel",
+        "grid_sync",
+        "segment",
+        "大核"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_MEGAKERNEL = Int32(15)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef persistent_segment(records, overflow, lock_ptr, tidx, grid_sync, mma_atom, accumulator, a, b):\n    ctx = fi_open(records, overflow, EV_MEGAKERNEL, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_MEGAKERNEL, aux)\n    for boundary in range(2):\n        cute.gemm(mma_atom, accumulator, a, b, accumulator)\n        grid_sync(lock_ptr, tidx, boundary)\n    ctx = fi_e(ctx, EV_MEGAKERNEL, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_MEGAKERNEL, aux), META\n",
+      "event_boundaries": {
+        "begin": "After capture setup and before the persistent scheduler or first segment work.",
+        "end": "After the final persistent segment retires and its output visibility wait completes."
+      },
+      "record_scope": "one whole persistent launch or one grid_sync-separated segment; never every inner iteration.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "megakernel",
+      "validation": [
+        "Verify every grid_sync-separated segment has its own canonical operator span.",
+        "Compare outputs of all segments, not only the first or last.",
+        "Keep grid_sync barriers out of coverage while retaining their records.",
+        "Check one launch and no silently missing segments."
+      ]
+    },
+    {
+      "semantic_id": "load",
+      "display_name": "load",
+      "evidence_status": "reference",
+      "source_cues": [
+        "load",
+        "cute.copy",
+        "cp.async",
+        "tma",
+        "smem",
+        "装载"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_LOAD = Int32(1)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef load_segment(records, overflow, tiled_copy, gmem_src, smem_dst, barrier_ptr):\n    ctx = fi_open(records, overflow, EV_LOAD, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_LOAD, aux)\n    cute.copy(tiled_copy, gmem_src, smem_dst, tma_bar_ptr=barrier_ptr)\n    cute.arch.cp_async_commit_group()\n    cute.arch.cp_async_wait_group(0)\n    ctx = fi_e(ctx, EV_LOAD, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_LOAD, aux), META\n",
+      "event_boundaries": {
+        "begin": "Immediately before the load or async-copy issue for the selected tile.",
+        "end": "After synchronous value availability or after the matching async wait/barrier returns."
+      },
+      "record_scope": "phase inside the consuming operator; never the only task for a grid_sync-separated segment.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "load",
+      "validation": [
+        "Verify loaded values through downstream computation for every tile and tail.",
+        "Confirm async load end follows the wait rather than the issue.",
+        "Check load buffer capacity and overflow separately from event count.",
+        "Keep the enclosing operator task when phases are removed."
+      ]
+    },
+    {
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "evidence_status": "reference",
+      "source_cues": [
+        "wait",
+        "cp_async_wait_group",
+        "mbarrier",
+        "dependency",
+        "等待"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_WAIT = Int32(2)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef wait_segment(records, overflow):\n    ctx = fi_open(records, overflow, EV_WAIT, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_WAIT, aux)\n    cute.arch.cp_async_wait_group(0)\n    ctx = fi_e(ctx, EV_WAIT, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_WAIT, aux), META\n",
+      "event_boundaries": {
+        "begin": "Immediately before polling or the wait instruction for the selected dependency.",
+        "end": "After the condition is true and the required fence or completion check returns."
+      },
+      "record_scope": "phase describing dependency latency; it is not a business task.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "wait",
+      "validation": [
+        "Verify the consumer observes the producer result after the wait.",
+        "Check begin/end brackets the actual wait and no interval is negative.",
+        "Compare wait totals with hardware stall evidence when available.",
+        "Never replace the enclosing operator task with a wait span."
+      ]
+    },
+    {
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "evidence_status": "reference",
+      "source_cues": [
+        "mma",
+        "cute.gemm",
+        "wgmma",
+        "tcgen05",
+        "tensor core",
+        "张量核"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_MMA = Int32(3)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef mma_segment(records, overflow, mma_atom, accumulator, tensor_a, tensor_b):\n    ctx = fi_open(records, overflow, EV_MMA, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_MMA, aux)\n    cute.gemm(mma_atom, accumulator, tensor_a, tensor_b, accumulator)\n    ctx = fi_e(ctx, EV_MMA, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_MMA, aux), META\n",
+      "event_boundaries": {
+        "begin": "Immediately before the tensor-core instruction or async WGMMA/tcgen05 issue.",
+        "end": "After the synchronous instruction retires or the matching async completion wait returns."
+      },
+      "record_scope": "phase inside a GEMM, attention, convolution, or MoE task; never the only task when a larger operator encloses it.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "mma",
+      "validation": [
+        "Compare the full matrix or attention output against a reference result.",
+        "Confirm the selected architecture lowers to the intended tensor-core path.",
+        "Require mma to be nested inside a canonical operator task.",
+        "Check asynchronous wait pairing and overlap accounting."
+      ]
+    },
+    {
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "evidence_status": "reference",
+      "source_cues": [
+        "compute",
+        "exp2",
+        "fma",
+        "elementwise",
+        "type conversion",
+        "计算"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_COMPUTE = Int32(4)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef compute_segment(records, overflow, fragment, scale, bias):\n    ctx = fi_open(records, overflow, EV_COMPUTE, Int32(8), fi_level=2, fi_gran=GRAN)\n    values = fragment.load().to(Float32)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_COMPUTE, aux)\n    output = cute.math.exp2(values * scale) + bias\n    ctx = fi_e(ctx, EV_COMPUTE, aux)\n    fragment.store(output)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_COMPUTE, aux), META\n",
+      "event_boundaries": {
+        "begin": "Before the first scalar or vector arithmetic instruction in the selected region.",
+        "end": "After the last arithmetic result is materialized for the next stage."
+      },
+      "record_scope": "phase for non-MMA arithmetic inside an operator; task only when arithmetic alone is the complete segment.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "compute",
+      "validation": [
+        "Compare every computed element and dtype against the reference expression.",
+        "Check masks, tails, and finite-value behavior.",
+        "Keep compute distinct from mma when tensor-core work is present.",
+        "Confirm the span excludes unrelated stores and barriers."
+      ]
+    },
+    {
+      "semantic_id": "epilogue",
+      "display_name": "epilogue",
+      "evidence_status": "reference",
+      "source_cues": [
+        "epilogue",
+        "accumulator",
+        "bias",
+        "convert",
+        "activation",
+        "收尾"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_EPILOGUE = Int32(5)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef epilogue_segment(records, overflow, accumulator, bias):\n    ctx = fi_open(records, overflow, EV_EPILOGUE, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_EPILOGUE, aux)\n    converted = accumulator.load().to(Float16)\n    output = converted + bias\n    ctx = fi_e(ctx, EV_EPILOGUE, aux)\n    ctx = fi_close(ctx)\n    return ctx, output, pack_record(EV_EPILOGUE, aux), META\n",
+      "event_boundaries": {
+        "begin": "After the main MMA loop and async MMA wait, before accumulator readback or conversion.",
+        "end": "After the last conversion, bias, activation, or rescale is ready for the store."
+      },
+      "record_scope": "phase after the main MMA loop and before the store; it is not a task unless separately bounded by grid_sync.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "epilogue",
+      "validation": [
+        "Compare post-epilogue output for every tile and dtype.",
+        "Exercise bias, activation, and dtype-conversion combinations.",
+        "Require epilogue after mma and before store on the same lane.",
+        "Reject output written from pre-epilogue accumulators."
+      ]
+    },
+    {
+      "semantic_id": "store",
+      "display_name": "store",
+      "evidence_status": "reference",
+      "source_cues": [
+        "store",
+        "cute.copy",
+        "global write",
+        "tma store",
+        "writeback",
+        "写回"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_STORE = Int32(6)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef store_segment(records, overflow, tiled_copy, register_src, gmem_dst):\n    ctx = fi_open(records, overflow, EV_STORE, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_STORE, aux)\n    cute.copy(tiled_copy, register_src, gmem_dst)\n    ctx = fi_e(ctx, EV_STORE, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_STORE, aux), META\n",
+      "event_boundaries": {
+        "begin": "Immediately before the store instruction or async TMA store issue.",
+        "end": "After synchronous visibility or after the async TMA store wait_group.read returns."
+      },
+      "record_scope": "phase for operator write-back; task only for a standalone grid_sync-separated store segment.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "store",
+      "validation": [
+        "Read every destination element and compare it with the reference output.",
+        "Check masks, bounds, shape, dtype, and element count.",
+        "Confirm async store completion follows its wait.",
+        "Reject a store without an enclosing operator task."
+      ]
+    },
+    {
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "evidence_status": "reference",
+      "source_cues": [
+        "barrier",
+        "cute.arch.barrier",
+        "cp_async_wait_group",
+        "grid_sync",
+        "同步"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_BARRIER = Int32(7)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef barrier_segment(records, overflow):\n    ctx = fi_open(records, overflow, EV_BARRIER, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = Int32(0)\n    ctx = fi_b(ctx, EV_BARRIER, aux)\n    cute.arch.cp_async_commit_group()\n    cute.arch.cp_async_wait_group(0)\n    cute.arch.barrier()\n    ctx = fi_e(ctx, EV_BARRIER, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_BARRIER, aux), META\n",
+      "event_boundaries": {
+        "begin": "Immediately before the barrier arrive/wait sequence.",
+        "end": "After all participants pass and the associated fence visibility holds."
+      },
+      "record_scope": "phase for CTA/warp handoff; grid_sync boundaries are recorded but ignored by the coverage gate.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "barrier",
+      "validation": [
+        "Check the kernel completes without deadlock for full and partial participation cases.",
+        "Verify the barrier span encloses the complete handoff.",
+        "Treat grid_sync boundary spans as ignored when the ABI says so.",
+        "Confirm instrumentation did not optimize out the barrier."
+      ]
+    },
+    {
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "evidence_status": "reference",
+      "source_cues": [
+        "dispatch",
+        "atomic_add",
+        "work item",
+        "routing",
+        "task queue",
+        "分发"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_DISPATCH = Int32(8)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef dispatch_segment(records, overflow, ticket, assigned):\n    tidx, _, _ = cute.arch.thread_idx()\n    ctx = fi_open(records, overflow, EV_DISPATCH, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = tidx\n    ctx = fi_b(ctx, EV_DISPATCH, aux)\n    work_item = cute.arch.atomic_add(ticket.iterator, Int32(1))\n    assigned[tidx] = work_item\n    ctx = fi_e(ctx, EV_DISPATCH, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_DISPATCH, aux), META\n",
+      "event_boundaries": {
+        "begin": "Immediately before the ticket, work-item, token, or expert assignment operation.",
+        "end": "After the assignment is visible and the selected work item is known to consumers."
+      },
+      "record_scope": "phase for work acquisition, or task when dispatch is a grid_sync-separated segment.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "dispatch",
+      "validation": [
+        "Verify each work item or token is assigned exactly once.",
+        "Compare assigned ids and consumer outputs against the reference schedule.",
+        "Check atomic visibility and grid-size edge cases.",
+        "Keep dispatch distinct from the compute it enables."
+      ]
+    },
+    {
+      "semantic_id": "communication",
+      "display_name": "communication",
+      "evidence_status": "reference",
+      "source_cues": [
+        "communication",
+        "allreduce",
+        "peer counter",
+        "rdma",
+        "rank",
+        "通信"
+      ],
+      "source_example": "import os\nfrom cutlass import Float16, Float32, Int32, Int64, cute\nfrom fi_cute import fi_open, fi_b, fi_e, fi_close\n\nEV_COMMUNICATION = Int32(9)\nARCH = os.environ[\"WEAVEPROFILER_ARCH\"]  # sm_90, sm_100a, or sm_103a\nBACKEND = \"cutedsl_nv\"\nGRAN = 0  # 0=warp lane 0; 1=linear CTA thread 0\nMETA = {\"arch\": ARCH, \"backend\": BACKEND, \"gran\": \"warp\" if GRAN == 0 else \"cta\"}\n\n@cute.jit\ndef pack_record(tag: Int32, aux: Int32) -> Int64:\n    return (Int64(aux) << 32) | (Int64(tag) & Int64(0xFFFFFFFF))\n\n@cute.jit\ndef communication_segment(records, overflow, value, peer_value, peer_ready, rank, num_ranks):\n    ctx = fi_open(records, overflow, EV_COMMUNICATION, Int32(8), fi_level=2, fi_gran=GRAN)\n    aux = rank\n    ctx = fi_b(ctx, EV_COMMUNICATION, aux)\n    local = value[rank]\n    peer_value[rank] = local\n    cute.arch.atomic_add(peer_ready.iterator, Int32(1))\n    total = Float32.zero\n    for peer in range(num_ranks):\n        while peer_ready[peer] < Int32(num_ranks):\n            pass\n        total = total + peer_value[peer]\n    value[rank] = total\n    ctx = fi_e(ctx, EV_COMMUNICATION, aux)\n    ctx = fi_close(ctx)\n    return ctx, pack_record(EV_COMMUNICATION, aux), META\n",
+      "event_boundaries": {
+        "begin": "Before the first peer publish, collective issue, or communication wait for the selected rank group.",
+        "end": "After the local collective result is visible and all required completion waits return."
+      },
+      "record_scope": "task for a collective or peer-transfer segment; phase when embedded in a larger communication-compute segment.",
+      "writer_rule": "CuTeDSL uses value-style recording: every fi_open/fi_b/fi_e/fi_m/fi_close call returns an updated context and the caller must assign it. With FI_GRAN=0 only lane 0 of each physical warp writes. With FI_GRAN=1 only the CTA linear thread 0 writes; for a multidimensional block compute tx + BLOCK_X * (ty + BLOCK_Y * tz) and pass that predicate to fi_open_by. Checking only threadIdx.x is invalid.",
+      "buffer_rule": "Pack each 64-bit record field as (aux << 32) | tag so the lower 32 bits stay the tag and no unsigned wrap changes event ids. Check slot < n_slots and count < cap before every write, mask the tag to 0x0FFF, flag lane-full and slot-out-of-range overflow, and fail delivery on overflow. Dump meta must explicitly include arch, backend, gran=warp|cta, card, and timer_hz=1e9; never infer AMD from timer_hz alone.",
+      "language_notes": [
+        "CuTeDSL is value-style: fi_b/fi_e return a new FiCtx and dropping the returned context silently loses records; device helpers lower via LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer with cute.arch.barrier() brackets around cute.gemm (measured on B300 sm_103a at 85.20 TFLOPS / 403.41 us, 526,336 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1).",
+        "Record storage packs tag and aux as (aux << 32) | tag; the decoder must split the low tag and high aux fields before pairing events.",
+        "Set arch/backend/gran explicitly in dump meta: H20 uses sm_90, while B300 must be sm_100a or sm_103a and may not be collapsed to one architecture.",
+        "FI_GRAN=0 records one lane per warp; FI_GRAN=1 records one CTA. Use linear thread id for CTA scope and never assume a 1-D block when threadIdx.x == 0 is used as the predicate."
+      ],
+      "expected_trace_name": "communication",
+      "validation": [
+        "Compare collective output on every rank and check participation counts.",
+        "Require NIC/RDMA/fabric evidence for cross-host claims; NVLink/XGMI alone is insufficient.",
+        "Check rank arrival, release, timeout, and cancellation handling.",
+        "Record receive/transmit utilization as supporting data without inventing missing values."
+      ]
+    }
+  ]
+}

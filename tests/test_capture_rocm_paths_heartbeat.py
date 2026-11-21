@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPTURE_DIR = ROOT / "3_capture"
+CAPTURE_DIR = ROOT / "weaveprof/pipeline/capture"
 for path in (ROOT, CAPTURE_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))

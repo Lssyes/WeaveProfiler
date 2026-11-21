@@ -11,17 +11,17 @@ WeaveProfiler is a portable agent skill and deterministic Python backend (`weave
 
 WeaveProfiler couples two modules in an iterative verification loop without modifying user kernel files or caller signatures:
 
-1. **Knowledge-Guided Stage Identifier (`1_scan/llm_probe_placer.py` + Warp-Level Exemplar Knowledge Base in `knowledge/`)**:
-   - The LLM-based **Stage Identifier** (`wp.identify`, alias `wp.locate`) has **read-only** access to the target kernel source and consults a **Warp-Level Exemplar Knowledge Base** across `knowledge/languages/{cuda_cpp,hip_cpp,triton,cutedsl}/`, `knowledge/cards/`, and `knowledge/operators/operators.json`:
+1. **Knowledge-Guided Stage Identifier (`weaveprof/pipeline/scan/llm_probe_placer.py` + Warp-Level Exemplar Knowledge Base in `configs/`)**:
+   - The LLM-based **Stage Identifier** (`wp.identify`, alias `wp.locate`) has **read-only** access to the target kernel source and consults a **Warp-Level Exemplar Knowledge Base** across `configs/languages/{cuda_cpp,hip_cpp,triton,cutedsl}/`, `configs/cards/`, and `configs/operators/operators.json`:
      - **Per-Warp Action Exemplars**: Bracket warp-level actions (`load`, `store`, `mma`/`wgmma`/`tcgen05`/`mfma`/`tl.dot`/`cute.gemm`, barrier waits strictly outside polling spin loops, and cross-GPU `pull`/`scatter`).
      - **Cross-Warp & Multi-Slot Split-Endpoint Pairing**: Pair asynchronous producer DMA issue (`begin` on DMA role) with consumer barrier wait return (`end` on Math role), or same-warp multi-slot async groups (`wgmma` / `cp.async`), via an arbitrary dynamic pipeline `slot` expression (e.g., `"k%4"` or `"stage"`).
    - Outputs `<run>/probe.json` declaring intra-CTA warp `roles` and stage `probes` (`id`, `begin: {role, line}`, `end: {role, line}`, optional `slot`).
 
-2. **Deterministic Trace Verifier (`weaveprof/` + `2_instrument/` + `4_validate/`)**:
-   - **Call-Stack-Intact Probe Injection (`2_instrument/rule_engine.py`)**: Builds isolated baseline (`L0`, cached across iterations in `_l0_cache`) and instrumented (`L_inst`) copies in a shadow workspace (`weaveprof/workspace.py`) via language-native mechanisms:
-     - *(a) CUDA C++ & HIP C++*: Declares a translation-unit-local `__device__` struct (`fi_g` / `wp_g`) bound from the host via `cudaMemcpyToSymbol` / `hipMemcpyToSymbol` (`2_instrument/recorders/cuda_cpp/wp_lite.cuh` & `2_instrument/recorders/hip_cpp/wp_lite_hip.h`), where thread 0 per warp writes 16-byte events via an RAII register cursor (`FiScope` / `WpScope`) without atomic contention.
-     - *(b) Triton & CuTeDSL*: Because Python DSLs lack mutable device globals, `2_instrument/rule_engine.py` AST-clones the kernel with trailing defaulted buffer arguments (`_fi_rec_ptr=None, _fi_ovf_ptr=None` with `do_not_specialize`, stripping `@triton.autotune` from `_fi_inst_` so `_WpTritonProxy` reuses `L0`'s winning `best_config` without `do_bench` buffer overflow; and threading `_fi_rec=None, _fi_ovf=None` through two-tier `@cute.jit` host launchers into `@cute.kernel` via `_WpCuteProxy` / `_WpCuteDescriptor`).
-   - **Two-Step Software-Hardware Timeline Alignment (`4_validate/tools/fi_merge_perfetto.py`)**: Maps per-warp events onto a chip-wide nanosecond axis (`%globaltimer` on NVIDIA; `s_memrealtime` 100 MHz OPEN/CLOSE anchors calibrating `s_memtime` on AMD MI308X), then rigidly shifts software events into the external hardware profiler window (`[T_start, T_end]` from `nsys` or `rocprof-sys` / `rocprofv3`) via $\Delta T = T_{\text{start}} - t_0$ with non-negative `1–4 us` boundary slack verification, exporting native Perfetto TrackEvent protobuf (`.perfetto-trace` via `4_validate/tools/fi_perfetto_proto.py`).
+2. **Deterministic Trace Verifier (`weaveprof/` + `weaveprof/pipeline/instrument/` + `weaveprof/pipeline/validate/`)**:
+   - **Call-Stack-Intact Probe Injection (`weaveprof/pipeline/instrument/rule_engine.py`)**: Builds isolated baseline (`L0`, cached across iterations in `_l0_cache`) and instrumented (`L_inst`) copies in a shadow workspace (`weaveprof/workspace.py`) via language-native mechanisms:
+     - *(a) CUDA C++ & HIP C++*: Declares a translation-unit-local `__device__` struct (`fi_g` / `wp_g`) bound from the host via `cudaMemcpyToSymbol` / `hipMemcpyToSymbol` (`recorders/cuda_cpp/wp_lite.cuh` & `recorders/hip_cpp/wp_lite_hip.h`), where thread 0 per warp writes 16-byte events via an RAII register cursor (`FiScope` / `WpScope`) without atomic contention.
+     - *(b) Triton & CuTeDSL*: Because Python DSLs lack mutable device globals, `weaveprof/pipeline/instrument/rule_engine.py` AST-clones the kernel with trailing defaulted buffer arguments (`_fi_rec_ptr=None, _fi_ovf_ptr=None` with `do_not_specialize`, stripping `@triton.autotune` from `_fi_inst_` so `_WpTritonProxy` reuses `L0`'s winning `best_config` without `do_bench` buffer overflow; and threading `_fi_rec=None, _fi_ovf=None` through two-tier `@cute.jit` host launchers into `@cute.kernel` via `_WpCuteProxy` / `_WpCuteDescriptor`).
+   - **Two-Step Software-Hardware Timeline Alignment (`weaveprof/pipeline/validate/tools/fi_merge_perfetto.py`)**: Maps per-warp events onto a chip-wide nanosecond axis (`%globaltimer` on NVIDIA; `s_memrealtime` 100 MHz OPEN/CLOSE anchors calibrating `s_memtime` on AMD MI308X), then rigidly shifts software events into the external hardware profiler window (`[T_start, T_end]` from `nsys` or `rocprof-sys` / `rocprofv3`) via $\Delta T = T_{\text{start}} - t_0$ with non-negative `1–4 us` boundary slack verification, exporting native Perfetto TrackEvent protobuf (`.perfetto-trace` via `weaveprof/pipeline/validate/tools/fi_perfetto_proto.py`).
    - **Four Verification Criteria + Product-Level Hard Gates (`weaveprof/backend.py` + `weaveprof/preview.py`)**:
      1. *Assembly Check (`assembly`)*: Inspects compiled machine instructions (NVIDIA SASS / AMD CDNA3 ISA) and resource metadata to bound the instruction order-change ratio `order_change_ratio = 1 - LCS(I_0, I_inst) / M_bag`, preserve main-loop core instructions, prevent extra shared-memory usage (`extra_smem_bytes <= 0`), and ensure local-memory stack spills do not increase (`delta_spill_bytes <= 0`).
      2. *Output Check (`output`)*: Exact bitwise output tensor equality against `L0` on identical inputs.
@@ -57,7 +57,7 @@ Always follow these verified rules when capturing software + hardware timelines 
 2. **Exact SQLite/Perfetto Counter Extraction (`trace_processor_shell`)**:
    - Query the warm dispatch slice from `slice JOIN track` (`dur > 0`) to obtain `(ts, dur)`.
    - Query `counter JOIN counter_track` at `c.ts = <dispatch_ts>` (`GPU <EVENT> [0]`).
-3. **Verified CDNA3 Utilization Formulas (`4_validate/tools/fi_merge_perfetto.py`)**:
+3. **Verified CDNA3 Utilization Formulas (`weaveprof/pipeline/validate/tools/fi_merge_perfetto.py`)**:
    - **Matrix Core MFMA Utilization (%)**: `100.0 * SQ_VALU_MFMA_BUSY_CYCLES / (GRBM_GUI_ACTIVE * 80.0)` — because `GRBM_GUI_ACTIVE` sums active cycles across the 4 XCCs while each XCC has `20 CUs × 4 SIMDs = 80` SIMD pipelines.
    - **HBM3 Read+Write Bandwidth Utilization (%)**: `100.0 * (TCC_EA0_RDREQ_DRAM + TCC_EA0_WRREQ_DRAM) * 64.0 / (dur_ns * 3684.0)` (64 B per DRAM request against MI308X measured stream peak `3684 GB/s`).
    - **CU Residency & Physical Topology**: Decode `HW_ID` (`xcc_id`, `se_id`, `cu_id`, `simd_id`) into physical CUs `0..79` (`CU 000 [XCC0 SE0 CU0]`), and convert `s_memrealtime` (100 MHz wall-clock ticks) + `s_memtime` anchors to `ns` before applying $\Delta T = T_{\text{start}} - t_0$.
@@ -73,12 +73,12 @@ Resolve the card, exact architecture, and language before reading mode-specific 
 
 | Card / architecture | `cuda_cpp` | `hip_cpp` | `triton` | `cutedsl` | Capture |
 |---|---|---|---|---|---|
-| [H20 / `sm_90`](knowledge/cards/h20.json) | yes | no | yes | yes | `nsys` |
-| [B300 / `sm_100a`](knowledge/cards/b300_sm_100a.json) | yes | no | yes | yes | `nsys` |
-| [B300 / `sm_103a`](knowledge/cards/b300_sm_103a.json) | yes | no | yes | yes | `nsys` |
-| [MI308X / `gfx942`](knowledge/cards/mi308x.json) | `.cu` -> `hip_cpp` | yes | AMD Triton | no | same-run `rocprof-sys-run --rocm-events`, then `rocprofv3` fallback |
+| [H20 / `sm_90`](configs/cards/h20.json) | yes | no | yes | yes | `nsys` |
+| [B300 / `sm_100a`](configs/cards/b300_sm_100a.json) | yes | no | yes | yes | `nsys` |
+| [B300 / `sm_103a`](configs/cards/b300_sm_103a.json) | yes | no | yes | yes | `nsys` |
+| [MI308X / `gfx942`](configs/cards/mi308x.json) | `.cu` -> `hip_cpp` | yes | AMD Triton | no | same-run `rocprof-sys-run --rocm-events`, then `rocprofv3` fallback |
 
-Language knowledge: [CUDA C++](knowledge/languages/cuda_cpp/patterns.json), [HIP C++](knowledge/languages/hip_cpp/patterns.json) and its [gfx942 recorder](knowledge/languages/hip_cpp/recorder_gfx942.json), [Triton on NVIDIA](knowledge/languages/triton/nvidia_patterns.json), [Triton on AMD](knowledge/languages/triton/amd_patterns.json), and [CuTeDSL](knowledge/languages/cutedsl/patterns.json).
+Language knowledge: [CUDA C++](configs/languages/cuda_cpp/patterns.json), [HIP C++](configs/languages/hip_cpp/patterns.json) and its [gfx942 recorder](configs/languages/hip_cpp/recorder_gfx942.json), [Triton on NVIDIA](configs/languages/triton/nvidia_patterns.json), [Triton on AMD](configs/languages/triton/amd_patterns.json), and [CuTeDSL](configs/languages/cutedsl/patterns.json).
 
 ## CLI
 
@@ -133,9 +133,9 @@ Keep a short failure ledger with the stage, first failing command, artifact path
 - For trace-only failures, reuse `hardware/gemm_nsys.fi.bin`, `hardware/capture.sqlite`, and the decoded software artifacts. Rerun alignment offline; rerun only decode if the decoder or names contract changed. Do not rerun benchmark, NCU, or NSYS for a formatting/merge fix:
 
 ```bash
-python3 -B "$SKILL/4_validate/tools/fi_align_nsys.py" \
+python3 -B "$SKILL/weaveprof/pipeline/validate/tools/fi_align_nsys.py" \
   "$RUN/hardware/gemm_nsys.fi.bin" \
-  --names "$SKILL/knowledge/templates/gemm_probe/names.json" \
+  --names "$SKILL/configs/templates/gemm_probe/names.json" \
   --sqlite "$RUN/hardware/capture.sqlite" --kernel gemm_wmma --instance -1 \
   --metrics 'SMs Active|SM Issue|Tensor Active|SM Tensor Pipe Active|DRAM Read|DRAM Write' \
   --min-metrics-samples 3 --min-metric-curves 6 \
@@ -159,15 +159,15 @@ python3 -B "$SKILL/4_validate/tools/fi_align_nsys.py" \
 
 Route through card + language: read the selected card and language first, then only the recipe for that route. Never merge recipes across cards or architectures.
 
-- Cards hold architecture, recorder, clock, and profiler constraints. Recipe roots are `knowledge/recipes/nv/h20`, `knowledge/recipes/nv/b300`, and `knowledge/recipes/amd/mi308x`; when a route recipe exists, read only that recipe. If it is missing, report the knowledge gap instead of borrowing another route.
-- Recipes hold language-specific operator writing patterns. [Operators](knowledge/operators/operators.json) hold algorithm semantics. [Metrics](knowledge/metrics/hardware.json) hold hardware-counter and curve definitions; use the [nsys metric definitions](knowledge/metrics/nsys_ep_moe.json) or [gfx942 counters](knowledge/metrics/rocprof_gfx942_moe.json) for the selected route.
-- Recorder examples: [CUDA C++](knowledge/examples/cuda_cpp/profiler.cuh), [Triton](knowledge/examples/triton/profiler.py), [CuTeDSL](knowledge/examples/cute_dsl/profiler.py), [HIP C++](knowledge/examples/demo/demo_two_roles_hip.cpp), and the verified [MI308X Triton GEMM reference](knowledge/examples/triton/card-mi308x/gemm_triton_instrumented_card-mi308x.py) with its [card-specific run notes](knowledge/examples/triton/card-mi308x/README_card-mi308x.md).
-- Templates: [capture harness](knowledge/templates/capture/capture_harness_reference.py), [ABI](knowledge/templates/capture/abi_reference.json), and [full-output comparison](knowledge/templates/compare_raw_arrays.py).
-- Validation schemas and guidance: [scan schema](knowledge/validation/scan_schema.json), [contract example](knowledge/validation/contract_lock_example.json), and [failure fixes](knowledge/validation/fixes.json).
+- Cards hold architecture, recorder, clock, and profiler constraints. Recipe roots are `configs/recipes/nv/h20`, `configs/recipes/nv/b300`, and `configs/recipes/amd/mi308x`; when a route recipe exists, read only that recipe. If it is missing, report the knowledge gap instead of borrowing another route.
+- Recipes hold language-specific operator writing patterns. [Operators](configs/operators/operators.json) hold algorithm semantics. [Metrics](configs/metrics/hardware.json) hold hardware-counter and curve definitions; use the [nsys metric definitions](configs/metrics/nsys_ep_moe.json) or [gfx942 counters](configs/metrics/rocprof_gfx942_moe.json) for the selected route.
+- Recorder examples: [CUDA C++](examples/cuda_cpp/profiler.cuh), [Triton](examples/triton/profiler.py), [CuTeDSL](examples/cute_dsl/profiler.py), [HIP C++](examples/demo/demo_two_roles_hip.cpp), and the verified [MI308X Triton GEMM reference](examples/triton/card-mi308x/gemm_triton_instrumented_card-mi308x.py) with its [card-specific run notes](examples/triton/card-mi308x/README_card-mi308x.md).
+- Templates: [capture harness](configs/templates/capture/capture_harness_reference.py), [ABI](configs/templates/capture/abi_reference.json), and [full-output comparison](configs/templates/compare_raw_arrays.py).
+- Validation schemas and guidance: [scan schema](configs/validation/scan_schema.json), [contract example](configs/validation/contract_lock_example.json), and [failure fixes](configs/validation/fixes.json).
 
 ## Shared workflow
 
-**scan.** Read only files selected by `--source` or `--glob` under `--project`. Emit canonical line-level candidates from [semantic_ids.json](knowledge/semantic_ids.json), with the exact path and line, and bind the result to each selected file's source SHA. Never scan the whole repository or modify source during scan.
+**scan.** Read only files selected by `--source` or `--glob` under `--project`. Emit canonical line-level candidates from [semantic_ids.json](configs/semantic_ids.json), with the exact path and line, and bind the result to each selected file's source SHA. Never scan the whole repository or modify source during scan.
 
 **instrument.** Require exact source begin/end anchors or explicit line spans for every recorder event. Unknown semantics block the edit. A single line may have multiple scan hints (for example `tl.load(..., mask=...)` can suggest both `load` and `compute`); an explicit selection resolves that ambiguity only when the chosen canonical ID is one of the scan candidates. Selecting two different semantics for the same ambiguous line remains a hard error. Resolve the route's recorder and use the card, language, and recipe patterns rather than a generic insert. Edits are SHA-bound and atomic: reject a stale `base_sha256`, apply all edits or none, and roll back every touched file on failure. Event IDs are stable; `semantic_id` and `display_name` both use the canonical ID, such as `mma`, `gemm`, or `load`. Aliases are match hints only, never drifting display names.
 
@@ -180,7 +180,7 @@ The merged Chrome JSON `.perfetto.json.gz` is an intermediate debugging format. 
 For a full-audit capture, export with the exact command:
 
 ```bash
-python3 -B 3_capture/export_perfetto_native.py --trace <merged_chrome_json.gz> --out <name__card-mi308x__...__fi-l2.perfetto-trace.gz>
+python3 -B weaveprof/pipeline/capture/export_perfetto_native.py --trace <merged_chrome_json.gz> --out <name__card-mi308x__...__fi-l2.perfetto-trace.gz>
 ```
 
 Before export, read `otherData.meta.card` from the merged Chrome JSON. Its value must be exactly `h20`, `b300`, or `mi308x`, and the output basename must contain the matching token `card-` plus that value: `card-h20`, `card-b300`, or `card-mi308x`. The exporter does not infer or rewrite this name; a missing or mismatched token fails capture. Keep B300 `sm_100a` and `sm_103a` in separate artifacts. Retain the exporter's stdout JSON report beside the trace for count reconciliation.
@@ -189,7 +189,7 @@ The native export uses one track per physical wave, grouped under its SM or CU. 
 
 MI308X uses one canonical same-run rocprof-sys hardware layer, with optional independent checks:
 
-- Primary collection runs `rocprof-sys-run --rocm-events` on the workload. Raw ROCm PM counter tracks and kernel dispatch slices are written to the same Perfetto proto. Pair each selected dispatch with its counter sample by same-run, same-dispatch start timestamp and record the declared timestamp tolerance. Do not splice counters from another run. Extract and merge this layer with [build_rocprof_sys_sw_hw.py](3_capture/build_rocprof_sys_sw_hw.py).
+- Primary collection runs `rocprof-sys-run --rocm-events` on the workload. Raw ROCm PM counter tracks and kernel dispatch slices are written to the same Perfetto proto. Pair each selected dispatch with its counter sample by same-run, same-dispatch start timestamp and record the declared timestamp tolerance. Do not splice counters from another run. Extract and merge this layer with [build_rocprof_sys_sw_hw.py](weaveprof/pipeline/capture/build_rocprof_sys_sw_hw.py).
 - For the MI308X MFMA/GEMM route, derive both `compute_util` and auxiliary `tensor_util` from `100*SQ_VALU_MFMA_BUSY_CYCLES/(GRBM_GUI_ACTIVE*(CU_NUM*SIMD_PER_CU/XCC_NUM))`. The defaults are 80 CU, 4 SIMD/CU, and 4 XCC, so the denominator uses 80 SIMD lanes per XCC. The canonical event is labeled `compute_util [matrix_core]`; `otherData.hw_merge` records `source=rocprof-sys:SQ_VALU_MFMA_BUSY_CYCLES+GRBM_GUI_ACTIVE`, both native metrics, and `compute_pipe=matrix_core`. This same-run GEMM path has `measured` evidence on MI308X; do not extend that status to other operators, languages, or cards without their own run.
 - `simd_util` is separate auxiliary evidence from `SIMD_UTILIZATION*100` with `compute_pipe=simd`; its stable track is `simd_util [SIMD/CU]`. `sm_active` is `GPU_UTIL`. Never substitute `SIMD_UTILIZATION`, `GPU_UTIL`, CUDA-core utilization, `GPU GFX Busy`, or `GPU UMC Busy` for Matrix Core activity. If the required MFMA/GEMM counters are absent or invalid, mark `compute_util` and `tensor_util` `unavailable` with a reason; never fill zero.
 - `memory_util` is an explicitly estimated HBM utilization: `(TCC_EA0_RDREQ_DRAM + TCC_EA0_WRREQ_DRAM) * 64 B / dispatch_duration / 3684 GB/s`, with directional read/write series retained. The 3684 GB/s peak is measured on MI308X, and the trace metadata must state both the 64 B/request assumption and the measured peak. Label the result as an estimate, not a directly measured bandwidth percentage.
@@ -197,7 +197,7 @@ MI308X uses one canonical same-run rocprof-sys hardware layer, with optional ind
 - rocprofv3 `MfmaUtil` is an optional independent calibration/fallback source, not the primary MI308X source. If used, label `rocprofv3:MfmaUtil` explicitly, use it directly as a percent rather than multiplying by 100, and keep fallback or calibration evidence separate from same-run rocprof-sys points.
 - Optional amd-smi `gpu_busy`, `memory_busy`, and `gpu_memory_used_mib` polling tracks are coarse debug context only. They retain `canonical_mapping=null` and `auxiliary_only=true`; no amd-smi GPU-busy, memory-busy, or memory-used curve may be presented as `compute_util` or `memory_util`. The kernel selector defaults to the legacy `mfma_kernel`; for GEMM, pass the real name with `--kernel-name-contains`.
 - ROCm PM counters are per-dispatch aggregates. Do not claim intra-dispatch resolution. A zero boundary after a measured span is a display break, not a missing-evidence sample.
-- [get_trace_processor.py](1_scan/get_trace_processor.py) verifies a real import before accepting a trace processor. On hosts whose glibc is too old for the current Perfetto release, it retries the pinned, SHA256-verified v47 linux-x86_64 binary and records the reason in a fallback metadata file next to the selected binary.
+- [get_trace_processor.py](weaveprof/pipeline/scan/get_trace_processor.py) verifies a real import before accepting a trace processor. On hosts whose glibc is too old for the current Perfetto release, it retries the pinned, SHA256-verified v47 linux-x86_64 binary and records the reason in a fallback metadata file next to the selected binary.
 
 **validate.** Validate the completed capture against the instrumented artifact and its edit evidence:
 
@@ -312,7 +312,7 @@ The LLM decides only **where** probes go (`<run>/probe.json`) and **what to chan
 
 Atrex (`alibaba/atrex-kernel-agent`) integration: `plugin.json` declares an AKA `api_version: 1` local plugin (`weaveprofiler.profile`, `weaveprofiler.analyze`, `weaveprofiler.compare-rounds`, `weaveprofiler.plan-context`, `weaveprofiler.verify-seal` via `weaveprof/aka_adapter.py` + strict JSON schemas, plus this `SKILL.md` and episode instructions) validated directly by `aka.resources.plugin_runtime.PluginRegistry`. In addition, `weaveprof.atrex_plugin.apply(ctx, config)` exposes the Core module contract (`intra_kernel_verifier_profiler`), and GPU exclusivity supports host lock injection via `register_lock_provider`.
 
-Recorder context modes (`2_instrument/recorders/cuda_cpp/wp_lite.cuh`, choose via the D2 driver, not by hand): default 5-register `WpCtx`; `-DWP_CTX_1R` (bit31 disabled/overflow, bits30..15 slot, bits14..0 cursor); `-DWP_CTX_1R_NOINLINE`; `-DWP_SMEM_ZREG` (16 B static `__shared__` + `__noinline__`). For multi-file `.so` megakernels, `-DWP_DEFINE_HOST_API` exports `extern "C" { wp_init, wp_reset, wp_dump, wp_free }` (`WpSoController`); for runtime `.cubin` JIT kernels (`cudaLibrary_t`), `wp_attach_library(lib, &buf)` binds `wp_fi_c` with zero kernel argument changes. CuTeDSL (`2_instrument/recorders/cutedsl/wp_cute.py`), Triton (`2_instrument/recorders/triton/wp_triton.py`, `2_instrument/recorders/triton/wp_triton_amd.py`), HIP (`2_instrument/recorders/hip_cpp/wp_lite_hip.h`), and the `WPLITE02` decoder (`4_validate/tools/wp_decode.py`) expose the unified `wp_*` / `WP_*` API.
+Recorder context modes (`recorders/cuda_cpp/wp_lite.cuh`, choose via the D2 driver, not by hand): default 5-register `WpCtx`; `-DWP_CTX_1R` (bit31 disabled/overflow, bits30..15 slot, bits14..0 cursor); `-DWP_CTX_1R_NOINLINE`; `-DWP_SMEM_ZREG` (16 B static `__shared__` + `__noinline__`). For multi-file `.so` megakernels, `-DWP_DEFINE_HOST_API` exports `extern "C" { wp_init, wp_reset, wp_dump, wp_free }` (`WpSoController`); for runtime `.cubin` JIT kernels (`cudaLibrary_t`), `wp_attach_library(lib, &buf)` binds `wp_fi_c` with zero kernel argument changes. CuTeDSL (`recorders/cutedsl/wp_cute.py`), Triton (`recorders/triton/wp_triton.py`, `recorders/triton/wp_triton_amd.py`), HIP (`recorders/hip_cpp/wp_lite_hip.h`), and the `WPLITE02` decoder (`weaveprof/pipeline/validate/tools/wp_decode.py`) expose the unified `wp_*` / `WP_*` API.
 
 ## Turnkey Agent Provisioning (`Skill + MCP + Hook`)
 

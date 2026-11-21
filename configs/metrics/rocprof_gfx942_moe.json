@@ -1,0 +1,51 @@
+{
+  "schema": "ep-moe-metrics/v1",
+  "name": "Optional rocprofv3 gfx942 explicit-PMC calibration vocabulary (SQ compute + TCC/EA HBM + GMI stall context)",
+  "role": "Optional independent rocprofv3 calibration/fallback and legacy metric-name reference; not the primary MI308X route. The primary route collects raw ROCm events in the same-run rocprof-sys Perfetto proto as kernel dispatch slices.",
+  "capture_metrics_set": "gfx942-explicit-pmc-list",
+  "verify_cmd": "HIP_VISIBLE_DEVICES=<gpu> rocprofv3 --list-metrics 2>/dev/null | grep -E '^gpu-agent' | awk '{print $2}' — 下列 keep 名 2026-10-05 在 MI308X (ROCm 6.x, gfx942, 80 CU) 逐一验证存在; ROCm 版本间 PMC 命名会漂移, 换机/换栈后首跑前必须用本命令复核 keep 全表",
+  "capture_rationale": "本表保留 rocprofv3 --list-metrics 的显式 PMC 词汇, 只用于独立校准、fallback 候选核对或旧数据解释, 不是主采集口径。MI308X 主路线使用 same-run rocprof-sys-run --rocm-events: raw ROCm PM counter track 与 kernel dispatch slice 在同一个 Perfetto proto, 按同一 dispatch 的 start timestamp 加声明容差配对。语义边界: (1) 所有计数是 per-dispatch 汇总, 无 200kHz PM 时间轴采样等价物, 要时间轴靠相位戳+CDF 自制 (见 docs/amd_mi308x.md); (2) persistent kernel (grid>=80 CU 常驻+自旋等待) 禁挂 PMC, mega 类核只能走 prog[] 相位戳路线; (3) 没有 same-dispatch XGMI/RDMA/fabric counter 时 communication_util 必须是 unavailable + reason, 绝不补零; TCC_EA0_*_GMI_CREDIT_STALL 只是 stall 周期 proxy, EA 减 DRAM 只是非 HBM 去向线索, 两者都不是 communication utilization; 跨机带宽必须另取 NIC 侧证据, amd-smi 粗采样也不能冒充 same-dispatch counter。",
+  "keep_match": "精确等值匹配 (rocprofv3 PMC 名, 无 [unit] 后缀); _sum 后缀 = 跨 block instance 聚合值 (TCC_EA0 有 DIMENSION_INSTANCE 多实例, 单机采全卡务必用 _sum)",
+  "keep": [
+    "SQ_WAVES_sum",
+    "SQ_INSTS_MFMA_sum",
+    "SQ_BUSY_CYCLES",
+    "SQ_BUSY_CU_CYCLES",
+    "TCC_EA0_RDREQ_DRAM_sum",
+    "TCC_EA0_WRREQ_DRAM_sum",
+    "TCC_EA0_RDREQ_sum",
+    "TCC_EA0_WRREQ_sum",
+    "TCC_EA0_RDREQ_GMI_CREDIT_STALL_sum",
+    "TCC_EA0_WRREQ_GMI_CREDIT_STALL_sum"
+  ],
+  "combine": [
+    {
+      "name": "HBM DRAM REQ Total",
+      "sum_of": ["TCC_EA0_RDREQ_DRAM_sum", "TCC_EA0_WRREQ_DRAM_sum"],
+      "unit": "requests",
+      "drop_sources": false,
+      "rationale": "HBM 读写共享物理带宽, 合计看总压力; 保留原两条看方向偏斜。这里给出的是显式估算: 每 RDREQ/WRREQ 默认 64B (WRREQ_64B 族可校准), 除以 paired dispatch duration 和 MI308X 实测流读峰值 3684 GB/s (本机 stream 实测, 非 datasheet)。展示时必须说明 64B/request 假设和 measured peak, 不能写成直接测得的 HBM 带宽百分比。"
+    },
+    {
+      "name": "EA REQ Total",
+      "sum_of": ["TCC_EA0_RDREQ_sum", "TCC_EA0_WRREQ_sum"],
+      "unit": "requests",
+      "drop_sources": false,
+      "rationale": "EA 全向请求 (含 L2 miss 后去 HBM 与去 XGMI 的流量) 只用于解释非 DRAM 去向和拥塞上下文。EA Total 减 HBM DRAM Total 不能换算成带宽, 不是 communication_util, 也不能补零; 没有 same-dispatch XGMI/RDMA/fabric counter 时通信利用率必须标 unavailable。"
+    },
+    {
+      "name": "GMI Credit Stall Total",
+      "sum_of": ["TCC_EA0_RDREQ_GMI_CREDIT_STALL_sum", "TCC_EA0_WRREQ_GMI_CREDIT_STALL_sum"],
+      "unit": "cycles",
+      "drop_sources": false,
+      "rationale": "XGMI 方向拥塞代理 (credit 枯竭 stall 周期)。只表示『等过』, 不能换算带宽, 不是 communication_util; 与 EA-HBM 差值只能帮助解释状态, 不能替代 same-dispatch XGMI/RDMA/fabric counter。"
+    }
+  ],
+  "required": [
+    "SQ_WAVES_sum",
+    "SQ_INSTS_MFMA_sum",
+    "SQ_BUSY_CYCLES",
+    "TCC_EA0_RDREQ_DRAM_sum",
+    "TCC_EA0_WRREQ_DRAM_sum"
+  ]
+}

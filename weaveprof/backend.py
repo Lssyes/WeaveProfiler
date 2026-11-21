@@ -41,12 +41,12 @@ _CORE_OP_RE = re.compile(
 def _sequence(path, kernel, amd):
     text = path.read_text(encoding="utf-8")
     if amd:
-        hip = implementation("4_validate.tools.fi_binsim_hip")
+        hip = implementation("weaveprof.pipeline.validate.tools.fi_binsim_hip")
         instructions, found = hip.extract_kernel(hip.parse_amdgcn(text.splitlines()), re.escape(kernel))
         if not found:
             raise ValueError(f"{path}: function {kernel!r} not found")
         return [ins["op"] for ins in instructions if ins["op"] != "LABEL"]
-    binsim = implementation("4_validate.tools.fi_binsim")
+    binsim = implementation("weaveprof.pipeline.validate.tools.fi_binsim")
     candidates = [f for f in binsim.parse_sass(text, str(path)) if kernel in f.name]
     if len(candidates) != 1:
         raise ValueError(f"{path}: expected one compiled function matching {kernel!r}, found {len(candidates)}")
@@ -68,7 +68,7 @@ def assess(directory, spec, limit, runtime=None):
         if not all(sequences):
             raise ValueError("Empty disassembly")
         from collections import Counter
-        binsim = implementation("4_validate.tools.fi_binsim")
+        binsim = implementation("weaveprof.pipeline.validate.tools.fi_binsim")
         ratio = binsim.bitset_lcs(*sequences) / len(sequences[0])
         c0, c1 = Counter(sequences[0]), Counter(sequences[1])
         mbag = sum(min(c0[k], c1[k]) for k in c0)
@@ -137,7 +137,7 @@ def assess(directory, spec, limit, runtime=None):
     except (OSError, ValueError, TypeError, KeyError) as exc:
         errors["output"] = str(exc)
     try:
-        decoder = implementation("4_validate.tools.fi_lite_decode")
+        decoder = implementation("weaveprof.pipeline.validate.tools.fi_lite_decode")
         dump = decoder.read_dump(str(directory / "capture.fi02.bin"))
         trace, summary = decoder.decode(dump, read_json(directory / "names.json"))
         fires = summary["fires"]
@@ -382,13 +382,13 @@ def _export_failed_timeline(directory, trace, summary, rt, spec, source_text, ma
     failed_trace = directory / "failed_trace.perfetto-trace"
     export_doc = trace
     try:
-        merge = implementation("4_validate.tools.fi_merge_perfetto")
+        merge = implementation("weaveprof.pipeline.validate.tools.fi_merge_perfetto")
         window = merge.hardware_window(directory, rt)
         export_doc = merge.align(trace, summary, window, rt)
     except Exception:
         export_doc = trace
     try:
-        exporter = implementation("4_validate.tools.fi_perfetto_proto")
+        exporter = implementation("weaveprof.pipeline.validate.tools.fi_perfetto_proto")
         exporter.export(export_doc, failed_trace)
     except Exception:
         failed_trace = None
@@ -450,7 +450,7 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
             failures["runtime_protocol"] = "; ".join(proto_errs)
         if all(gates.values()):
             try:
-                merge = implementation("4_validate.tools.fi_merge_perfetto")
+                merge = implementation("weaveprof.pipeline.validate.tools.fi_merge_perfetto")
                 window = merge.hardware_window(directory, rt)
                 aligned = merge.align(trace, summary, window, rt)
                 metrics["alignment"] = aligned["otherData"]["alignment"]
@@ -461,7 +461,7 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
                         gates["pairing"] = False
                         failures["product_gate"] = "; ".join(product_report["failures"])
                 if all(gates.values()):
-                    exporter = implementation("4_validate.tools.fi_perfetto_proto")
+                    exporter = implementation("weaveprof.pipeline.validate.tools.fi_perfetto_proto")
                     exporter.export(aligned, out_path)
                     tp_report = verify_trace_processor_sql(out_path)
                     metrics["trace_processor"] = tp_report
@@ -514,7 +514,7 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
         failures["measurement"] = str(exc)
     if failures:
         metrics["errors"] = failures
-    verifier = implementation("4_validate.closed_loop_verifier")
+    verifier = implementation("weaveprof.pipeline.validate.closed_loop_verifier")
     document = verifier.build_feedback_json({"gates": gates}, spec, source_text, fires=fires, metrics=metrics)
     document["checks"] = {
         "assembly": bool(gates["assembly"]),

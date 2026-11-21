@@ -32,10 +32,10 @@ WPD = mk.load_wp_decode()
 KB = {s["semantic_id"]: int(s["event_id"]) for s in WPD._fi.load_kb()["semantics"] if s.get("event_id") is not None}
 E_LOAD, E_MMA, E_EPI, E_BAR = KB["load"], KB["mma"], KB["epilogue"], KB["barrier"]
 OPEN, CLOSE, END = WPD.OPEN, WPD.CLOSE, WPD.END
-CUDA_DIR = ROOT / "2_instrument" / "recorders" / "cuda_cpp"
-HIP_DIR = ROOT / "2_instrument" / "recorders" / "hip_cpp"
-CUTE_DIR = ROOT / "2_instrument" / "recorders" / "cutedsl"
-TRITON_DIR = ROOT / "2_instrument" / "recorders" / "triton"
+CUDA_DIR = ROOT / "recorders" / "cuda_cpp"
+HIP_DIR = ROOT / "recorders" / "hip_cpp"
+CUTE_DIR = ROOT / "recorders" / "cutedsl"
+TRITON_DIR = ROOT / "recorders" / "triton"
 N_SMS, N_LONG, N_SHORT, LONG_US, SHORT_US = 78, 50, 28, 374, 191
 BASE_NS = 5_000_000
 
@@ -191,7 +191,7 @@ class WpDecodeTest(_TmpCase):
         bad.write_bytes(b"XXLITE02" + bytes(24))
         with self.assertRaises(SystemExit):
             WPD.read_dump(str(bad))
-        legacy = _load_module("fi_lite_decode_magic_probe", ROOT / "4_validate" / "tools" / "fi_lite_decode.py")
+        legacy = _load_module("fi_lite_decode_magic_probe", ROOT / "weaveprof/pipeline/validate" / "tools" / "fi_lite_decode.py")
         good = write_dump(self.tmp / "wp.bin")
         self.assertEqual(legacy.read_dump(str(good))["magic"], "WPLITE02")
         with mock.patch("sys.stdout", new=open(os.devnull, "w", encoding="utf-8")) as sink:
@@ -599,10 +599,10 @@ class MegakernelAuditTest(_TmpCase):
 
 class HygieneTest(unittest.TestCase):
     OWNED = (
-        "2_instrument/recorders/cuda_cpp/wp_lite.cuh", "2_instrument/recorders/cuda_cpp/fi_lite.cuh",
-        "2_instrument/recorders/hip_cpp/wp_lite_hip.h", "2_instrument/recorders/cutedsl/wp_cute.py",
-        "2_instrument/recorders/triton/wp_triton.py", "2_instrument/recorders/triton/wp_triton_amd.py",
-        "4_validate/tools/wp_decode.py", "4_validate/tools/fi_lite_decode.py", "weaveprof/megakernel.py",
+        "recorders/cuda_cpp/wp_lite.cuh", "recorders/cuda_cpp/fi_lite.cuh",
+        "recorders/hip_cpp/wp_lite_hip.h", "recorders/cutedsl/wp_cute.py",
+        "recorders/triton/wp_triton.py", "recorders/triton/wp_triton_amd.py",
+        "weaveprof/pipeline/validate/tools/wp_decode.py", "weaveprof/pipeline/validate/tools/fi_lite_decode.py", "weaveprof/megakernel.py",
         "tests/test_wp_megakernel.py",
     )
 

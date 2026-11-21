@@ -319,7 +319,7 @@ def _validate_operator_contract(kb: Path, canonical_ids: Set[str],
         if sid not in OPERATOR_IDS:
             errs.append(f"{where}: semantic_id={sid!r} 不在算子 canonical 集 {sorted(OPERATOR_IDS)}")
         elif sid not in canonical_ids:
-            errs.append(f"{where}: semantic_id={sid!r} 未在 knowledge/semantic_ids.json 定义")
+            errs.append(f"{where}: semantic_id={sid!r} 未在 configs/semantic_ids.json 定义")
         elif sid in seen_ids:
             errs.append(f"{where}: semantic_id={sid!r} 在 operators.json 中重复")
         else:
@@ -427,7 +427,7 @@ def validate_kb(kb: Path, *, verbose: bool = False) -> List[str]:
     canonical_ids = _load_canonical_ids(kb, errs)
     entry_files = _entry_files(kb)
     if not entry_files:
-        errs.append("knowledge/cards 与 knowledge/languages 下没有可校验的硬件条目文件")
+        errs.append("configs/cards 与 configs/languages 下没有可校验的硬件条目文件")
     for path in entry_files:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -485,9 +485,9 @@ def validate_kb(kb: Path, *, verbose: bool = False) -> List[str]:
 
 
 def main() -> int:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("knowledge")
-    if root.name == "kb" and not root.exists() and Path("knowledge").is_dir():
-        root = Path("knowledge")
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("configs")
+    if root.name == "kb" and not root.exists() and Path("configs").is_dir():
+        root = Path("configs")
     kb = root
     errs = validate_kb(kb, verbose=True)
     if errs:

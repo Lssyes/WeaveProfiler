@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-PROFILE = ROOT / '3_capture'
+PROFILE = ROOT / 'weaveprof/pipeline/capture'
 if str(PROFILE) not in sys.path:
     sys.path.insert(0, str(PROFILE))
 

@@ -23,10 +23,10 @@ def load(relative, name):
     return module
 
 
-engine = load("2_instrument/rule_engine.py", "paper3_engine")
-decoder = load("4_validate/tools/fi_lite_decode.py", "paper3_decoder")
-verifier = load("4_validate/closed_loop_verifier.py", "paper3_verifier")
-placer = load("1_scan/llm_probe_placer.py", "paper3_placer")
+engine = load("weaveprof/pipeline/instrument/rule_engine.py", "paper3_engine")
+decoder = load("weaveprof/pipeline/validate/tools/fi_lite_decode.py", "paper3_decoder")
+verifier = load("weaveprof/pipeline/validate/closed_loop_verifier.py", "paper3_verifier")
+placer = load("weaveprof/pipeline/scan/llm_probe_placer.py", "paper3_placer")
 
 
 def paper_source():

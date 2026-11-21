@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCAN_PATH = ROOT / "1_scan" / "scan.py"
+SCAN_PATH = ROOT / "weaveprof/pipeline/scan" / "scan.py"
 spec = importlib.util.spec_from_file_location("weaveprofiler_fast_scan", SCAN_PATH)
 scan_mod = importlib.util.module_from_spec(spec)
 assert spec.loader is not None

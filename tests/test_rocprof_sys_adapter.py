@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
-PROFILE_DIR = REPO / '3_capture'
+PROFILE_DIR = REPO / 'weaveprof/pipeline/capture'
 if str(PROFILE_DIR) not in sys.path:
     sys.path.insert(0, str(PROFILE_DIR))
 

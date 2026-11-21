@@ -14,7 +14,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROBE = ROOT / "3_capture" / "gemm_probe.py"
+PROBE = ROOT / "weaveprof/pipeline/capture" / "gemm_probe.py"
 
 
 def _load_probe():

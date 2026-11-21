@@ -25,8 +25,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
-COMPARE = PKG / "knowledge" / "templates" / "compare_raw_arrays.py"
-VALIDATOR = PKG / "knowledge" / "examples" / "host" / "profile_skeleton" / "validation" / "validate_correctness.py"
+COMPARE = PKG / "configs" / "templates" / "compare_raw_arrays.py"
+VALIDATOR = PKG / "examples" / "host" / "profile_skeleton" / "validation" / "validate_correctness.py"
 
 
 def sha_bytes(raw: bytes) -> str:

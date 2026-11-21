@@ -1,0 +1,652 @@
+{
+  "schema": "weaveprofiler-code-patterns/v1",
+  "version": 1,
+  "language": "hip_cpp",
+  "backend": "amd",
+  "targets": [
+    "mi308x"
+  ],
+  "evidence_status": "reference",
+  "semantic_policy": {
+    "canonical_source": "configs/semantic_ids.json",
+    "semantic_id_is_display_name": true,
+    "expected_trace_name_is_semantic_id": true,
+    "unknown_fails_closed": true,
+    "source_marker_is_hint_only": true
+  },
+  "record_contract": {
+    "record_layout": "16-byte (s_memrealtime_tick_or_local_cycle, tag, aux)",
+    "event_id_range": "1..4095; 0 is the empty-record sentinel",
+    "levels": {
+      "0": "off",
+      "1": "entry_only",
+      "2": "full"
+    },
+    "clock": "s_memrealtime with timer_hz for cross-CU alignment; local cycles require explicit anchors"
+  },
+  "required_semantic_ids": [
+    "gemm",
+    "attention",
+    "softmax",
+    "reduction",
+    "moe",
+    "convolution",
+    "megakernel",
+    "load",
+    "wait",
+    "mma",
+    "compute",
+    "epilogue",
+    "store",
+    "barrier",
+    "dispatch",
+    "communication"
+  ],
+  "conventions": {
+    "compiler": "hipcc with --offload-arch=gfx942 for MI308X",
+    "collector": "same-run rocprof-sys-run --rocm-events with raw PM counters in the same Perfetto proto as dispatch slices; rocprofv3 only as an explicitly labeled fallback/calibration",
+    "event_ids": "Use event_id and event_id_const exactly as declared in configs/semantic_ids.json; never 0 and never assign a language-local sequence.",
+    "levels": "Measure off, entry-only, and full builds; persistent-kernel PMC paths must fail closed if unsupported.",
+    "scope_selection": "Use the enclosing task boundary to choose task versus phase; source keywords alone do not decide record_scope.",
+    "name_policy": "display_name and trace name are the semantic_id; aliases are match-only and never rendered.",
+    "evidence_policy": "This file is a reference library. Only an MI308X hard run can raise evidence_status to measured.",
+    "safety": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane."
+  },
+  "patterns": [
+    {
+      "semantic_id": "gemm",
+      "display_name": "gemm",
+      "evidence_status": "reference",
+      "source_cues": [
+        "gemm",
+        "matmul",
+        "matrix multiply",
+        "wmma::mma_sync",
+        "tl.dot",
+        "cute.gemm",
+        "rocWMMA",
+        "MFMA",
+        "GEMM"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_GEMM = 10;\n\nextern \"C\" __global__ void gemm_one_element(\n    float* c, const float* a, const float* b, int m, int n, int k) {\n  FI_OPEN(0);\n  const int row = blockIdx.x * blockDim.x + threadIdx.x;\n  const int col = blockIdx.y * blockDim.y + threadIdx.y;\n  if (row < m && col < n) {\n    const unsigned aux = static_cast<unsigned>(row * n + col);\n    FI_B(EV_GEMM, aux);\n    float acc = 0.0f;\n    for (int inner = 0; inner < k; ++inner) {\n      acc = fmaf(a[row * k + inner], b[inner * n + col], acc);\n    }\n    FI_E(EV_GEMM, aux);\n    c[row * n + col] = acc;\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Immediately before the first A/B tile load for the selected GEMM segment.",
+        "end": "After the final accumulator update and after any async MMA completion wait; the enclosing task span closes after the final C write or the selected segment boundary."
+      },
+      "record_scope": "task when the whole kernel segment is a GEMM; phase only when nested inside attention, MoE, convolution, or a fused operator. One span per executed GEMM segment, never one per K tile.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "gemm",
+      "validation": [
+        "Compare every C element for all M, N, K shapes against the reference implementation.",
+        "Check C shape, dtype, element count, and NaN/Inf policy.",
+        "Require a gemm span and confirm nested mma spans stay inside it.",
+        "Repeat with tails, zero-size dimensions where supported, and non-multiple tiles."
+      ]
+    },
+    {
+      "semantic_id": "attention",
+      "display_name": "attention",
+      "evidence_status": "reference",
+      "source_cues": [
+        "attention",
+        "flash attention",
+        "fmha",
+        "mha",
+        "qk",
+        "softmax(QK",
+        "attention sink",
+        "稀疏注意力"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_ATTENTION = 11;\n\nextern \"C\" __global__ void attention_row(\n    float* out, const float* q, const float* k, const float* v,\n    int keys, int dim) {\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  if (linear != 0u) return;\n  FI_OPEN(0);\n  const int row = blockIdx.x;\n  const float scale = rsqrtf(static_cast<float>(dim));\n  FI_B(EV_ATTENTION, static_cast<unsigned>(row));\n  float norm = 0.0f;\n  for (int key = 0; key < keys; ++key) {\n    float score = 0.0f;\n    for (int d = 0; d < dim; ++d) score = fmaf(q[row * dim + d], k[key * dim + d], score);\n    norm += expf(score * scale);\n  }\n  for (int d = 0; d < dim; ++d) {\n    float acc = 0.0f;\n    for (int key = 0; key < keys; ++key) {\n      float score = 0.0f;\n      for (int e = 0; e < dim; ++e) score = fmaf(q[row * dim + e], k[key * dim + e], score);\n      acc = fmaf(expf(score * scale) / norm, v[key * dim + d], acc);\n    }\n    out[row * dim + d] = acc;\n  }\n  FI_E(EV_ATTENTION, static_cast<unsigned>(row));\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Before Q staging or the first QK score work for the selected attention segment.",
+        "end": "After the final output value is visible and the final store or TMA completion wait has finished."
+      },
+      "record_scope": "task for one complete attention operator segment; qk, softmax, pv, and store are phases nested inside it.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "attention",
+      "validation": [
+        "Compare every output element and shape against a reference attention implementation.",
+        "Exercise causal and non-causal masks plus masked and unmasked key tails.",
+        "Require attention to be the visible task and nested qk/pv/softmax spans to remain inside it.",
+        "Check that phases disabled do not remove the attention task span."
+      ]
+    },
+    {
+      "semantic_id": "softmax",
+      "display_name": "softmax",
+      "evidence_status": "reference",
+      "source_cues": [
+        "softmax",
+        "row softmax",
+        "online softmax",
+        "exp2",
+        "row_max",
+        "row_sum",
+        "归一化指数"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_SOFTMAX = 16;\n\nextern \"C\" __global__ void softmax_row(float* out, const float* src, int width) {\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  if (linear != 0u) return;\n  FI_OPEN(0);\n  const int row = blockIdx.x;\n  FI_B(EV_SOFTMAX, static_cast<unsigned>(row));\n  float row_max = -INFINITY;\n  for (int col = 0; col < width; ++col) row_max = fmaxf(row_max, src[row * width + col]);\n  float denominator = 0.0f;\n  for (int col = 0; col < width; ++col) denominator += expf(src[row * width + col] - row_max);\n  for (int col = 0; col < width; ++col) out[row * width + col] = expf(src[row * width + col] - row_max) / denominator;\n  FI_E(EV_SOFTMAX, static_cast<unsigned>(row));\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Before the row maximum reduction or the first online-softmax update.",
+        "end": "After the normalized probabilities are materialized and visible to the following consumer."
+      },
+      "record_scope": "phase inside its enclosing operator when it normalizes one stage; task only when a whole dispatch segment is softmax.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "softmax",
+      "validation": [
+        "Compare all rows, tails, and dtypes against a stable reference softmax.",
+        "Reject NaN/Inf for finite inputs and verify the max-shift path.",
+        "Require one paired softmax span per selected row or segment.",
+        "Check that the following store or MMA consumer does not start before the span ends."
+      ]
+    },
+    {
+      "semantic_id": "reduction",
+      "display_name": "reduction",
+      "evidence_status": "reference",
+      "source_cues": [
+        "reduction",
+        "reduce",
+        "sum",
+        "max",
+        "mean",
+        "shfl",
+        "ballot",
+        "fragment.reduce",
+        "tl.sum",
+        "归约"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_REDUCTION = 12;\n\nextern \"C\" __global__ void wave_sum(const float* src, float* dst) {\n  FI_OPEN(0);\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  const unsigned lane = linear & 63u;\n  const unsigned wave = linear >> 6;\n  const unsigned cta_waves = blockDim.x * blockDim.y * blockDim.z / 64u;\n  const unsigned track = blockIdx.x * cta_waves + wave;\n  float value = src[blockIdx.x * blockDim.x + linear];\n  if (lane == 0u) FI_B(EV_REDUCTION, track);\n  __syncthreads();\n  for (int delta = 32; delta > 0; delta >>= 1) value += __shfl_down(value, delta, 64);\n  __syncthreads();\n  if (lane == 0u) {\n    dst[track] = value;\n    FI_E(EV_REDUCTION, track);\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Before the first combine instruction for the selected reduction.",
+        "end": "After the last cross-lane, cross-wave, or cross-CTA combine and the result is visible to its consumer."
+      },
+      "record_scope": "phase for a warp/wave, CTA, or grid reduction inside an operator; task only when the reduction itself is the whole segment.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "reduction",
+      "validation": [
+        "Compare every reduced value and output shape against the reference result.",
+        "Cover full and partial lanes/waves and all supported dtypes.",
+        "Verify reduction scope metadata matches warp, CTA, or grid.",
+        "Check that no lane closes the span before peer lanes finish."
+      ]
+    },
+    {
+      "semantic_id": "moe",
+      "display_name": "moe",
+      "evidence_status": "reference",
+      "source_cues": [
+        "moe",
+        "mixture of experts",
+        "expert",
+        "topk",
+        "route",
+        "permute",
+        "unpermute",
+        "专家网络"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_MOE = 13;\n\n__device__ float expert_dot(const float* x, const float* w, int width) {\n  float acc = 0.0f;\n  for (int i = 0; i < width; ++i) acc = fmaf(x[i], w[i], acc);\n  return acc;\n}\n\nextern \"C\" __global__ void moe_top1(\n    float* out, const float* x, const float* expert0, const float* expert1, int width) {\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  if (linear != 0u) return;\n  FI_OPEN(0);\n  const int token = blockIdx.x;\n  FI_B(EV_MOE, static_cast<unsigned>(token));\n  const float score0 = expert_dot(x + token * width, expert0, width);\n  const float score1 = expert_dot(x + token * width, expert1, width);\n  const float gate = fmaxf(score0, score1);\n  const float weight0 = expf(score0 - gate);\n  const float weight1 = expf(score1 - gate);\n  out[token] = (weight0 * score0 + weight1 * score1) / (weight0 + weight1);\n  FI_E(EV_MOE, static_cast<unsigned>(token));\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Before routing logits or expert selection for the selected token tile.",
+        "end": "After the selected expert output and combine/write-back are visible."
+      },
+      "record_scope": "task for routing plus the selected expert segment, or a phase when routing is internal to a larger fused segment; the enclosing boundary decides.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "moe",
+      "validation": [
+        "Compare expert indices, routing weights, and final output for every token.",
+        "Verify no token is dropped or duplicated across experts.",
+        "Require a moe task or phase span that encloses all selected experts for the tile.",
+        "Check tail tokens and uneven expert loads."
+      ]
+    },
+    {
+      "semantic_id": "convolution",
+      "display_name": "convolution",
+      "evidence_status": "reference",
+      "source_cues": [
+        "convolution",
+        "conv2d",
+        "conv",
+        "implicit gemm",
+        "fprop",
+        "dgrad",
+        "wgrad",
+        "卷积"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_CONVOLUTION = 14;\n\nextern \"C\" __global__ void conv3x3_one_pixel(\n    float* out, const float* in, const float* weight, int height, int width) {\n  FI_OPEN(0);\n  const int x = blockIdx.x * blockDim.x + threadIdx.x;\n  const int y = blockIdx.y * blockDim.y + threadIdx.y;\n  if (x < width && y < height) {\n    const unsigned aux = static_cast<unsigned>(y * width + x);\n    FI_B(EV_CONVOLUTION, aux);\n    float acc = 0.0f;\n    for (int ky = 0; ky < 3; ++ky) {\n      for (int kx = 0; kx < 3; ++kx) {\n        const int iy = min(max(y + ky - 1, 0), height - 1);\n        const int ix = min(max(x + kx - 1, 0), width - 1);\n        acc = fmaf(in[iy * width + ix], weight[ky * 3 + kx], acc);\n      }\n    }\n    FI_E(EV_CONVOLUTION, aux);\n    out[y * width + x] = acc;\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Before the first input patch load for the selected output tile.",
+        "end": "After the final accumulation and output write or async store completion."
+      },
+      "record_scope": "task when the whole segment is convolution or implicit-GEMM convolution; phase only when convolution is nested in a fused block.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "convolution",
+      "validation": [
+        "Compare every output element for padding, stride, and dilation variants.",
+        "Check output shape, dtype, and element count.",
+        "Require convolution naming even when lowering uses MMA internally.",
+        "Cover border tiles and channel tails."
+      ]
+    },
+    {
+      "semantic_id": "megakernel",
+      "display_name": "megakernel",
+      "evidence_status": "reference",
+      "source_cues": [
+        "megakernel",
+        "persistent kernel",
+        "persistent",
+        "grid_sync",
+        "task queue",
+        "work queue",
+        "大核"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_MEGAKERNEL = 15;\n\nextern \"C\" __global__ void persistent_copy(\n    float* out, const float* in, unsigned* ticket, unsigned num_tiles) {\n  __shared__ unsigned tile;\n  FI_OPEN(0);\n  for (;;) {\n    if (threadIdx.x == 0) tile = atomicAdd(ticket, 1u);\n    __syncthreads();\n    if (tile >= num_tiles) break;\n    FI_B(EV_MEGAKERNEL, tile);\n    for (unsigned i = threadIdx.x; i < 1024u; i += blockDim.x) {\n      out[tile * 1024u + i] = in[tile * 1024u + i];\n    }\n    FI_E(EV_MEGAKERNEL, tile);\n    __syncthreads();\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "After capture setup and before the persistent scheduler or first segment work.",
+        "end": "After the final segment retires and its output visibility wait has completed."
+      },
+      "record_scope": "one whole persistent launch or one grid_sync-separated scheduling segment; never every inner iteration.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "megakernel",
+      "validation": [
+        "Verify every grid_sync-separated segment has its own canonical operator span.",
+        "Compare outputs of all segments, not only the first or last one.",
+        "Exclude grid_sync barriers from coverage while retaining their records for alignment.",
+        "Check the launch count is one and no segment silently disappears when phases are off."
+      ]
+    },
+    {
+      "semantic_id": "load",
+      "display_name": "load",
+      "evidence_status": "reference",
+      "source_cues": [
+        "load",
+        "tl.load",
+        "cp.async",
+        "tma",
+        "global load",
+        "ld.global",
+        "buffer_load",
+        "装载"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_LOAD = 1;\n\nextern \"C\" __global__ void load_tile(const float* src, float* dst, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_LOAD, static_cast<unsigned>(index));\n    const float value = src[index];\n    FI_E(EV_LOAD, static_cast<unsigned>(index));\n    dst[index] = value;\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Immediately before the load or async-copy issue for the selected tile.",
+        "end": "After the value is available for a synchronous load; for async copy, only after the matching wait or barrier/fence returns."
+      },
+      "record_scope": "phase inside the consuming operator; loading is never promoted to the only task for the segment.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "load",
+      "validation": [
+        "Verify loaded values through the downstream computation for every tile and tail.",
+        "Confirm an async load end follows its wait rather than its issue.",
+        "Check load buffer capacity and overflow separately from event count.",
+        "Require the enclosing operator task even when load phases are removed."
+      ]
+    },
+    {
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "evidence_status": "reference",
+      "source_cues": [
+        "wait",
+        "wait_group",
+        "mbarrier try_wait",
+        "s_waitcnt",
+        "spin",
+        "stall",
+        "等待"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_WAIT = 2;\n\nextern \"C\" __global__ void wait_for_epoch(unsigned* ready, unsigned epoch) {\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  if (linear != 0u) return;\n  FI_OPEN(0);\n  FI_B(EV_WAIT, epoch);\n  while (atomicAdd(ready, 0u) != epoch) __nanosleep(64);\n  FI_E(EV_WAIT, epoch);\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Immediately before the polling, wait instruction, or dependency check.",
+        "end": "After the waited condition is true and the required visibility fence or completion check has returned."
+      },
+      "record_scope": "phase describing dependency latency inside an operator; it is not a business task by itself.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "wait",
+      "validation": [
+        "Verify the consumer observes the producer result after the wait.",
+        "Check that begin/end brackets the actual wait and no missing dependency creates a negative interval.",
+        "Compare wait totals with hardware stall evidence when available.",
+        "Ensure wait records never replace the enclosing operator task."
+      ]
+    },
+    {
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "evidence_status": "reference",
+      "source_cues": [
+        "mma",
+        "wmma",
+        "wgmma",
+        "tcgen05",
+        "mfma",
+        "tensor core",
+        "tl.dot",
+        "cute.gemm",
+        "张量核"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_MMA = 3;\nusing v4f32 = float __attribute__((ext_vector_type(4)));\nusing v4bf16 = __bf16 __attribute__((ext_vector_type(4)));\n\nextern \"C\" __global__ void one_mfma(v4bf16 a, v4bf16 b, float* c) {\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  if (linear >= 64u) return;\n  FI_OPEN(0);\n  v4f32 acc = {0.0f, 0.0f, 0.0f, 0.0f};\n  if ((linear & 63u) == 0u) FI_B(EV_MMA, 0u);\n  acc = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(a, b, acc, 0, 0, 0);\n  if ((linear & 63u) == 0u) FI_E(EV_MMA, 0u);\n  FI_CLOSE();\n  if (linear == 0u) {\n    for (int i = 0; i < 4; ++i) c[i] = acc[i];\n  }\n}\n",
+      "event_boundaries": {
+        "begin": "Immediately before the tensor-core instruction or async WGMMA/tcgen05 issue.",
+        "end": "After the synchronous instruction retires or after the matching async completion wait; never at the issue instruction for async MMA."
+      },
+      "record_scope": "phase inside a GEMM, attention, convolution, or MoE operator; MMA is not the operator task when a larger segment encloses it.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "mma",
+      "validation": [
+        "Compare the full matrix or attention output against a reference result.",
+        "Confirm the selected architecture actually lowers to the intended tensor-core path.",
+        "Require the mma span to be nested inside a canonical operator span.",
+        "Check async MMA wait pairing and overlap accounting."
+      ]
+    },
+    {
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "evidence_status": "reference",
+      "source_cues": [
+        "compute",
+        "fma",
+        "exp",
+        "exp2",
+        "mask",
+        "topk",
+        "conversion",
+        "elementwise",
+        "计算"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_COMPUTE = 4;\n\nextern \"C\" __global__ void affine_exp(float* out, const float* src, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_COMPUTE, static_cast<unsigned>(index));\n    const float value = fmaf(exp2f(src[index]), 0.5f, 0.25f);\n    FI_E(EV_COMPUTE, static_cast<unsigned>(index));\n    out[index] = value;\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Before the first scalar or vector arithmetic instruction in the selected region.",
+        "end": "After the last arithmetic result is materialized and available to the next stage."
+      },
+      "record_scope": "phase for non-MMA arithmetic inside an operator; task only when arithmetic alone is the whole segment.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "compute",
+      "validation": [
+        "Compare every computed element and dtype against the reference expression.",
+        "Check masks, tails, and finite-value behavior.",
+        "Keep compute distinct from mma when tensor-core work is also present.",
+        "Confirm the span does not include unrelated stores or barriers."
+      ]
+    },
+    {
+      "semantic_id": "epilogue",
+      "display_name": "epilogue",
+      "evidence_status": "reference",
+      "source_cues": [
+        "epilogue",
+        "accumulator read",
+        "convert",
+        "bias",
+        "relu",
+        "gelu",
+        "rescale",
+        "收尾"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_EPILOGUE = 5;\n\nextern \"C\" __global__ void convert_with_bias(\n    __half* out, const float* accum, const float* bias, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_EPILOGUE, static_cast<unsigned>(index));\n    const __half value = __float2half_rn(accum[index] + bias[index]);\n    FI_E(EV_EPILOGUE, static_cast<unsigned>(index));\n    out[index] = value;\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "After the main MMA loop and async MMA wait, immediately before accumulator readback or conversion.",
+        "end": "After the last conversion, bias, activation, or rescale result is ready for the store."
+      },
+      "record_scope": "phase after the main MMA loop; it may include accumulator readback, conversion, rescaling, bias, and activation before write-back.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "epilogue",
+      "validation": [
+        "Compare the post-epilogue output for every tile and dtype.",
+        "Exercise bias, activation, and dtype-conversion combinations.",
+        "Require an epilogue span after mma and before store in the same lane.",
+        "Confirm no output tile is written with pre-epilogue accumulators."
+      ]
+    },
+    {
+      "semantic_id": "store",
+      "display_name": "store",
+      "evidence_status": "reference",
+      "source_cues": [
+        "store",
+        "tl.store",
+        "st.global",
+        "global store",
+        "tma store",
+        "writeback",
+        "写回"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_STORE = 6;\n\nextern \"C\" __global__ void store_tile(float* dst, const float* src, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    const float value = src[index];\n    FI_B(EV_STORE, static_cast<unsigned>(index));\n    dst[index] = value;\n    FI_E(EV_STORE, static_cast<unsigned>(index));\n  }\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Immediately before the store instruction or async TMA store issue.",
+        "end": "After a synchronous store is issued and visibility is established; for async TMA store, only after the matching wait_group.read returns."
+      },
+      "record_scope": "phase for the write-back of an operator; task only when the whole selected segment is a standalone store.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "store",
+      "validation": [
+        "Read every destination element and compare it with the reference output.",
+        "Check destination bounds, masks, shape, dtype, and element count.",
+        "Confirm async store completion is recorded after the wait.",
+        "Reject a trace whose store exists without an enclosing operator task."
+      ]
+    },
+    {
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "evidence_status": "reference",
+      "source_cues": [
+        "barrier",
+        "__syncthreads",
+        "syncwarp",
+        "debug_barrier",
+        "mbarrier",
+        "bar.sync",
+        "s_barrier",
+        "同步"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_BARRIER = 7;\n\nextern \"C\" __global__ void cta_handoff(float* dst, const float* src) {\n  __shared__ float tile[256];\n  FI_OPEN(0);\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  tile[linear] = src[blockIdx.x * blockDim.x + linear];\n  if (linear == 0u) FI_B(EV_BARRIER, blockIdx.x);\n  __syncthreads();\n  if (linear == 0u) FI_E(EV_BARRIER, blockIdx.x);\n  dst[blockIdx.x * blockDim.x + linear] = tile[255u - linear];\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Immediately before the barrier arrive/wait sequence.",
+        "end": "After all required participants pass the barrier and the associated fence or visibility rule holds."
+      },
+      "record_scope": "phase inside an operator for CTA/warp handoff; grid_sync boundary records may be ignored by the ABI but remain required evidence.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "barrier",
+      "validation": [
+        "Check the kernel completes without deadlock for full and partial participation cases.",
+        "Verify the barrier span encloses the complete handoff.",
+        "Treat grid_sync boundary spans as ignored when the ABI says so, never as operator coverage.",
+        "Confirm the barrier is not optimized out by instrumentation."
+      ]
+    },
+    {
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "evidence_status": "reference",
+      "source_cues": [
+        "dispatch",
+        "atomicAdd ticket",
+        "work item",
+        "routing",
+        "scatter",
+        "gather",
+        "task queue",
+        "分发"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_DISPATCH = 8;\n\nextern \"C\" __global__ void acquire_work(unsigned* ticket, unsigned* assigned) {\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  if (linear != 0u) return;\n  FI_OPEN(0);\n  FI_B(EV_DISPATCH, blockIdx.x);\n  const unsigned work = atomicAdd(ticket, 1u);\n  FI_E(EV_DISPATCH, blockIdx.x);\n  assigned[blockIdx.x] = work;\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Immediately before the ticket, work-item, token, or expert assignment operation.",
+        "end": "After the assignment is visible and the selected work item is known to its consumers."
+      },
+      "record_scope": "phase for work acquisition or routing inside an operator; task when the dispatch segment is independently bounded.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "dispatch",
+      "validation": [
+        "Verify each work item or token is assigned exactly once.",
+        "Compare assigned ids and consumer outputs against the reference schedule.",
+        "Check atomic visibility and grid-size edge cases.",
+        "Keep dispatch distinct from the compute it enables."
+      ]
+    },
+    {
+      "semantic_id": "communication",
+      "display_name": "communication",
+      "evidence_status": "reference",
+      "source_cues": [
+        "communication",
+        "allreduce",
+        "allgather",
+        "reduce_scatter",
+        "broadcast",
+        "nccl",
+        "rccl",
+        "rdma",
+        "nvshmem",
+        "通信"
+      ],
+      "source_example": "#include <hip/hip_runtime.h>\n#include \"fi_lite_hip.h\"\nconstexpr unsigned EV_COMMUNICATION = 9;\n\nextern \"C\" __global__ void rank_allreduce(\n    float* value, volatile unsigned* peer_ready, volatile float* peer_value,\n    unsigned rank, unsigned num_ranks, unsigned epoch) {\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  if (linear != 0u) return;\n  FI_OPEN(0);\n  FI_B(EV_COMMUNICATION, rank);\n  peer_value[rank] = value[rank];\n  __threadfence_system();\n  peer_ready[rank] = epoch;\n  for (unsigned peer = 0; peer < num_ranks; ++peer) {\n    while (peer_ready[peer] != epoch) __nanosleep(64);\n  }\n  float total = 0.0f;\n  for (unsigned peer = 0; peer < num_ranks; ++peer) total += peer_value[peer];\n  value[rank] = total;\n  FI_E(EV_COMMUNICATION, rank);\n  FI_CLOSE();\n}\n",
+      "event_boundaries": {
+        "begin": "Before the first peer publish, collective issue, or communication wait for the selected rank group.",
+        "end": "After the local collective result is visible to the consumer and all required completion waits return."
+      },
+      "record_scope": "task for the collective or peer-transfer segment; phase when it is internal to a fused communication-compute segment.",
+      "writer_rule": "Exactly one writer per logical recorder. For FI_GRAN=0 compute linear_tid = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z), wave = linear_tid >> 6, and wave lane = linear_tid & 63; only wave lane 0 writes. For FI_GRAN=1 only linear_tid == 0 writes (group=\"cu\"). Inside K-loops use FI_BG_PRED(fi_rec_k_, ev, aux) / FI_EG_PRED(fi_rec_k_, ev, aux) single-16B AoS global_store_dwordx4 with overflow atomicOr hoisted to fi_close. threadIdx.x alone is invalid for multidimensional blocks.",
+      "buffer_rule": "Use FiBuf with n_slots = n_ctas * warps_per_cta, cap that includes OPEN/CLOSE and timer anchors, and overflow bits for lane-full or slot-out-of-range. Check wave < warps_per_cta, slot < n_slots, each write n < cap, and final overflow == 0 before delivery; do not silently drop or wrap a full wave lane.",
+      "language_notes": [
+        "Target: MI308X is amd/gfx942 with wave64 (80 CUs, 4 XCCs); treat gfx942 as an explicit target, never as an NVIDIA fallback.",
+        "Size MFMA GEMM tiles to 128x128x16 across 4 wave64s (256 threads/CTA) so 2048x2048 launches 256 CTAs (<= 4 concurrent CTAs/CU on 80 CUs) instead of 4,096 tiny 32x32 CTAs.",
+        "FI_B/FI_E/FI_M and predicated FI_BG_PRED/FI_EG_PRED come from recorders/hip_cpp/fi_lite_hip.h, emitting single-16B AoS global_store_dwordx4 with s_memrealtime (100 MHz) ticks converted by the dump timer_hz and hoisted overflow atomicOr in fi_close.",
+        "For async global-to-LDS work, end load after the matching s_waitcnt or barrier; for MFMA, end after the completion wait.",
+        "Capture raw ROCm PM counters with same-run rocprof-sys-run --rocm-events and 12-buffer cold-HBM ring (As[12], Bs[12]), pairing counters to dispatch slices by same-dispatch timestamp and rendering topmost [0-100%] hardware utilization at pid=1 / upid=1 / sort_index=-1000; use rocprofv3 only as an explicit fallback/calibration. Persistent kernels must not use unsupported PMC paths."
+      ],
+      "expected_trace_name": "communication",
+      "validation": [
+        "Compare the collective output on every rank and check participation counts.",
+        "Require NIC/RDMA/fabric evidence for cross-host claims; GPU NVLink/XGMI evidence alone is insufficient.",
+        "Check rank arrival, release, timeout, and cancellation handling.",
+        "Keep receive/transmit utilization as supporting timeline data rather than inventing missing values."
+      ]
+    }
+  ]
+}

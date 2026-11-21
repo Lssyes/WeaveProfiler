@@ -22,7 +22,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 PROFILES = HERE / "cases" / "amd_mi308x_resource_profiles.json"
-FI_CHECK = PKG / "4_validate" / "tools" / "fi_check.py"
+FI_CHECK = PKG / "weaveprof/pipeline/validate" / "tools" / "fi_check.py"
 SCHEMA = "weaveprofiler.amd-resource-profiles"
 
 

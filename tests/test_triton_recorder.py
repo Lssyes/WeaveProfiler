@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_DIR = ROOT / "2_instrument" / "recorders" / "triton"
+FRONTEND_DIR = ROOT / "recorders" / "triton"
 sys.path.insert(0, str(FRONTEND_DIR))
 
 try:

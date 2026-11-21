@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-for rel in ("4_validate", "1_scan", "4_validate/harness", "3_capture"):
+for rel in ("weaveprof/pipeline/validate", "weaveprof/pipeline/scan", "weaveprof/pipeline/validate/harness", "weaveprof/pipeline/capture"):
     path = str(ROOT / rel)
     if path not in sys.path:
         sys.path.insert(0, path)

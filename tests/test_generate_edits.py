@@ -18,8 +18,8 @@ from typing import Any, Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GENERATOR_PATH = ROOT / "2_instrument" / "generate_edits.py"
-APPLY_PLAN_PATH = ROOT / "2_instrument" / "apply_plan.py"
+GENERATOR_PATH = ROOT / "weaveprof/pipeline/instrument" / "generate_edits.py"
+APPLY_PLAN_PATH = ROOT / "weaveprof/pipeline/instrument" / "apply_plan.py"
 SPEC = importlib.util.spec_from_file_location(
     "weaveprofiler_generate_edits_tests", GENERATOR_PATH
 )
@@ -229,7 +229,7 @@ class GenerateEditsTest(unittest.TestCase):
         scan, selection = self.triton_fixture()
         scan["route"]["target"] = {"platform": "amd", "card": "mi308x"}
         scan["route"]["recorder"] = (
-            "2_instrument/recorders/triton/fi_triton_amd.py"
+            "recorders/triton/fi_triton_amd.py"
         )
 
         generated = generate_edits_module.generate_edits(scan, selection)

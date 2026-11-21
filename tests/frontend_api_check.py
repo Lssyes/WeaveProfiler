@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 
 FRONTENDS = {
-    "2_instrument/recorders/triton/fi_triton.py": {
+    "recorders/triton/fi_triton.py": {
         "symbols": ["FiCfg", "FiBuffer", "FiAsmBackend", "FI_BACKENDS", "fi_open", "fi_open_by", "fi_close",
                     "fi_b", "fi_e", "fi_m", "fi_bg", "fi_eg", "fi_mg", "cap_for", "write_names",
                     "fi_b_by", "fi_e_by", "fi_m_by", "fi_close_by", "resolve_arch"],
@@ -23,13 +23,13 @@ FRONTENDS = {
                          "%laneid", "%warpid"],
         "must_not_contain": ["amd_gfx942"],   # 未实测的 AMD 设计稿后端已移除，AMD 走 fi_triton_amd.py
     },
-    "2_instrument/recorders/triton/fi_triton_amd.py": {
+    "recorders/triton/fi_triton_amd.py": {
         "symbols": ["FiBuffer", "fi_open", "fi_b", "fi_e", "fi_m", "fi_close"],
         # 设备侧读 s_memrealtime（前后各一条 waitcnt），记录写三块探测缓冲（time/tag/aux），host 打包成 FILITE02
         "must_contain": ["s_memrealtime", "s_waitcnt lgkmcnt(0)", "_fi_hw_id", "tl.store", "FILITE02"],
         "must_not_contain": [],
     },
-    "2_instrument/recorders/cutedsl/fi_cute.py": {
+    "recorders/cutedsl/fi_cute.py": {
         "symbols": ["FiBuffer", "fi_open", "fi_b", "fi_e", "fi_close"],
         "must_contain": ["FILITE02"],
         "must_not_contain": [],
@@ -89,7 +89,7 @@ def main() -> int:
 
     # NVIDIA Triton 前端：能 import 就真生成 PTX（纯 Python，不需要 GPU）
     try:
-        sys.path.insert(0, str(PKG / "2_instrument" / "recorders" / "triton"))
+        sys.path.insert(0, str(PKG / "recorders" / "triton"))
         import torch  # noqa: F401
         import triton  # noqa: F401
         import fi_triton as FT

@@ -1,0 +1,1890 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weaveprofiler.local/schemas/recipe.schema.json",
+  "title": "Weaveprofiler language recipe",
+  "description": "Validates a hardware and language recipe for H20, B300, or MI308X. Canonical display names must equal semantic IDs, B300 keeps sm_100a and sm_103a distinct, and unverified semantics cannot claim ISA evidence.",
+  "type": "object",
+  "required": [
+    "schema",
+    "version",
+    "recipe_id",
+    "target",
+    "language",
+    "language_display_name",
+    "platform_note",
+    "machine_profiles",
+    "evidence_status",
+    "evidence_policy",
+    "evidence_summary",
+    "instruction_families",
+    "recorder",
+    "event_contract",
+    "required_semantic_ids",
+    "source_recognition_policy",
+    "correctness_hazards",
+    "validation_requirements",
+    "semantics"
+  ],
+  "properties": {
+    "schema": {
+      "const": "weaveprofiler.recipe/v1"
+    },
+    "version": {
+      "const": 1
+    },
+    "recipe_id": {
+      "enum": [
+        "nv/h20/cuda_cpp",
+        "nv/h20/triton",
+        "nv/h20/cutedsl",
+        "nv/b300/cuda_cpp",
+        "nv/b300/triton",
+        "nv/b300/cutedsl",
+        "amd/mi308x/hip_cpp",
+        "amd/mi308x/triton"
+      ]
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "language": {
+      "enum": [
+        "cuda_cpp",
+        "triton",
+        "cutedsl",
+        "hip_cpp"
+      ]
+    },
+    "language_display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "platform_note": {
+      "type": "string",
+      "minLength": 1
+    },
+    "machine_profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/cardPath"
+      }
+    },
+    "evidence_status": {
+      "$ref": "#/$defs/evidenceStatus"
+    },
+    "evidence_policy": {
+      "type": "object",
+      "required": [
+        "authority",
+        "display_name_equals_semantic_id",
+        "measured_requires_on_card_measurement",
+        "compiled_is_not_measured",
+        "unverified_is_explicit",
+        "source_patterns_are_hints_only"
+      ],
+      "properties": {
+        "authority": {
+          "const": "configs/semantic_ids.json"
+        },
+        "display_name_equals_semantic_id": {
+          "const": true
+        },
+        "measured_requires_on_card_measurement": {
+          "const": true
+        },
+        "compiled_is_not_measured": {
+          "const": true
+        },
+        "unverified_is_explicit": {
+          "const": true
+        },
+        "source_patterns_are_hints_only": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidence_summary": {
+      "type": "object",
+      "required": [
+        "counts",
+        "machine_profiles_status",
+        "scope"
+      ],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "measured",
+              "compiled",
+              "simulated",
+              "unverified"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "machine_profiles_status": {
+          "$ref": "#/$defs/evidenceStatus"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "instruction_families": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/instructionFamily"
+      }
+    },
+    "recorder": {
+      "$ref": "#/$defs/recorder"
+    },
+    "event_contract": {
+      "$ref": "#/$defs/eventContract"
+    },
+    "required_semantic_ids": {
+      "type": "array",
+      "minItems": 9,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/knownSemanticId"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "const": "load"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "wait"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "mma"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "compute"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "epilogue"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "store"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "barrier"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "dispatch"
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "const": "communication"
+          },
+          "minContains": 1
+        }
+      ]
+    },
+    "source_recognition_policy": {
+      "type": "object",
+      "required": [
+        "hints_only",
+        "resolution",
+        "unknown_fails_closed",
+        "ambiguous_fails_closed"
+      ],
+      "properties": {
+        "hints_only": {
+          "const": true
+        },
+        "resolution": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unknown_fails_closed": {
+          "const": true
+        },
+        "ambiguous_fails_closed": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "correctness_hazards": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "validation_requirements": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "semantics": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/semantic"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "load"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "wait"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "mma"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "compute"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "epilogue"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "store"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "barrier"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "dispatch"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "semantic_id": {
+                "const": "communication"
+              }
+            },
+            "required": [
+              "semantic_id"
+            ]
+          },
+          "minContains": 1
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "nv/h20/cuda_cpp"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "h20"
+              }
+            }
+          },
+          "language": {
+            "const": "cuda_cpp"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/cuda_cpp/fi_lite.cuh"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "nv/h20/triton"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "h20"
+              }
+            }
+          },
+          "language": {
+            "const": "triton"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/triton/fi_triton.py"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "nv/h20/cutedsl"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "h20"
+              }
+            }
+          },
+          "language": {
+            "const": "cutedsl"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/cutedsl/fi_cute.py"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "nv/b300/cuda_cpp"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              }
+            }
+          },
+          "language": {
+            "const": "cuda_cpp"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/cuda_cpp/fi_lite.cuh"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "nv/b300/triton"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              }
+            }
+          },
+          "language": {
+            "const": "triton"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/triton/fi_triton.py"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "nv/b300/cutedsl"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              }
+            }
+          },
+          "language": {
+            "const": "cutedsl"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/cutedsl/fi_cute.py"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "amd/mi308x/hip_cpp"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "mi308x"
+              }
+            }
+          },
+          "language": {
+            "const": "hip_cpp"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/hip_cpp/fi_lite_hip.h"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "recipe_id": {
+            "const": "amd/mi308x/triton"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "mi308x"
+              }
+            }
+          },
+          "language": {
+            "const": "triton"
+          },
+          "recorder": {
+            "properties": {
+              "path": {
+                "const": "recorders/triton/fi_triton_amd.py"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "h20"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "vendor": {
+                "const": "nvidia"
+              },
+              "platform": {
+                "const": "nv"
+              },
+              "arch": {
+                "const": "sm_90"
+              },
+              "architectures": {
+                "const": [
+                  "sm_90"
+                ]
+              },
+              "arch_selection_required": {
+                "const": false
+              },
+              "warp_size": {
+                "const": 32
+              },
+              "profiler": {
+                "properties": {
+                  "primary": {
+                    "const": "nsys"
+                  },
+                  "fallback": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          },
+          "machine_profiles": {
+            "const": [
+              "configs/cards/h20_sm_90.json"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "vendor": {
+                "const": "nvidia"
+              },
+              "platform": {
+                "const": "nv"
+              },
+              "arch": {
+                "const": null
+              },
+              "architectures": {
+                "const": [
+                  "sm_100a",
+                  "sm_103a"
+                ]
+              },
+              "arch_selection_required": {
+                "const": true
+              },
+              "warp_size": {
+                "const": 32
+              },
+              "profiler": {
+                "properties": {
+                  "primary": {
+                    "const": "nsys"
+                  },
+                  "fallback": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          },
+          "machine_profiles": {
+            "const": [
+              "configs/cards/b300_sm_100a.json",
+              "configs/cards/b300_sm_103a.json"
+            ]
+          },
+          "instruction_families": {
+            "required": [
+              "tcgen05",
+              "wgmma"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "properties": {
+              "card": {
+                "const": "mi308x"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "vendor": {
+                "const": "amd"
+              },
+              "platform": {
+                "const": "amd"
+              },
+              "arch": {
+                "const": "gfx942"
+              },
+              "architectures": {
+                "const": [
+                  "gfx942"
+                ]
+              },
+              "arch_selection_required": {
+                "const": false
+              },
+              "warp_size": {
+                "const": 64
+              },
+              "profiler": {
+                "properties": {
+                  "primary": {
+                    "const": "rocprof-sys"
+                  },
+                  "fallback": {
+                    "contains": {
+                      "const": "rocprofv3"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "machine_profiles": {
+            "const": [
+              "configs/cards/mi308x_gfx942.json"
+            ]
+          },
+          "instruction_families": {
+            "required": [
+              "mfma",
+              "wave64"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "evidenceStatus": {
+      "enum": [
+        "measured",
+        "compiled",
+        "simulated",
+        "unverified"
+      ]
+    },
+    "knownSemanticId": {
+      "enum": [
+        "gemm",
+        "attention",
+        "softmax",
+        "reduction",
+        "moe",
+        "convolution",
+        "megakernel",
+        "load",
+        "wait",
+        "mma",
+        "compute",
+        "epilogue",
+        "store",
+        "barrier",
+        "dispatch",
+        "communication"
+      ]
+    },
+    "semanticId": {
+      "enum": [
+        "gemm",
+        "attention",
+        "softmax",
+        "reduction",
+        "moe",
+        "convolution",
+        "megakernel",
+        "load",
+        "wait",
+        "mma",
+        "compute",
+        "epilogue",
+        "store",
+        "barrier",
+        "dispatch",
+        "communication",
+        "unknown"
+      ]
+    },
+    "cardPath": {
+      "type": "string",
+      "pattern": "^configs/cards/[a-z0-9_]+\\.json$"
+    },
+    "semanticIdentity": {
+      "oneOf": [
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "gemm"
+            },
+            "display_name": {
+              "const": "gemm"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "attention"
+            },
+            "display_name": {
+              "const": "attention"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "softmax"
+            },
+            "display_name": {
+              "const": "softmax"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "reduction"
+            },
+            "display_name": {
+              "const": "reduction"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "moe"
+            },
+            "display_name": {
+              "const": "moe"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "convolution"
+            },
+            "display_name": {
+              "const": "convolution"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "megakernel"
+            },
+            "display_name": {
+              "const": "megakernel"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "load"
+            },
+            "display_name": {
+              "const": "load"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "wait"
+            },
+            "display_name": {
+              "const": "wait"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "mma"
+            },
+            "display_name": {
+              "const": "mma"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "compute"
+            },
+            "display_name": {
+              "const": "compute"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "epilogue"
+            },
+            "display_name": {
+              "const": "epilogue"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "store"
+            },
+            "display_name": {
+              "const": "store"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "barrier"
+            },
+            "display_name": {
+              "const": "barrier"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "dispatch"
+            },
+            "display_name": {
+              "const": "dispatch"
+            }
+          }
+        },
+        {
+          "required": [
+            "semantic_id",
+            "display_name"
+          ],
+          "properties": {
+            "semantic_id": {
+              "const": "communication"
+            },
+            "display_name": {
+              "const": "communication"
+            }
+          }
+        }
+      ]
+    },
+    "profiler": {
+      "type": "object",
+      "required": [
+        "primary",
+        "fallback"
+      ],
+      "properties": {
+        "primary": {
+          "enum": [
+            "nsys",
+            "rocprof-sys",
+            "rocprofv3"
+          ]
+        },
+        "fallback": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "nsys",
+              "rocprof-sys",
+              "rocprofv3"
+            ]
+          }
+        },
+        "sampling_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preferred_sample_hz": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "amd_smi_coarse_hz_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "card",
+        "display_name",
+        "vendor",
+        "platform",
+        "arch",
+        "architectures",
+        "arch_selection_required",
+        "warp_size",
+        "profiler",
+        "toolchain"
+      ],
+      "properties": {
+        "card": {
+          "enum": [
+            "h20",
+            "b300",
+            "mi308x"
+          ]
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vendor": {
+          "enum": [
+            "nvidia",
+            "amd"
+          ]
+        },
+        "platform": {
+          "enum": [
+            "nv",
+            "amd"
+          ]
+        },
+        "arch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "sm_90",
+            "sm_100a",
+            "sm_103a",
+            "gfx942",
+            null
+          ]
+        },
+        "architectures": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "sm_90",
+              "sm_100a",
+              "sm_103a",
+              "gfx942"
+            ]
+          }
+        },
+        "arch_selection_required": {
+          "type": "boolean"
+        },
+        "warp_size": {
+          "enum": [
+            32,
+            64
+          ]
+        },
+        "profiler": {
+          "$ref": "#/$defs/profiler"
+        },
+        "toolchain": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "card": {
+                "const": "h20"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "display_name": {
+                "const": "NVIDIA H20"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "card": {
+                "const": "b300"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "display_name": {
+                "const": "NVIDIA B300"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "card": {
+                "const": "mi308x"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "display_name": {
+                "const": "AMD Instinct MI308X"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "instructionFamily": {
+      "type": "object",
+      "required": [
+        "evidence_status",
+        "supporting_evidence",
+        "guidance"
+      ],
+      "properties": {
+        "evidence_status": {
+          "$ref": "#/$defs/evidenceStatus"
+        },
+        "supporting_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "guidance": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_status": {
+                "const": "compiled"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "supporting_evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_status": {
+                "const": "measured"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "supporting_evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "recorder": {
+      "type": "object",
+      "required": [
+        "path",
+        "api_family",
+        "backend",
+        "build_gates",
+        "event_id_range",
+        "event_id_zero",
+        "open_close",
+        "fits",
+        "notes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api_family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_gates": {
+          "type": "string",
+          "minLength": 1
+        },
+        "event_id_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "const": 1
+            },
+            {
+              "const": 4095
+            }
+          ],
+          "items": false
+        },
+        "event_id_zero": {
+          "type": "string",
+          "minLength": 1
+        },
+        "open_close": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "notes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "eventContract": {
+      "type": "object",
+      "required": [
+        "event_ids",
+        "semantic_ids"
+      ],
+      "properties": {
+        "event_ids": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/knownSemanticId"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4095
+          },
+          "required": [
+            "load",
+            "wait",
+            "mma",
+            "compute",
+            "epilogue",
+            "store",
+            "barrier",
+            "dispatch",
+            "communication",
+            "gemm",
+            "attention",
+            "reduction",
+            "moe",
+            "convolution",
+            "megakernel",
+            "softmax"
+          ],
+          "minProperties": 16
+        },
+        "semantic_ids": {
+          "type": "array",
+          "minItems": 16,
+          "items": {
+            "type": "object",
+            "required": [
+              "semantic_id",
+              "display_name",
+              "event_id"
+            ],
+            "properties": {
+              "semantic_id": {
+                "$ref": "#/$defs/knownSemanticId"
+              },
+              "display_name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "event_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4095
+              }
+            },
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "$ref": "#/$defs/semanticIdentity"
+              }
+            ]
+          },
+          "maxItems": 16
+        }
+      },
+      "additionalProperties": false
+    },
+    "semanticEvidence": {
+      "type": "object",
+      "required": [
+        "status",
+        "basis",
+        "machine_profiles",
+        "supporting_constructs",
+        "isa_mnemonics",
+        "notes"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/evidenceStatus"
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "machine_profiles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/cardPath"
+          }
+        },
+        "supporting_constructs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "isa_mnemonics": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "architecture_variants": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "architecture",
+              "machine_profile",
+              "evidence_status",
+              "basis",
+              "supporting_constructs",
+              "isa_mnemonics"
+            ],
+            "properties": {
+              "architecture": {
+                "enum": [
+                  "sm_100a",
+                  "sm_103a"
+                ]
+              },
+              "machine_profile": {
+                "$ref": "#/$defs/cardPath"
+              },
+              "evidence_status": {
+                "$ref": "#/$defs/evidenceStatus"
+              },
+              "basis": {
+                "type": "string",
+                "minLength": 1
+              },
+              "supporting_constructs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "isa_mnemonics": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "notes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "placement": {
+      "type": "object",
+      "required": [
+        "begin",
+        "end",
+        "async_completion_caveat",
+        "scope"
+      ],
+      "properties": {
+        "begin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "end": {
+          "type": "string",
+          "minLength": 1
+        },
+        "async_completion_caveat": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "semanticRecorder": {
+      "type": "object",
+      "required": [
+        "begin",
+        "end",
+        "mark",
+        "guard",
+        "notes"
+      ],
+      "properties": {
+        "begin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "end": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mark": {
+          "type": "string",
+          "minLength": 1
+        },
+        "guard": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "parameterization": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "event_id_const",
+        "aux",
+        "tile",
+        "work_id",
+        "note"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4095
+        },
+        "event_id_const": {
+          "type": "string",
+          "pattern": "^EV_[A-Z][A-Z0-9_]*$"
+        },
+        "aux": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "semantic": {
+      "type": "object",
+      "required": [
+        "semantic_id",
+        "display_name",
+        "kind",
+        "attribution",
+        "description",
+        "operator_level",
+        "source_recognition",
+        "placement",
+        "recorder",
+        "parameterization",
+        "correctness_hazards",
+        "validation",
+        "evidence_status",
+        "evidence"
+      ],
+      "properties": {
+        "semantic_id": {
+          "$ref": "#/$defs/knownSemanticId"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "operator",
+            "shared",
+            "phase"
+          ]
+        },
+        "attribution": {
+          "enum": [
+            "compute",
+            "load",
+            "wait",
+            "store",
+            "control",
+            "memory",
+            "other"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operator_level": {
+          "type": "boolean"
+        },
+        "source_recognition": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "placement": {
+          "$ref": "#/$defs/placement"
+        },
+        "recorder": {
+          "$ref": "#/$defs/semanticRecorder"
+        },
+        "parameterization": {
+          "$ref": "#/$defs/parameterization"
+        },
+        "correctness_hazards": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "validation": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "evidence_status": {
+          "$ref": "#/$defs/evidenceStatus"
+        },
+        "evidence": {
+          "$ref": "#/$defs/semanticEvidence"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$ref": "#/$defs/semanticIdentity"
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_status": {
+                "const": "measured"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "status": {
+                    "const": "measured"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_status": {
+                "const": "compiled"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "status": {
+                    "const": "compiled"
+                  },
+                  "supporting_constructs": {
+                    "minItems": 1
+                  },
+                  "isa_mnemonics": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_status": {
+                "const": "simulated"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "status": {
+                    "const": "simulated"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_status": {
+                "const": "unverified"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "properties": {
+                  "status": {
+                    "const": "unverified"
+                  },
+                  "isa_mnemonics": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

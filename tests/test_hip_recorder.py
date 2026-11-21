@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEADER = ROOT / "2_instrument" / "recorders" / "hip_cpp" / "fi_lite_hip.h"
+HEADER = ROOT / "recorders" / "hip_cpp" / "fi_lite_hip.h"
 
 
 HARNESS = r'''
@@ -294,7 +294,7 @@ def compile_harness(hipcc: str, build_dir: Path, gran: int) -> Path:
         "--offload-arch=gfx942",
         "-DFI_LEVEL=2",
         f"-DFI_GRAN={gran}",
-        f"-I{ROOT / '2_instrument' / 'recorders' / 'hip_cpp'}",
+        f"-I{ROOT / 'recorders' / 'hip_cpp'}",
         str(source),
         "-o",
         str(binary),

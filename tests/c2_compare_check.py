@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """C2 正确性口径离线自检（不需要 GPU，只需要 numpy）。
 
-用同一份 randn 数据造参考/候选张量，走 knowledge/templates/compare_raw_arrays.py 的 CLI，验证：
+用同一份 randn 数据造参考/候选张量，走 configs/templates/compare_raw_arrays.py 的 CLI，验证：
   1. 逐位一致 -> COMPARE_PASS、pass=true、checked_elements 覆盖全部元素、max_abs=max_rel=0
   2. 改一个元素 -> rc=2、pass=false、first_mismatch 给出确切下标与两边数值
   3. 出现 NaN -> nonfinite>0 且判失败（不能靠 atol 放宽混过去）
   4. shape 不一致 / 缺数组 -> 直接报错退出，不做部分比较
   5. --key 只比指定数组；.npy 单数组也能比；pass 的口径是 max_abs<=atol 且 max_rel<=rtol
-  6. 交给 4_validate/tools/fi_check.py --compare-cmd 跑 C2：结果与阈值原样进 check.json，
+  6. 交给 weaveprof/pipeline/validate/tools/fi_check.py --compare-cmd 跑 C2：结果与阈值原样进 check.json，
      --expected-elements 大于实际比较元素数时判 FAIL
 
 用法：python3 -I tests/c2_compare_check.py [--keep-dir DIR]
@@ -25,8 +25,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
-COMPARE = PKG / "knowledge" / "templates" / "compare_raw_arrays.py"
-CHECK = PKG / "4_validate" / "tools" / "fi_check.py"
+COMPARE = PKG / "configs" / "templates" / "compare_raw_arrays.py"
+CHECK = PKG / "weaveprof/pipeline/validate" / "tools" / "fi_check.py"
 
 SHAPE = (64, 128)
 

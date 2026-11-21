@@ -48,11 +48,11 @@ def _load(rel: str, name: str):
     return mod
 
 
-DECODER = _load("4_validate/tools/fi_lite_decode.py", "dh_decoder")
-ENGINE = _load("2_instrument/rule_engine.py", "dh_engine")
-PRETOOL = ROOT / "4_validate" / "harness" / "hooks" / "fi_pretool_guard.py"
-STOPGATE = ROOT / "4_validate" / "harness" / "hooks" / "fi_stop_gate.py"
-MARKER = ROOT / "4_validate" / "harness" / "hooks" / "fi_session_marker.py"
+DECODER = _load("weaveprof/pipeline/validate/tools/fi_lite_decode.py", "dh_decoder")
+ENGINE = _load("weaveprof/pipeline/instrument/rule_engine.py", "dh_engine")
+PRETOOL = ROOT / "weaveprof/pipeline/validate" / "harness" / "hooks" / "fi_pretool_guard.py"
+STOPGATE = ROOT / "weaveprof/pipeline/validate" / "harness" / "hooks" / "fi_stop_gate.py"
+MARKER = ROOT / "weaveprof/pipeline/validate" / "harness" / "hooks" / "fi_session_marker.py"
 
 
 def _sample_cuda_pipeline() -> str:
@@ -594,9 +594,9 @@ class DeterministicHarnessTests(unittest.TestCase):
                  "tool_name": "Write", "tool_input": {"file_path": f"{td}/out.perfetto-trace.seal.json", "content": "{}"}},
                 {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
                  "tool_name": "edit_file", "tool_input": {"Path": f"{td}/round-1/seal.json"}},
-                # Audit #2: comment smuggling `# run_measurement.py` & `find -exec`
+                # Audit #2: comment smuggling `# weaveprof/pipeline/core/run_measurement.py` & `find -exec`
                 {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "cp fake.json out.seal.json # run_measurement.py"}},
+                 "tool_name": "Bash", "tool_input": {"command": "cp fake.json out.seal.json # weaveprof/pipeline/core/run_measurement.py"}},
                 {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
                  "tool_name": "Bash", "tool_input": {"command": "find . -name x -exec cp fake ALL_GATES.json {} ;"}},
                 # Audit #3: newline, single `&`, `$(...)`

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "1_scan" / "get_trace_processor.py"
+SCRIPT = ROOT / "weaveprof/pipeline/scan" / "get_trace_processor.py"
 spec = importlib.util.spec_from_file_location("weaveprofiler_get_trace_processor", SCRIPT)
 if spec is None or spec.loader is None:
     raise RuntimeError("cannot load get_trace_processor.py")

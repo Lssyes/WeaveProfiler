@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPTURE = ROOT / "3_capture"
+CAPTURE = ROOT / "weaveprof/pipeline/capture"
 if str(CAPTURE) not in sys.path:
     sys.path.insert(0, str(CAPTURE))
 

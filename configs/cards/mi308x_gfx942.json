@@ -1,0 +1,1805 @@
+{
+  "schema": "weaveprofiler.card-machine/v1",
+  "version": 1,
+  "kind": "machine_profile",
+  "card": "mi308x",
+  "arch": "gfx942",
+  "vendor": "amd",
+  "platform": "amd",
+  "warp_size": 64,
+  "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+  "date": "2026-11-08",
+  "evidence_status": "measured",
+  "granularity": [
+    "CU",
+    "wave"
+  ],
+  "evidence_policy": "每条 isa_mnemonics 都由生成器用正则从本机真实反汇编里抓；抓不到就报错退出，不写推测值。需要上卡才能确定的数字（计时器频率/最小步长、HW_ID 实测分布、直写 LDS 正确性、开销）从 oncard/results/*.out 注入，文件不在时写“未测”，跑完回填后重新生成本文件。",
+  "profiler": {
+    "primary": "rocprof-sys",
+    "fallback": [
+      "rocprofv3"
+    ],
+    "sampling_model": "per_dispatch_rocm_events",
+    "preferred_sample_hz": null,
+    "amd_smi_coarse_hz_range": [
+      2,
+      5
+    ],
+    "source": "rocprof-sys-run --rocm-events",
+    "counter_granularity": "per_dispatch",
+    "same_run_same_dispatch_pairing": true,
+    "canonical_trace_card_token": "card-mi308x",
+    "evidence": "measured_on_mi308x_gemm_route",
+    "note": "Primary MI308X route: rocprof-sys-run --rocm-events collects raw ROCm PM counter tracks and kernel dispatch slices in the same Perfetto proto, paired by same-dispatch start timestamp with a declared tolerance. ROCm PM evidence is per dispatch; there is no periodic PM sampling equivalent to nsys at 200 kHz. Optional amd-smi polling is coarse debug context only, never compute or memory utilization. rocprofv3 MfmaUtil is optional independent calibration/fallback, not the primary source."
+  },
+  "entries": [
+    {
+      "construct": "普通指针全局读（标量与向量化）",
+      "isa_mnemonics": [
+        "global_load_dword"
+      ],
+      "placement_rule": "B 放在装载语句之前；E 不能放在装载语句之后，要放在“第一个真正用到该值的构造之后”——AMDGCN 的 global_load 是异步的，装载语句返回时数据还没到，真正的完成点是编译器插的 s_waitcnt vmcnt(N) 之后。若只想量“发射”，用 FI_M 记瞬时点。",
+      "evidence": {
+        "snippet": "global_load_dword v4, v[2:3], off | global_load_dword v5, v[2:3], off offset:256",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "buffer 指令装载（__builtin_amdgcn_make_buffer_rsrc + raw_buffer_load_b32/b128）",
+      "isa_mnemonics": [
+        "buffer_load_dword"
+      ],
+      "placement_rule": "同上：E 放在消费点之后。注意 ROCm 7.2 的 builtin 名字是 raw_buffer_load_b32/b64/b96/b128（按字节宽度命名），资源描述符类型是 __amdgpu_buffer_rsrc_t；老写法 __builtin_amdgcn_raw_buffer_load_v4f32 / __builtin_amdgcn_raw_buffer_size 在本机已不存在。 注意：buffer_load 形式带 offen（voffset 在 VGPR 里）；soffset 走 SGPR，便于把 wave 级基址提到标量寄存器。",
+      "evidence": {
+        "snippet": "buffer_load_dword v3, v1, s[0:3], 0 offen | buffer_load_dword v4, v2, s[0:3], 0 offen",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "global -> VGPR -> LDS（常规 staging，没有 LDS 直写时的路径）",
+      "isa_mnemonics": [
+        "global_load_dwordx4",
+        "ds_write_b128",
+        "ds_read_b32"
+      ],
+      "placement_rule": "一次“装载”要拆成两段记：global_load 到 VGPR 是一段（B/E 由 vmcnt 界定），ds_write 到 LDS 是另一段（B/E 由 lgkmcnt 界定）。把两段合成一对 B/E 会把 VMEM 延迟和 LDS 写延迟混在一起，归因时分不开。",
+      "evidence": {
+        "snippet": "global_load_dwordx4 v[2:5], v[2:3], off | ds_write_b128 v1, v[2:5] | ds_read_b32 v0, v0",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "global 直写 LDS（LDS DMA：buffer_load_dword ... offen lds）",
+      "isa_mnemonics": [
+        "s_mov_b32",
+        "s_nop",
+        "buffer_load_dword",
+        "buffer_load_dword v<off>, s[0:3], 0 offen lds"
+      ],
+      "placement_rule": "发射点记 FI_M（瞬时），完成点记在 s_waitcnt vmcnt(0) 之后——直写 LDS 的完成由 vmcnt 计，不是 lgkmcnt。之后若还要跨 wave 可见，再补 s_barrier（记录点放在 barrier 之后）。 注意：gfx942 上每线程只能搬 1 DWORD：buffer_load_dwordx3/x4 ... lds 被汇编器直接拒收（见 disasm/llvm_mc_syntax_matrix.txt），x3/x4 是 gfx950 才有。目的 LDS 地址不是指令操作数，要先用 s_mov_b32 m0, sX 写进 M0；指令本身没有 vdst。ROCm 7.2 的 __builtin_amdgcn_raw_ptr_buffer_load_lds 在 gfx942 上会让 clang ISel 崩（SITargetLowering::LowerINTRINSIC_VOID，见 disasm/clang_builtin_ice_raw_ptr_buffer_load_lds.log），可用写法有两种：CK 的内联汇编（s_mov_b32 m0 + buffer_load_dword ... offen lds），或自己声明 llvm.amdgcn.raw.buffer.load.lds intrinsic（本条证据就是后者，编译器自动插了 s_nop 0 + s_waitcnt vmcnt(0)）。 坑：内联汇编写法必须自己补 s_waitcnt vmcnt(0)：asm volatile 对编译器是黑盒，不会自动插等待。 勘误（实测）：见条目“装载 / HIP / global 直写 LDS”；发射点记 FI_M，完成点记在 s_waitcnt vmcnt(0) 之后。（实测细节：方向对，但四个关键细节缺失，照草案写会失败：(1) 直写 LDS 的指令没有 vdst 操作数，目的 LDS 地址要先 s_mov_b32 m0, sX 写进 M0；(2) gfx942 每线程只能搬 1 DWORD，buffer_load_dwordx3/x4 ... lds 被汇编器直接拒收（x3/x4 是 gfx950 才有）；(3) ROCm 7.2 的 clang builtin __builtin_amdgcn_raw_ptr_buffer_load_lds 在 gfx942 上让 ISel 崩溃（SITargetLowering::LowerINTRINSIC_VOID），只能走内联汇编或手写 llvm.amdgcn.raw.buffer.load.lds 声明；(4) 它的完成计在 vmcnt 上，不是 lgkmcnt——编译器自动插的是 s_waitcnt vmcnt(0)，CK 的 async_buffer_load_fence 也是 vmcnt。）",
+      "evidence": {
+        "snippet": "s_mov_b32 m0, s4 | buffer_load_dword v0, s[0:3], 0 offen lds | s_waitcnt vmcnt(0)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "标量装载（kernel 参数 / 所有 lane 同址）",
+      "isa_mnemonics": [
+        "s_load_dwordx4",
+        "s_load_dword"
+      ],
+      "placement_rule": "标量装载由 lgkmcnt 计。记录点不要放在 s_load 与它的 s_waitcnt lgkmcnt(0) 之间，否则会把标量延迟算进后面的区间。",
+      "evidence": {
+        "snippet": "s_load_dwordx4 s[4:7], s[0:1], 0x0 | s_load_dword s0, s[0:1], 0x0",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "全局访存等待 s_waitcnt vmcnt(N)（含部分等待）",
+      "isa_mnemonics": [
+        "s_waitcnt vmcnt(N)"
+      ],
+      "placement_rule": "等待类记录的 B 放在“第一次可能阻塞的构造之前”，E 放在“该 s_waitcnt 返回之后”。编译器会插部分等待（vmcnt(1)/vmcnt(2)…）来重叠多条全局读，所以“一次装载”不一定对应一次 vmcnt(0)；按语义边界记，不要按 s_waitcnt 指令条数记。 勘误（实测）：按“数据来源”决定等哪个计数器，不要按指令类别想当然；等待区间按语义边界记，不按 s_waitcnt 条数记。（实测细节：分工确认无误（反汇编里 global_load 后是 vmcnt，ds_read/ds_write/s_load 后是 lgkmcnt，并且大量使用部分等待 vmcnt(15)/vmcnt(13)/lgkmcnt(1)）。需要补四条：(1) global 直写 LDS 计在 vmcnt；(2) LDS 原子（ds_add_u32/ds_cmpst_rtn_b32/ds_wrxchg_rtn_b32）计在 lgkmcnt；(3) 全局原子返回前编译器插的是 s_waitcnt vmcnt(0) lgkmcnt(0) 组合；(4) gfx942 没有 s_waitcnt_depctr（llvm-mc 报 instruction not supported），NVIDIA 上靠 depctr 做的依赖计数技巧在这里用不了。）",
+      "evidence": {
+        "snippet": "s_waitcnt vmcnt(1) | s_waitcnt vmcnt(0)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "LDS / 标量访存等待 s_waitcnt lgkmcnt(N)",
+      "isa_mnemonics": [
+        "s_waitcnt lgkmcnt(N)"
+      ],
+      "placement_rule": "ds_write/ds_read/s_load 的完成都归 lgkmcnt。跨 wave 的 LDS 生产-消费必须 lgkmcnt(0) + s_barrier 两件都做，只等 lgkmcnt 不栅栏会读到别的 wave 还没写完的槽。 勘误（实测）：按“数据来源”决定等哪个计数器，不要按指令类别想当然；等待区间按语义边界记，不按 s_waitcnt 条数记。（实测细节：分工确认无误（反汇编里 global_load 后是 vmcnt，ds_read/ds_write/s_load 后是 lgkmcnt，并且大量使用部分等待 vmcnt(15)/vmcnt(13)/lgkmcnt(1)）。需要补四条：(1) global 直写 LDS 计在 vmcnt；(2) LDS 原子（ds_add_u32/ds_cmpst_rtn_b32/ds_wrxchg_rtn_b32）计在 lgkmcnt；(3) 全局原子返回前编译器插的是 s_waitcnt vmcnt(0) lgkmcnt(0) 组合；(4) gfx942 没有 s_waitcnt_depctr（llvm-mc 报 instruction not supported），NVIDIA 上靠 depctr 做的依赖计数技巧在这里用不了。）",
+      "evidence": {
+        "snippet": "s_waitcnt lgkmcnt(0) | s_waitcnt lgkmcnt(0) | s_waitcnt lgkmcnt(0)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "LDS 标志自旋握手（生产者-消费者）",
+      "isa_mnemonics": [
+        "s_cbranch_execz",
+        "ds_cmpst_rtn_b32",
+        "s_sleep",
+        "s_cbranch_execnz"
+      ],
+      "placement_rule": "自旋循环只在循环外记一对 B/E（B 在第一次轮询前，E 在条件满足、退出循环之后），一次等待产生一对记录；把记录点放进循环体会让每条泳道的事件数暴涨并污染统计。gfx942 上 LDS 的 CAS/交换是 ds_cmpst_rtn_b32 / ds_wrxchg_rtn_b32，原子加是 ds_add_u32（无返回）或 ds_add_rtn_u32（带返回），轮询一般配 s_sleep 降功耗。 勘误（实测）：打点代码里的流式写用 nt；生产者发布标志前用 __threadfence_block() + lgkmcnt(0)（不要指望它发缓存指令），跨 CTA 的标志用 __threadfence()。（实测细节：gfx942 的 s_barrier 没有“到达/等待”分离形式（s_barrier_signal/s_barrier_wait 是 gfx950 才有），所以到达时刻与放行时刻在 ISA 层不可分，只能一对 B/E 包住。缓存修饰符在 gfx940+ 改名：glc->sc0、slc->sc1、dlc->nt，llvm-mc 对 glc/slc/dlc 一律拒收；非时间局部性写（记录点该用的）是 global_store_dwordx4 ... nt。设备级栅栏 __threadfence() = buffer_inv + buffer_wbl2；__threadfence_block() 不产生任何缓存指令，只有 s_waitcnt，跨 wave 可见性要靠 lgkmcnt(0) + s_barrier。）",
+      "evidence": {
+        "snippet": "s_cbranch_execz .LBB0_8 | s_cbranch_execz .LBB0_7 | ds_cmpst_rtn_b32 v3, v2, v1, v1",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "全局标志自旋（跨 CTA）",
+      "isa_mnemonics": [
+        "s_sleep"
+      ],
+      "placement_rule": "跨 CTA 的标志必须用 volatile/原子读全局内存，且读之前要有 s_waitcnt vmcnt(0)；记录点同样放循环外。",
+      "evidence": {
+        "snippet": "s_sleep 4",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "MFMA bf16 16x16x16（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k）",
+      "isa_mnemonics": [
+        "v_mfma_f32_16x16x16_bf16"
+      ],
+      "placement_rule": "MFMA 是异步的但由硬件计分板跟踪：B 放在第一条 v_mfma 之前，E 放在“累加器被真正读走”（写回 LDS/全局或参与后续运算）之后的那条 s_waitcnt 之后。只包住发射点会严重低估计算时间。 注意：builtin 名字带 _1k，但 gfx942 反汇编出来的助记符是 v_mfma_f32_16x16x16_bf16（没有 _1k 后缀）；累加器是 4 个 VGPR（v[0:3]）。 勘误（实测）：检查器与 binsim 的匹配表要用反汇编里的真实拼写（下划线在 bf16/f16 前），不要用 builtin 名。（实测细节：builtin 名带 _1k（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k），但 gfx942 反汇编出来的助记符没有 _1k 后缀：v_mfma_f32_16x16x16_bf16 / v_mfma_f32_16x16x16_f16 / v_mfma_f32_32x32x8_f16；Triton 的 tl.dot 实测落为 v_mfma_f32_32x32x8_f16（fp16）与 v_mfma_f32_32x32x8_bf16（bf16，T2 的数据类型）。累加器占 4 个 VGPR（16x16x16）或 16 个（32x32x8）。）",
+      "evidence": {
+        "snippet": "v_mfma_f32_16x16x16_bf16 v[0:3], v[0:1], v[2:3], 0",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "MFMA f16 16x16x16 / 32x32x8",
+      "isa_mnemonics": [
+        "v_mfma_f32_32x32x8_f16"
+      ],
+      "placement_rule": "同上。32x32x8 的累加器占 16 个 VGPR（v[0:15]），寄存器压力比 16x16x16 大得多，插桩增加的 VGPR 有可能把它推过占用率阈值，改档后要重测寄存器数与主循环指令数。 勘误（实测）：检查器与 binsim 的匹配表要用反汇编里的真实拼写（下划线在 bf16/f16 前），不要用 builtin 名。（实测细节：builtin 名带 _1k（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k），但 gfx942 反汇编出来的助记符没有 _1k 后缀：v_mfma_f32_16x16x16_bf16 / v_mfma_f32_16x16x16_f16 / v_mfma_f32_32x32x8_f16；Triton 的 tl.dot 实测落为 v_mfma_f32_32x32x8_f16（fp16）与 v_mfma_f32_32x32x8_bf16（bf16，T2 的数据类型）。累加器占 4 个 VGPR（16x16x16）或 16 个（32x32x8）。）",
+      "evidence": {
+        "snippet": "v_mfma_f32_32x32x8_f16 v[0:15], v[0:1], v[2:3], 0",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "非 MFMA 的 FMA 主循环",
+      "isa_mnemonics": [
+        "v_add_u32_e32",
+        "v_fma_f32",
+        "v_fmac_f32_e32"
+      ],
+      "placement_rule": "普通 VALU 循环是同步的，B/E 直接包住循环即可；注意编译器可能把 a*b+c 合成 v_fma_f32/v_fmac_f32_e32，指令数与源码行数不是一一对应，做 E2 扰动比对时要以反汇编条数为准。",
+      "evidence": {
+        "snippet": "v_add_u32_e32 v0, s2, v0 | v_fma_f32 v3, 0, v4, v2 | v_fma_f32 v3, v4, v3, v2",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "compute",
+      "display_name": "compute",
+      "semantic_legacy": "计算",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "__syncthreads()（工作组栅栏）",
+      "isa_mnemonics": [
+        "s_waitcnt lgkmcnt(N)",
+        "s_barrier"
+      ],
+      "placement_rule": "B/E 直接包住 __syncthreads()：gfx942 的 s_barrier 是“到达即等待”的一条指令，没有 gfx950 的 s_barrier_signal / s_barrier_wait 分离形式，所以到达时刻和放行时刻在 ISA 层不可分。编译器会在 s_barrier 前自动插 s_waitcnt lgkmcnt(0)，这段等待也算在同步区间里（符合语义：数据没写完就不该放行）。 勘误（实测）：打点代码里的流式写用 nt；生产者发布标志前用 __threadfence_block() + lgkmcnt(0)（不要指望它发缓存指令），跨 CTA 的标志用 __threadfence()。（实测细节：gfx942 的 s_barrier 没有“到达/等待”分离形式（s_barrier_signal/s_barrier_wait 是 gfx950 才有），所以到达时刻与放行时刻在 ISA 层不可分，只能一对 B/E 包住。缓存修饰符在 gfx940+ 改名：glc->sc0、slc->sc1、dlc->nt，llvm-mc 对 glc/slc/dlc 一律拒收；非时间局部性写（记录点该用的）是 global_store_dwordx4 ... nt。设备级栅栏 __threadfence() = buffer_inv + buffer_wbl2；__threadfence_block() 不产生任何缓存指令，只有 s_waitcnt，跨 wave 可见性要靠 lgkmcnt(0) + s_barrier。）",
+      "evidence": {
+        "snippet": "s_waitcnt lgkmcnt(0) | s_waitcnt lgkmcnt(0) | s_barrier",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "全局原子（到达计数 / 票据）",
+      "isa_mnemonics": [
+        "global_atomic_add"
+      ],
+      "placement_rule": "原子返回型操作是异步的：B 放在原子指令前，E 放在“用到返回值”之后（编译器会插 s_waitcnt vmcnt(0) lgkmcnt(0)）。只做一次“我到达了”的无返回原子时用 FI_M 记瞬时点。 注意：gfx940+ 的缓存修饰符改名了：glc->sc0、slc->sc1、dlc/nt->nt。llvm-mc 直接拒收 glc/slc/dlc 写法（disasm/llvm_mc_syntax_matrix.txt），编译器自己会带上 sc0。",
+      "evidence": {
+        "snippet": "global_atomic_add v1, v1, v2, s[0:1] sc0",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "dispatch",
+      "display_name": "dispatch",
+      "semantic_legacy": "同步",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "LDS 原子（标志发布 / 归还槽位）",
+      "isa_mnemonics": [
+        "ds_cmpst_rtn_b32",
+        "ds_wrxchg_rtn_b32"
+      ],
+      "placement_rule": "LDS 原子归 lgkmcnt。发布标志（atomicExch -> ds_wrxchg_rtn_b32）之前要有 __threadfence_block() 或至少保证前面的 ds_write 已经 lgkmcnt(0)，否则消费者看到标志却读到旧数据。",
+      "evidence": {
+        "snippet": "ds_cmpst_rtn_b32 v3, v2, v1, v1 | ds_cmpst_rtn_b32 v3, v2, v1, v1 | ds_wrxchg_rtn_b32 v1, v1, v2",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "内存栅栏 __threadfence 系列",
+      "isa_mnemonics": [
+        "s_waitcnt lgkmcnt(N)",
+        "s_waitcnt vmcnt(N)",
+        "buffer_wbl2",
+        "buffer_inv"
+      ],
+      "placement_rule": "栅栏一般不单独记点（它没有“等待时长”语义），跟着它保护的那次同步一起记。需要区分级别时看反汇编：设备/系统级栅栏 = buffer_inv + buffer_wbl2；__threadfence_block() 在本机不产生任何缓存指令，只有 s_waitcnt——别指望它做跨 wave 的可见性保证。 勘误（实测）：打点代码里的流式写用 nt；生产者发布标志前用 __threadfence_block() + lgkmcnt(0)（不要指望它发缓存指令），跨 CTA 的标志用 __threadfence()。（实测细节：gfx942 的 s_barrier 没有“到达/等待”分离形式（s_barrier_signal/s_barrier_wait 是 gfx950 才有），所以到达时刻与放行时刻在 ISA 层不可分，只能一对 B/E 包住。缓存修饰符在 gfx940+ 改名：glc->sc0、slc->sc1、dlc->nt，llvm-mc 对 glc/slc/dlc 一律拒收；非时间局部性写（记录点该用的）是 global_store_dwordx4 ... nt。设备级栅栏 __threadfence() = buffer_inv + buffer_wbl2；__threadfence_block() 不产生任何缓存指令，只有 s_waitcnt，跨 wave 可见性要靠 lgkmcnt(0) + s_barrier。）",
+      "evidence": {
+        "snippet": "s_waitcnt lgkmcnt(0) | s_waitcnt vmcnt(0) | buffer_wbl2 sc1",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "global_store（标量与向量化）",
+      "isa_mnemonics": [
+        "global_store_dwordx4"
+      ],
+      "placement_rule": "B 放在写回语句前，E 放在写回之后（若后面还有 kernel 收尾同步，则放在 s_waitcnt vmcnt(0)/s_endpgm 前）。global_store 是发出即走，区间长度反映的是“发射 + 排队”，不等于数据落 HBM 的时刻。",
+      "evidence": {
+        "snippet": "global_store_dwordx4 v[4:5], v[0:3], off",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "buffer_store",
+      "isa_mnemonics": [
+        "buffer_store_dword"
+      ],
+      "placement_rule": "同上。buffer_store 的好处是越界自动丢弃（资源描述符里带 range），做边界不规则的写回时比 global_store 省事。",
+      "evidence": {
+        "snippet": "buffer_store_dword v1, v0, s[4:7], 0 offen",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "带缓存策略的流式写（记录点本身用的写法）",
+      "isa_mnemonics": [
+        "global_store_dword"
+      ],
+      "placement_rule": "打点记录本身要用流式写，避免污染业务数据的 L2 驻留：gfx942 上是 nt（非时间局部性）修饰符。标量可以用 __builtin_nontemporal_store，16 字节记录用内联汇编 global_store_dwordx4 %0, %1, off nt。 勘误（实测）：打点代码里的流式写用 nt；生产者发布标志前用 __threadfence_block() + lgkmcnt(0)（不要指望它发缓存指令），跨 CTA 的标志用 __threadfence()。（实测细节：gfx942 的 s_barrier 没有“到达/等待”分离形式（s_barrier_signal/s_barrier_wait 是 gfx950 才有），所以到达时刻与放行时刻在 ISA 层不可分，只能一对 B/E 包住。缓存修饰符在 gfx940+ 改名：glc->sc0、slc->sc1、dlc->nt，llvm-mc 对 glc/slc/dlc 一律拒收；非时间局部性写（记录点该用的）是 global_store_dwordx4 ... nt。设备级栅栏 __threadfence() = buffer_inv + buffer_wbl2；__threadfence_block() 不产生任何缓存指令，只有 s_waitcnt，跨 wave 可见性要靠 lgkmcnt(0) + s_barrier。）",
+      "evidence": {
+        "snippet": "global_store_dword v[0:1], v2, off nt | global_store_dword v[0:1], v2, off sc0",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "全 CTA 广播一个标量（最后一个 CTA 归约的票号写法）",
+      "isa_mnemonics": [
+        "ds_write_b32",
+        "s_barrier",
+        "ds_read_b32"
+      ],
+      "placement_rule": "tid0 写 __shared__ 变量（ds_write_b32）-> __syncthreads()（s_barrier）-> 所有线程读回（ds_read_b32）。这是把标量发给整个 CTA 全部 wave 的唯一可靠写法。归约分支的判定必须放在这次广播之后，让**同一个 CTA 的所有 wave 得到同一个判定结果**；否则分支里再出现 __syncthreads 就只有部分 wave 执行，s_barrier 到不齐，行为未定义（本机实测：final 输出变成 -inf/1e34 量级，而每个 CTA 的 partial 全对，非常难查）。分支内用到的 shared 数组也要在分支外声明并保证全部线程都写，别只写 tid<64 那一段。 注意：本机踩过的完整故障链见 kb_errata_gfx942_11 与 oncard/results/prev2/fi_l2.out（修复前）、oncard/results/fi_l2.out（修复后，verdict=PASS）。 勘误（实测）：wave64 上把一个标量发给整个 CTA 只能用 LDS：tid0 写 __shared__ -> __syncthreads() -> 全体读回。凡是分支条件来自“每个 CTA 一个”的标量（票号、归约结果、tile 归属），必须先把这个标量广播到全部 wave 再做分支，保证同 CTA 的所有 wave 判定一致；分支内部再出现 __syncthreads / s_barrier 就是危险信号。分支内用到的 shared 数组要在分支外声明，并确认全部线程都会写（或先清零）。需要按 32 分组时用 __shfl(x, src, 32)（掩码 0x180，一个 wave 拆两半），别用 width=64 再自己算偏移。（实测细节：两处缺口，都在“最后一个 CTA 做全局归约”这个草案点名的结构里踩到了：(1) __shfl(x, 0) 在 HIP 上默认 width = warpSize = 64，只在**本 wave 内**广播 lane0，落为 v_mbcnt_lo/hi + ds_bpermute_b32，没有任何跨 wave 语义。用它广播 atomicAdd 拿到的票号时，wave1..3 的 lane0 取到的是自己的 0（票号只有 tid0 有），于是最后一个 CTA 只有 wave0 进了归约分支。(2) 归约分支内部还有一个 __syncthreads()：只有 1/4 的 wave 执行 s_barrier，到不齐，行为未定义；同时分支里声明的 __shared__ double thread_sum[256] 只有 wave0 的 tid 0..63 写过，tid0 却把 256 项全加了一遍，[64..255] 是从没被写过的 LDS。实测症状（修复前，oncard/results/prev2/fi_l2.out）：每个 CTA 的 partial 全对（bad=0, max_abs_err=0），只有 final_got 是垃圾（-inf / 7.89e+36 / -3.52e+33 / 9.23e+34，四个档各不相同），verdict=FAIL；而且 FI_LEVEL=0 的基线档反而比插桩档慢 29%（877.0 us vs 678.7 us）——那是部分 wave 卡在到不齐的 s_barrier 上，不是插桩的开销。修复后四档全部 PASS，l0 回到最快（664.0 us），开销才显出真实的 +19.8%~+20.5%。）",
+      "evidence": {
+        "snippet": "ds_write_b32 v1, v2 | s_barrier | ds_read_b32 v1, v1",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "tl.load（带 mask）：exec 掩码 + global_load",
+      "isa_mnemonics": [
+        "s_and_saveexec_b64",
+        "s_cbranch_execz",
+        "global_load_dword"
+      ],
+      "placement_rule": "Triton 的 mask 不是每 lane 一个谓词，而是把整段代码用 s_and_saveexec_b64 关进 exec 掩码里，再用 s_cbranch_execz 跳过。后果：落在 mask 区域内的记录点，lane 0 可能根本不在 exec 里，这条记录会静默丢失。所以 Triton 里的记录点要么放在 mask 区域之外，要么显式用一个恒真的条件（tl.program_id 判断）把记录单独提出来。 注意：同一 kernel 里未加 mask 的 tl.load 不会生成 exec 掩码代码，装载就是 global_load_* + s_waitcnt vmcnt(0)。",
+      "evidence": {
+        "snippet": "s_and_saveexec_b64 s[0:1], vcc | s_cbranch_execz .LBB0_2 | global_load_dword v2, v[2:3], off",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "tl.dot 的操作数 staging（global -> VGPR -> LDS -> MFMA）",
+      "isa_mnemonics": [
+        "global_load_ushort",
+        "ds_write_b16",
+        "ds_read_b64",
+        "ds_write_b64"
+      ],
+      "placement_rule": "Triton 在 gfx942 上没有把 tl.load 直接搬进 LDS：先 global_load 到 VGPR，再 ds_write 进 LDS，MFMA 前 ds_read 出来。要打“装载”这一段，B/E 要盖住 global_load + ds_write 两步；只盖 tl.load 那一行会把 ds_write 的 lgkmcnt 等待算到计算里去。",
+      "evidence": {
+        "snippet": "global_load_ushort v1, v[4:5], off | global_load_ushort v6, v[4:5], off offset:512 | global_load_ushort v7, v[4:5], off offset:1024",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "num_stages>1 是否产生异步拷贝 / LDS 直写",
+      "isa_mnemonics": [
+        "global_load_ushort",
+        "ds_write_b16",
+        "ds_read_b64"
+      ],
+      "placement_rule": "在这个后端上 k 循环没有异步拷贝可等：num_stages=1 与 num_stages=3 编出来的 ttgir 与 amdgcn 完全一致（本机实测 diff 为空），装载仍是 global_load -> ds_write -> ds_read 的同步序列。因此 NVIDIA 那套“发射点记 FI_M、完成点记在 mbarrier/cp.async.wait 之后”的规则在 Triton+gfx942 上退化成：B/E 盖住整个 k-tile 的装载，完成点就是 ds_read 之后的 s_waitcnt lgkmcnt(0)。 坑：要在循环内按 k-tile 打点，仍然必须单独构建并重做 C1/C2 检查：即使没有异步拷贝，记录点也会挡住编译器对 vmcnt 部分等待（vmcnt(15)/vmcnt(13)/…）的重排，主循环指令数会变。 measurement：{\"ttgir_identical_s1_vs_s3\": true, \"amdgcn_identical_s1_vs_s3\": true, \"async_copy_ops_in_ttgir\": [], \"lds_direct_in_amdgcn\": false} 勘误（实测）：AMD 后端仍按“默认只在循环外（每 tile）记录”执行，但理由不同；进循环内记录要重做 C1/C2，并比对主循环的指令条数与 vmcnt 部分等待是否变化。（实测细节：本机 Triton 3.6.0+rocm7.2 / gfx942 实测：同一个 k 循环 kernel 在 num_stages=1 与 num_stages=3 下，ttgir 与 amdgcn 完全一致（生成器当场比对，diff 为空），ttgir 里没有任何 ttg.*async* 算子，amdgcn 里也没有 LDS 直写。也就是说这个后端上 num_stages 没有造出异步拷贝流水，“破坏流水”这条风险在 gfx942 上的表现不是编译失败，而是记录点会挡住 vmcnt 部分等待的重排、把 ds_write/ds_read 拆开。）",
+      "evidence": {
+        "snippet": "global_load_ushort v1, v[52:53], off | global_load_ushort v60, v[38:39], off | global_load_ushort v61, v[40:41], off",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "s_waitcnt 的部分等待（vmcnt 与 lgkmcnt 分开计数）",
+      "isa_mnemonics": [
+        "s_waitcnt lgkmcnt(N)",
+        "s_waitcnt vmcnt(N)"
+      ],
+      "placement_rule": "Triton 生成的主循环里充满 vmcnt(15)/vmcnt(13)/lgkmcnt(1) 这类部分等待。“等待”区间要按语义边界记（等这一块数据到齐），不要按每条 s_waitcnt 记，否则一次装载会被拆成十几段。",
+      "evidence": {
+        "snippet": "s_waitcnt lgkmcnt(0) | s_waitcnt vmcnt(15) | s_waitcnt vmcnt(13)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "tl.dot（fp16）",
+      "isa_mnemonics": [
+        "v_mfma_f32_32x32x8_f16"
+      ],
+      "placement_rule": "B 放在这一 k-tile 的第一条 v_mfma 之前，E 放在累加器被消费（下一轮 ds_read 之前或最终 tl.store 之前）之后。Triton 把一个 tl.dot 展开成若干条 v_mfma，E 放在 tl.dot 那一行之后就只盖住了发射。 勘误（实测）：检查器与 binsim 的匹配表要用反汇编里的真实拼写（下划线在 bf16/f16 前），不要用 builtin 名。（实测细节：builtin 名带 _1k（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k），但 gfx942 反汇编出来的助记符没有 _1k 后缀：v_mfma_f32_16x16x16_bf16 / v_mfma_f32_16x16x16_f16 / v_mfma_f32_32x32x8_f16；Triton 的 tl.dot 实测落为 v_mfma_f32_32x32x8_f16（fp16）与 v_mfma_f32_32x32x8_bf16（bf16，T2 的数据类型）。累加器占 4 个 VGPR（16x16x16）或 16 个（32x32x8）。）",
+      "evidence": {
+        "snippet": "v_mfma_f32_32x32x8_f16 a[0:15], v[12:13], v[4:5], 0 | v_mfma_f32_32x32x8_f16 a[0:15], v[14:15], v[6:7], a[0:15] | v_mfma_f32_32x32x8_f16 a[0:15], v[16:17], v[8:9], a[0:15]",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "tl.dot（bf16，T2 用的数据类型）",
+      "isa_mnemonics": [
+        "v_mfma_f32_32x32x8_bf16"
+      ],
+      "placement_rule": "同上；bf16 在 gfx942 上落为 v_mfma_f32_*_bf16 系列（不是 _1k 后缀）。 勘误（实测）：检查器与 binsim 的匹配表要用反汇编里的真实拼写（下划线在 bf16/f16 前），不要用 builtin 名。（实测细节：builtin 名带 _1k（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k），但 gfx942 反汇编出来的助记符没有 _1k 后缀：v_mfma_f32_16x16x16_bf16 / v_mfma_f32_16x16x16_f16 / v_mfma_f32_32x32x8_f16；Triton 的 tl.dot 实测落为 v_mfma_f32_32x32x8_f16（fp16）与 v_mfma_f32_32x32x8_bf16（bf16，T2 的数据类型）。累加器占 4 个 VGPR（16x16x16）或 16 个（32x32x8）。）",
+      "evidence": {
+        "snippet": "v_mfma_f32_32x32x8_bf16 a[0:15], v[12:13], v[4:5], 0 | v_mfma_f32_32x32x8_bf16 a[0:15], v[14:15], v[6:7], a[0:15] | v_mfma_f32_32x32x8_bf16 a[0:15], v[16:17], v[8:9], a[0:15]",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "tl.debug_barrier()",
+      "isa_mnemonics": [
+        "s_barrier"
+      ],
+      "placement_rule": "与 HIP 的 __syncthreads 一致：一条 s_barrier，到达与放行不可分，B/E 直接包住。",
+      "evidence": {
+        "snippet": "s_barrier",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "barrier",
+      "display_name": "barrier",
+      "semantic_legacy": "同步",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "tl.atomic_add / volatile 自旋读",
+      "isa_mnemonics": [
+        "global_load_dword",
+        "global_atomic_add"
+      ],
+      "placement_rule": "Triton 的自旋循环里不会自动插 s_sleep（HIP 手写版一般会），空转会吃满访存带宽；记录点仍放循环外一对 B/E。需要降功耗得自己在 inline asm 里加 s_sleep。 坑：Triton 里 while 循环的条件是张量归约（tl.sum），编译器会把它落成跨 lane 的 LDS 归约 + s_barrier，自旋一圈的成本比 HIP 手写高一截，别用它做高频轮询。",
+      "evidence": {
+        "snippet": "global_load_dword v1, v[4:5], off | global_atomic_add v[4:5], v0, off",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "同步",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "tl.store",
+      "isa_mnemonics": [
+        "global_store_dword"
+      ],
+      "placement_rule": "B/E 包住 tl.store；Triton 的 epilogue 常常把 tl.store 拆成多条 global_store（不同 offset），记一对就够，不要每条一个记录点。",
+      "evidence": {
+        "snippet": "global_store_dword v[0:1], v2, off",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "gfx942",
+      "evidence_status": "compiled",
+      "evidence_status_basis": "compiled AMDGCN/PTX evidence from the machine profile"
+    },
+    {
+      "construct": "global 直写 LDS 的上卡正确性（randn 全量比对）",
+      "isa_mnemonics": [
+        "buffer_load_dword v<off>, s[0:3], 0 offen lds"
+      ],
+      "placement_rule": "同“装载/global 直写 LDS”条目；这条只放实测结论。 本机实测：cases=[{\"case\": \"asm_wait_vmcnt\", \"reps\": 20, \"elems\": 4096, \"bad_elems_total\": 0, \"max_abs_err\": 0.0, \"verdict\": \"PASS\"}, {\"case\": \"asm_wait_lgkmcnt_only\", \"reps\": 20, \"elems\": 4096, \"bad_elems_total\": 81820, \"max_abs_err\": 5.241, \"verdict\": \"FAIL\"}, {\"case\": \"asm_wait_both\", \"reps\": 20, \"elems\": 4096, \"bad_elems_total\": 0, \"max_abs_err\": 0.0, \"verdict\": \"PASS\"}, {\"case\": \"intrinsic_auto_waitcnt\", \"reps\": 20, \"elems\": 4096, \"bad_elems_total\": 0, \"max_abs_err\": 0.0, \"verdict\": \"PASS\"}, {\"case\": \"__END__\"}]；control_experiment=对照实验成立：只等 lgkmcnt 时 20 次重复累计 81820 个元素错、最大绝对误差 5.241，而等 vmcnt（或 vmcnt+lgkmcnt）时 0 错——直写 LDS 的完成确实由 vmcnt 计，与反汇编里编译器自动插的 s_waitcnt vmcnt(0) 一致。",
+      "evidence": {
+        "snippet": "k_lds_direct<WAIT> + k_lds_direct_intr，randn 输入，全 4096 元素比对，每个 case 重复 20 次",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "measured",
+      "evidence_status_basis": "on-card functional test recorded in the machine profile"
+    },
+    {
+      "construct": "vmcnt / lgkmcnt 分工的功能性验证（global->VGPR->LDS->读回）",
+      "isa_mnemonics": [
+        "s_waitcnt vmcnt(N)",
+        "s_waitcnt lgkmcnt(N)"
+      ],
+      "placement_rule": "手写 s_waitcnt 时：用全局读的结果之前等 vmcnt；写/读 LDS 与标量访存之前等 lgkmcnt；全局原子返回之前两者都要等（编译器会插 s_waitcnt vmcnt(0) lgkmcnt(0)）。 本机实测：result={\"elems\": 4096, \"bad\": 0, \"max_abs_err\": 0.0, \"verdict\": \"PASS\"} 勘误（实测）：按“数据来源”决定等哪个计数器，不要按指令类别想当然；等待区间按语义边界记，不按 s_waitcnt 条数记。（实测细节：分工确认无误（反汇编里 global_load 后是 vmcnt，ds_read/ds_write/s_load 后是 lgkmcnt，并且大量使用部分等待 vmcnt(15)/vmcnt(13)/lgkmcnt(1)）。需要补四条：(1) global 直写 LDS 计在 vmcnt；(2) LDS 原子（ds_add_u32/ds_cmpst_rtn_b32/ds_wrxchg_rtn_b32）计在 lgkmcnt；(3) 全局原子返回前编译器插的是 s_waitcnt vmcnt(0) lgkmcnt(0) 组合；(4) gfx942 没有 s_waitcnt_depctr（llvm-mc 报 instruction not supported），NVIDIA 上靠 depctr 做的依赖计数技巧在这里用不了。）",
+      "evidence": {
+        "snippet": "k_waitcnt_chain：global_load -> s_waitcnt vmcnt(0) -> ds_write -> s_waitcnt lgkmcnt(0) -> s_barrier -> ds_read -> s_waitcnt lgkmcnt(0)",
+        "machine": "mail-14 (8x AMD Instinct MI308X, gfx942, wave64, ROCm 7.2)",
+        "date": "2026-11-08"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "hip_cpp",
+      "language_display_name": "HIP C++",
+      "arch": "gfx942",
+      "evidence_status": "measured",
+      "evidence_status_basis": "on-card functional test recorded in the machine profile"
+    }
+  ],
+  "device": {
+    "marketing_name": "AMD Instinct MI308X",
+    "isa_agent_name": "gfx942",
+    "compute_units_reported": "80",
+    "simds_per_cu": "4",
+    "shader_engines_reported": "16",
+    "max_waves_per_cu": "32",
+    "max_clock_mhz": "1850",
+    "cacheline_size": "128(0x80)",
+    "wavefront_size": 64,
+    "gfx942_agents_in_rocminfo": 8,
+    "system_timestamp_freq_mhz": "1000.000000",
+    "xcc_count": 4,
+    "hip_device_props": {
+      "name": "AMD Instinct MI308X",
+      "arch": "gfx942:sramecc+:xnack-",
+      "cu_count": 80,
+      "wavefront_size": 64,
+      "clock_rate_khz": 1850000,
+      "max_threads_per_cu": 2048,
+      "shared_mem_per_cu": 65536,
+      "hip_runtime": "7.2"
+    },
+    "rocminfo_gfx942_block_raw": "  Marketing Name:          AMD Instinct MI308X\n  Cacheline Size:          128(0x80)\n  Max Clock Freq. (MHz):   1850\n  Compute Unit:            80\n  SIMDs per CU:            4\n  Shader Engines:          16\n  Workgroup Max Size:      1024(0x400)\n  Max Waves Per CU:        32(0x20)\n      Workgroup Max Size:      1024(0x400)\n      Workgroup Max Size:      1024(0x400)",
+    "note": "rocminfo 的 Compute Unit / Shader Engines 是驱动报的数；物理 CU 号要用 ((XCC_ID<<2)|SE_ID)<<4|CU_ID 合成（见条目“物理位置”），只读 HW_ID 会在 XCD 之间撞号。"
+  },
+  "toolchain": {
+    "hipcc": "HIP version: 7.2.26015-fc0010cf6a / AMD clang version 22.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-7.2.0 26014 7b800a19466229b8479a78de19143dc33c3ab9b5) / Target: x86_64-unknown-linux-gnu",
+    "llvm_objdump": "AMD LLVM version 22.0.0git /   Optimized build.",
+    "python_stack": "torch 2.10.0+rocm7.2.0.gitb6ee5fde | triton 3.6.0+rocm7.2.0.gitba5c1517",
+    "disasm_method": "hipcc -O3 -std=c++17 --offload-arch=gfx942 --cuda-device-only -S（AMDGCN 汇编文本）；Triton 侧用 triton.compile(target=GPUTarget('hip','gfx942',64)) 直接导出 asm['amdgcn']",
+    "rocminfo_topology_raw": "Marketing Name:          INTEL(R) XEON(R) PLATINUM 8575C    \n  Max Clock Freq. (MHz):   3200                               \n  Compute Unit:            96                                 \n  SIMDs per CU:            0                                  \n  Shader Engines:          0                                  \n  Marketing Name:          INTEL(R) XEON(R) PLATINUM 8575C    \n  Max Clock Freq. (MHz):   3200                               \n  Compute Unit:            96                                 \n  SIMDs per CU:            0                                  \n  Shader Engines:          0                                  \n  Marketing Name:          AMD Instinct MI308X                \n  Max Clock Freq. (MHz):   1850"
+  },
+  "how_to_reproduce": [
+    "# 1) HIP 反汇编取证（锁外，不占卡）",
+    "cd $RUN/probe_hip && bash $RUN/build_disasm.sh   # hipcc -O3 -std=c++17 --offload-arch=gfx942 --cuda-device-only -S -> $RUN/disasm/*.s",
+    "# 2) Triton 反汇编取证（离线编译，不占卡）",
+    "python3 -B $RUN/probe_triton/dump_triton_disasm.py   # -> $RUN/disasm_triton/*",
+    "# 3) 上卡实测（必须走共享 GPU 锁）",
+    "$LOCK -n 1 -t 540 -- bash $RUN/oncard/run_all.sh   # -> $RUN/oncard/results/*",
+    "# 4) 解码成 .perfetto.json.gz",
+    "python3 -B $SKILL/tests/decode_dumps.py --run-dir $RUN",
+    "# 5) 重新生成本知识库（把实测数字回填）",
+    "python3 -B $SKILL/configs/build_kb_gfx942.py --run-dir $RUN --out $SKILL/configs/cards/mi308x.json",
+    "# 6) 验收",
+    "bash $SKILL/tests/run_tests.sh"
+  ],
+  "validation": {
+    "method": "同一个 ring_pipeline kernel（LDS 环生产者-消费者流水，每 CTA 4 个 wave：1 个装载 wave + 3 个计算 wave；grid/block 见各档 shape 字段），只改编译开关跑出四个档：FI_LEVEL=0/2、FI_TIMER=0/1、FI_GRAN=0/1。输入是 host 端 mt19937+normal_distribution 造的 randn，输出 partial 与 final 两个张量全量比对（阈值：逐元素绝对误差 1e-3*max(1,|ref|)，final 相对误差 1e-5）。计时用 hipEvent，每档 21 次取中位、重复 3 轮再取中位（满足“开销取 ≥20 次中位数”）。",
+    "correctness_rule": "randn 输入 + 全输出张量比对，每个构建档都要 PASS 才算有效。",
+    "verdict": "PASS",
+    "overhead": {
+      "definition": "开销% = (本档 kernel 中位时长 - FI_LEVEL=0 中位时长) / FI_LEVEL=0 中位时长。权威口径是 rocprofv3 --kernel-trace 的 GPU kernel 时长（见 rocprof_kernel_trace 段，common2 要求开销一律用 GPU 上的 kernel 时长）；hipEvent 的 median_of_medians（21 次取中位、3 轮再取中位）只作对照。",
+      "baseline_fi_l0_median_us": 664.042,
+      "records_per_lane": 4744,
+      "per_build": {
+        "fi_l0": {
+          "desc": "FI_LEVEL=0（打点全空，开销基线）",
+          "median_us": 664.042,
+          "min_us": 663.682,
+          "overhead_pct_vs_fi_l0": 0.0
+        },
+        "fi_l2": {
+          "desc": "FI_LEVEL=2, FI_TIMER=0（s_memrealtime）, FI_GRAN=0（wave 粒度）",
+          "median_us": 795.44,
+          "min_us": 794.921,
+          "overhead_pct_vs_fi_l0": 19.79
+        },
+        "fi_l2t1": {
+          "desc": "FI_LEVEL=2, FI_TIMER=1（s_memtime + OPEN/CLOSE 锚点）, FI_GRAN=0",
+          "median_us": 796.12,
+          "min_us": 795.239,
+          "overhead_pct_vs_fi_l0": 19.89
+        },
+        "fi_l2gran1": {
+          "desc": "FI_LEVEL=2, FI_TIMER=0, FI_GRAN=1（CU 粒度）",
+          "median_us": 795.161,
+          "min_us": 794.679,
+          "overhead_pct_vs_fi_l0": 19.75
+        }
+      }
+    },
+    "rocprof_kernel_trace": {
+      "source": "rocprofv3 --kernel-trace -f json -> buffer_records.kernel_dispatch (end_timestamp-start_timestamp, ns)",
+      "parser": "oncard/parse_rocprof.py（离线跑，不占 GPU 锁）",
+      "n_files": 16,
+      "timing_protocol": {
+        "warmup_dropped": 4,
+        "tail_correctness_launch_dropped": 1,
+        "timed_launches_per_invocation": 25,
+        "note": "GPU 侧 dispatch 时长，不含宿主侧 hipMemcpyToSymbol/hipMemset；开销百分比一律用 rocprofv3 的中位数，hipEvent 只作对照"
+      },
+      "dvfs_handling": {
+        "problem": "本机 sclk 长期在低功耗档（rocm-smi 读到 92~1364 MHz），同一二进制在两个时钟态下 kernel 时长差约 30%；同一态内部 25 次 launch 极差 < 0.2%",
+        "handling": "按\"最快观测值 +5%% 以内\"聚出高时钟态（fast），其余再聚一档（slow），开销比值只在同一个态内部算，避免把两个态平均成没人跑过的数字",
+        "tolerance": 1.05
+      },
+      "clock_states_observed": {
+        "l0": {
+          "rec0": {
+            "fast": {
+              "n": 35,
+              "median_ns": 661687,
+              "min_ns": 661039,
+              "max_ns": 662237
+            },
+            "slow": {
+              "n": 13,
+              "median_ns": 858050,
+              "min_ns": 857690,
+              "max_ns": 858930,
+              "other_n": 2
+            }
+          },
+          "rec1": {
+            "fast": {
+              "n": 50,
+              "median_ns": 661757.0,
+              "min_ns": 660234,
+              "max_ns": 663636
+            }
+          }
+        },
+        "l2": {
+          "rec0": {
+            "fast": {
+              "n": 50,
+              "median_ns": 793464.5,
+              "min_ns": 792968,
+              "max_ns": 794089
+            }
+          },
+          "rec1": {
+            "fast": {
+              "n": 50,
+              "median_ns": 797338.0,
+              "min_ns": 796160,
+              "max_ns": 798040
+            }
+          }
+        },
+        "l2gran1": {
+          "rec0": {
+            "fast": {
+              "n": 50,
+              "median_ns": 793717.0,
+              "min_ns": 792635,
+              "max_ns": 805435
+            }
+          },
+          "rec1": {
+            "fast": {
+              "n": 50,
+              "median_ns": 794116.5,
+              "min_ns": 793596,
+              "max_ns": 794878
+            }
+          }
+        },
+        "l2t1": {
+          "rec0": {
+            "fast": {
+              "n": 50,
+              "median_ns": 793617.5,
+              "min_ns": 791717,
+              "max_ns": 795197
+            }
+          },
+          "rec1": {
+            "fast": {
+              "n": 49,
+              "median_ns": 797197,
+              "min_ns": 795599,
+              "max_ns": 798077
+            },
+            "slow": {
+              "n": 1,
+              "median_ns": 840997,
+              "min_ns": 840997,
+              "max_ns": 840997,
+              "other_n": 0
+            }
+          }
+        }
+      },
+      "overhead_same_clock_state": {
+        "fast_state": {
+          "rec0_l0_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661687,
+            "with_tool_ns": 661687,
+            "n_baseline": 35,
+            "n_with_tool": 35,
+            "ratio": 1.0,
+            "pct": 0.0
+          },
+          "rec0_l2_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661687,
+            "with_tool_ns": 793464.5,
+            "n_baseline": 35,
+            "n_with_tool": 50,
+            "ratio": 1.19915,
+            "pct": 19.915
+          },
+          "rec0_l2gran1_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661687,
+            "with_tool_ns": 793717.0,
+            "n_baseline": 35,
+            "n_with_tool": 50,
+            "ratio": 1.19954,
+            "pct": 19.954
+          },
+          "rec0_l2t1_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661687,
+            "with_tool_ns": 793617.5,
+            "n_baseline": 35,
+            "n_with_tool": 50,
+            "ratio": 1.19939,
+            "pct": 19.939
+          },
+          "rec1_l0_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661757.0,
+            "with_tool_ns": 661757.0,
+            "n_baseline": 50,
+            "n_with_tool": 50,
+            "ratio": 1.0,
+            "pct": 0.0
+          },
+          "rec1_l2_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661757.0,
+            "with_tool_ns": 797338.0,
+            "n_baseline": 50,
+            "n_with_tool": 50,
+            "ratio": 1.20488,
+            "pct": 20.488
+          },
+          "rec1_l2gran1_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661757.0,
+            "with_tool_ns": 794116.5,
+            "n_baseline": 50,
+            "n_with_tool": 50,
+            "ratio": 1.20001,
+            "pct": 20.001
+          },
+          "rec1_l2t1_vs_l0": {
+            "clock_state": "fast",
+            "baseline_ns": 661757.0,
+            "with_tool_ns": 797197,
+            "n_baseline": 50,
+            "n_with_tool": 49,
+            "ratio": 1.20467,
+            "pct": 20.467
+          }
+        },
+        "slow_state": {
+          "rec0_l0_vs_l0": {
+            "clock_state": "slow",
+            "baseline_ns": 858050,
+            "with_tool_ns": 858050,
+            "n_baseline": 13,
+            "n_with_tool": 13,
+            "ratio": 1.0,
+            "pct": 0.0
+          }
+        },
+        "note": "只在同一个 DVFS 时钟态内部比 l2/l0，比值不受时钟漂移影响"
+      },
+      "hipevent_cross_check": {
+        "rec0_l0_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.8,
+          "with_tool_us": 663.8,
+          "n_baseline": 3,
+          "n_with_tool": 3,
+          "ratio": 1.0,
+          "pct": 0.0
+        },
+        "rec0_l2_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.8,
+          "with_tool_us": 795.179,
+          "n_baseline": 3,
+          "n_with_tool": 2,
+          "ratio": 1.19792,
+          "pct": 19.792
+        },
+        "rec0_l2gran1_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.8,
+          "with_tool_us": 795.3755,
+          "n_baseline": 3,
+          "n_with_tool": 2,
+          "ratio": 1.19822,
+          "pct": 19.822
+        },
+        "rec0_l2t1_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.8,
+          "with_tool_us": 795.958,
+          "n_baseline": 3,
+          "n_with_tool": 2,
+          "ratio": 1.19909,
+          "pct": 19.909
+        },
+        "rec1_l0_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.759,
+          "with_tool_us": 663.759,
+          "n_baseline": 3,
+          "n_with_tool": 3,
+          "ratio": 1.0,
+          "pct": 0.0
+        },
+        "rec1_l2_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.759,
+          "with_tool_us": 799.156,
+          "n_baseline": 3,
+          "n_with_tool": 2,
+          "ratio": 1.20399,
+          "pct": 20.399
+        },
+        "rec1_l2gran1_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.759,
+          "with_tool_us": 796.56,
+          "n_baseline": 3,
+          "n_with_tool": 3,
+          "ratio": 1.20007,
+          "pct": 20.007
+        },
+        "rec1_l2t1_vs_l0": {
+          "clock_state": "fast",
+          "baseline_us": 663.759,
+          "with_tool_us": 799.755,
+          "n_baseline": 3,
+          "n_with_tool": 3,
+          "ratio": 1.20489,
+          "pct": 20.489
+        }
+      },
+      "kernel_resource_usage": {
+        "l0": {
+          "kernel_symbol": "_Z13ring_pipelinePKfPfS1_Pji.kd",
+          "sgpr_count": 32,
+          "arch_vgpr_count": 36,
+          "accum_vgpr_count": 4,
+          "group_segment_size": 2584,
+          "private_segment_size": 0,
+          "grid": {
+            "x": 8192,
+            "y": 1,
+            "z": 1
+          },
+          "workgroup": {
+            "x": 256,
+            "y": 1,
+            "z": 1
+          }
+        },
+        "l2": {
+          "kernel_symbol": "_Z13ring_pipelinePKfPfS1_Pji.kd",
+          "sgpr_count": 48,
+          "arch_vgpr_count": 48,
+          "accum_vgpr_count": 0,
+          "group_segment_size": 2584,
+          "private_segment_size": 0,
+          "grid": {
+            "x": 8192,
+            "y": 1,
+            "z": 1
+          },
+          "workgroup": {
+            "x": 256,
+            "y": 1,
+            "z": 1
+          }
+        },
+        "l2gran1": {
+          "kernel_symbol": "_Z13ring_pipelinePKfPfS1_Pji.kd",
+          "sgpr_count": 48,
+          "arch_vgpr_count": 48,
+          "accum_vgpr_count": 0,
+          "group_segment_size": 2584,
+          "private_segment_size": 0,
+          "grid": {
+            "x": 8192,
+            "y": 1,
+            "z": 1
+          },
+          "workgroup": {
+            "x": 256,
+            "y": 1,
+            "z": 1
+          }
+        },
+        "l2t1": {
+          "kernel_symbol": "_Z13ring_pipelinePKfPfS1_Pji.kd",
+          "sgpr_count": 48,
+          "arch_vgpr_count": 48,
+          "accum_vgpr_count": 0,
+          "group_segment_size": 2584,
+          "private_segment_size": 0,
+          "grid": {
+            "x": 8192,
+            "y": 1,
+            "z": 1
+          },
+          "workgroup": {
+            "x": 256,
+            "y": 1,
+            "z": 1
+          }
+        }
+      }
+    },
+    "perturbation_e2": {
+      "method": "hipcc -O3 -std=c++17 --offload-arch=gfx942 --cuda-device-only -S（命令见 disasm/perturb.sh）；寄存器/spill 取汇编里的 .set <kernel>.num_vgpr / private_seg_size / uses_flat_scratch，指令条数与循环体条数按 kernel 正文统计（向后跳视为循环回边）。tile 循环 = 同时含自旋 s_sleep 与 LDS 环读写 ds_write_b32/ds_read_b32 的最小回边区域，四个构建档比的是同一个语义循环（编译器排布会变，不能直接比“最大的那个循环”）。",
+      "builds": {
+        "fi_validate_l0": {
+          "file": "disasm/fi_validate_l0.s",
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pji",
+          "num_vgpr": 34,
+          "num_agpr": 0,
+          "numbered_sgpr": 23,
+          "private_seg_size_bytes": 0,
+          "uses_flat_scratch": 0,
+          "spill": false,
+          "instr_total": 263,
+          "waitcnt": {
+            "vmcnt": 8,
+            "lgkmcnt": 22,
+            "expcnt": 0,
+            "total": 27
+          },
+          "record_store_dwordx4_nt": 0,
+          "record_sites_total": 0,
+          "watched": {
+            "v_mbcnt_lo_u32_b32": 2,
+            "v_mbcnt_hi_u32_b32": 2,
+            "s_barrier": 3,
+            "ds_write_b32": 1,
+            "ds_read_b32": 1,
+            "ds_wrxchg_rtn_b32": 1,
+            "global_load_dword": 2,
+            "global_store_dword": 2,
+            "v_mov_b64_e32": 4,
+            "s_mov_b32": 3,
+            "buffer_inv": 1,
+            "buffer_wbl2": 1,
+            "s_sleep": 2
+          },
+          "loops_backward_edges": [
+            {
+              "back_edge": "s_branch",
+              "target_line_in_body": 39,
+              "instr_in_loop": 105,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": false,
+              "timer_reads_in_loop": 0
+            },
+            {
+              "back_edge": "s_cbranch_scc0",
+              "target_line_in_body": 277,
+              "instr_in_loop": 36,
+              "has_s_sleep": false,
+              "has_ds_ring": false,
+              "has_record_store": false,
+              "timer_reads_in_loop": 0
+            },
+            {
+              "back_edge": "s_cbranch_execnz",
+              "target_line_in_body": 253,
+              "instr_in_loop": 10,
+              "has_s_sleep": false,
+              "has_ds_ring": false,
+              "has_record_store": false,
+              "timer_reads_in_loop": 0
+            },
+            {
+              "back_edge": "s_cbranch_execnz",
+              "target_line_in_body": 62,
+              "instr_in_loop": 7,
+              "has_s_sleep": true,
+              "has_ds_ring": false,
+              "has_record_store": false,
+              "timer_reads_in_loop": 0
+            },
+            {
+              "back_edge": "s_cbranch_execnz",
+              "target_line_in_body": 138,
+              "instr_in_loop": 7,
+              "has_s_sleep": true,
+              "has_ds_ring": false,
+              "has_record_store": false,
+              "timer_reads_in_loop": 0
+            },
+            {
+              "back_edge": "s_cbranch_execnz",
+              "target_line_in_body": 93,
+              "instr_in_loop": 6,
+              "has_s_sleep": false,
+              "has_ds_ring": false,
+              "has_record_store": false,
+              "timer_reads_in_loop": 0
+            }
+          ],
+          "main_loop_instr": 105,
+          "tile_loop_instr": 105,
+          "tile_loop_record_sites": 0,
+          "timer_reads_total": 0,
+          "instr_per_record_site": null,
+          "desc": "FI_LEVEL=0（不插桩基线）"
+        },
+        "fi_validate_l2": {
+          "file": "disasm/fi_validate_l2.s",
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pji",
+          "num_vgpr": 48,
+          "num_agpr": 0,
+          "numbered_sgpr": 35,
+          "private_seg_size_bytes": 0,
+          "uses_flat_scratch": 0,
+          "spill": false,
+          "instr_total": 921,
+          "waitcnt": {
+            "vmcnt": 26,
+            "lgkmcnt": 60,
+            "expcnt": 0,
+            "total": 83
+          },
+          "record_store_dwordx4_nt": 16,
+          "record_sites_total": 17,
+          "watched": {
+            "s_memrealtime": 17,
+            "s_getreg_b32": 3,
+            "global_store_dwordx4": 16,
+            "v_mbcnt_lo_u32_b32": 3,
+            "v_mbcnt_hi_u32_b32": 3,
+            "s_barrier": 3,
+            "ds_write_b32": 1,
+            "ds_read_b32": 1,
+            "ds_wrxchg_rtn_b32": 1,
+            "global_load_dword": 3,
+            "global_store_dword": 2,
+            "v_mov_b64_e32": 10,
+            "s_mov_b32": 4,
+            "buffer_inv": 1,
+            "buffer_wbl2": 1,
+            "s_sleep": 2
+          },
+          "loops_backward_edges": [
+            {
+              "back_edge": "s_branch",
+              "target_line_in_body": 100,
+              "instr_in_loop": 831,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 16
+            },
+            {
+              "back_edge": "s_branch",
+              "target_line_in_body": 261,
+              "instr_in_loop": 385,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 261,
+              "instr_in_loop": 377,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 264,
+              "instr_in_loop": 355,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 269,
+              "instr_in_loop": 186,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 4
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 767,
+              "instr_in_loop": 43,
+              "has_s_sleep": false,
+              "has_ds_ring": false,
+              "has_record_store": true,
+              "timer_reads_in_loop": 1
+            }
+          ],
+          "main_loop_instr": 831,
+          "tile_loop_instr": 186,
+          "tile_loop_record_sites": 4,
+          "timer_reads_total": 17,
+          "instr_per_record_site": 54.2,
+          "desc": "FI_LEVEL=2, FI_TIMER=0, FI_GRAN=0",
+          "delta_vs_l0": {
+            "num_vgpr": 14,
+            "numbered_sgpr": 12,
+            "instr_total": 658,
+            "main_loop_instr_largest_region": 726,
+            "tile_loop_instr": 81,
+            "waitcnt_total": 56,
+            "spill": false,
+            "tile_loop_instr_per_record_site": 20.2
+          }
+        },
+        "fi_validate_l2t1": {
+          "file": "disasm/fi_validate_l2t1.s",
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pji",
+          "num_vgpr": 48,
+          "num_agpr": 0,
+          "numbered_sgpr": 35,
+          "private_seg_size_bytes": 0,
+          "uses_flat_scratch": 0,
+          "spill": false,
+          "instr_total": 986,
+          "waitcnt": {
+            "vmcnt": 28,
+            "lgkmcnt": 64,
+            "expcnt": 0,
+            "total": 89
+          },
+          "record_store_dwordx4_nt": 18,
+          "record_sites_total": 19,
+          "watched": {
+            "s_memrealtime": 2,
+            "s_memtime": 17,
+            "s_getreg_b32": 3,
+            "global_store_dwordx4": 18,
+            "v_mbcnt_lo_u32_b32": 3,
+            "v_mbcnt_hi_u32_b32": 3,
+            "s_barrier": 3,
+            "ds_write_b32": 1,
+            "ds_read_b32": 1,
+            "ds_wrxchg_rtn_b32": 1,
+            "global_load_dword": 3,
+            "global_store_dword": 2,
+            "v_mov_b64_e32": 10,
+            "s_mov_b32": 10,
+            "buffer_inv": 1,
+            "buffer_wbl2": 1,
+            "s_sleep": 2
+          },
+          "loops_backward_edges": [
+            {
+              "back_edge": "s_branch",
+              "target_line_in_body": 102,
+              "instr_in_loop": 894,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 17
+            },
+            {
+              "back_edge": "s_branch",
+              "target_line_in_body": 302,
+              "instr_in_loop": 385,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 302,
+              "instr_in_loop": 377,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 305,
+              "instr_in_loop": 355,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 310,
+              "instr_in_loop": 186,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 4
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 808,
+              "instr_in_loop": 43,
+              "has_s_sleep": false,
+              "has_ds_ring": false,
+              "has_record_store": true,
+              "timer_reads_in_loop": 1
+            }
+          ],
+          "main_loop_instr": 894,
+          "tile_loop_instr": 186,
+          "tile_loop_record_sites": 4,
+          "timer_reads_total": 19,
+          "instr_per_record_site": 51.9,
+          "desc": "FI_LEVEL=2, FI_TIMER=1, FI_GRAN=0",
+          "delta_vs_l0": {
+            "num_vgpr": 14,
+            "numbered_sgpr": 12,
+            "instr_total": 723,
+            "main_loop_instr_largest_region": 789,
+            "tile_loop_instr": 81,
+            "waitcnt_total": 62,
+            "spill": false,
+            "tile_loop_instr_per_record_site": 20.2
+          }
+        },
+        "fi_validate_l2gran1": {
+          "file": "disasm/fi_validate_l2gran1.s",
+          "kernel": "_Z13ring_pipelinePKfPfS1_Pji",
+          "num_vgpr": 47,
+          "num_agpr": 0,
+          "numbered_sgpr": 35,
+          "private_seg_size_bytes": 0,
+          "uses_flat_scratch": 0,
+          "spill": false,
+          "instr_total": 911,
+          "waitcnt": {
+            "vmcnt": 25,
+            "lgkmcnt": 59,
+            "expcnt": 0,
+            "total": 81
+          },
+          "record_store_dwordx4_nt": 16,
+          "record_sites_total": 17,
+          "watched": {
+            "s_memrealtime": 17,
+            "s_getreg_b32": 3,
+            "global_store_dwordx4": 16,
+            "v_mbcnt_lo_u32_b32": 3,
+            "v_mbcnt_hi_u32_b32": 3,
+            "s_barrier": 3,
+            "ds_write_b32": 1,
+            "ds_read_b32": 1,
+            "ds_wrxchg_rtn_b32": 1,
+            "global_load_dword": 3,
+            "global_store_dword": 2,
+            "v_mov_b64_e32": 10,
+            "s_mov_b32": 7,
+            "buffer_inv": 1,
+            "buffer_wbl2": 1,
+            "s_sleep": 2
+          },
+          "loops_backward_edges": [
+            {
+              "back_edge": "s_branch",
+              "target_line_in_body": 250,
+              "instr_in_loop": 385,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 250,
+              "instr_in_loop": 377,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 253,
+              "instr_in_loop": 355,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 8
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 258,
+              "instr_in_loop": 186,
+              "has_s_sleep": true,
+              "has_ds_ring": true,
+              "has_record_store": true,
+              "timer_reads_in_loop": 4
+            },
+            {
+              "back_edge": "s_cbranch_execz",
+              "target_line_in_body": 756,
+              "instr_in_loop": 43,
+              "has_s_sleep": false,
+              "has_ds_ring": false,
+              "has_record_store": true,
+              "timer_reads_in_loop": 1
+            },
+            {
+              "back_edge": "s_cbranch_scc0",
+              "target_line_in_body": 1000,
+              "instr_in_loop": 29,
+              "has_s_sleep": false,
+              "has_ds_ring": false,
+              "has_record_store": false,
+              "timer_reads_in_loop": 0
+            }
+          ],
+          "main_loop_instr": 385,
+          "tile_loop_instr": 186,
+          "tile_loop_record_sites": 4,
+          "timer_reads_total": 17,
+          "instr_per_record_site": 53.6,
+          "desc": "FI_LEVEL=2, FI_TIMER=0, FI_GRAN=1",
+          "delta_vs_l0": {
+            "num_vgpr": 13,
+            "numbered_sgpr": 12,
+            "instr_total": 648,
+            "main_loop_instr_largest_region": 280,
+            "tile_loop_instr": 81,
+            "waitcnt_total": 54,
+            "spill": false,
+            "tile_loop_instr_per_record_site": 20.2
+          }
+        }
+      },
+      "summary": {
+        "fi_validate_l0": {
+          "num_vgpr": 34,
+          "numbered_sgpr": 23,
+          "spill": false,
+          "instr_total": 263,
+          "tile_loop_instr": 105,
+          "record_sites_total": 0,
+          "record_store_dwordx4_nt": 0,
+          "delta_vs_l0": null
+        },
+        "fi_validate_l2": {
+          "num_vgpr": 48,
+          "numbered_sgpr": 35,
+          "spill": false,
+          "instr_total": 921,
+          "tile_loop_instr": 186,
+          "record_sites_total": 17,
+          "record_store_dwordx4_nt": 16,
+          "delta_vs_l0": {
+            "num_vgpr": 14,
+            "numbered_sgpr": 12,
+            "instr_total": 658,
+            "main_loop_instr_largest_region": 726,
+            "tile_loop_instr": 81,
+            "waitcnt_total": 56,
+            "spill": false,
+            "tile_loop_instr_per_record_site": 20.2
+          }
+        },
+        "fi_validate_l2t1": {
+          "num_vgpr": 48,
+          "numbered_sgpr": 35,
+          "spill": false,
+          "instr_total": 986,
+          "tile_loop_instr": 186,
+          "record_sites_total": 19,
+          "record_store_dwordx4_nt": 18,
+          "delta_vs_l0": {
+            "num_vgpr": 14,
+            "numbered_sgpr": 12,
+            "instr_total": 723,
+            "main_loop_instr_largest_region": 789,
+            "tile_loop_instr": 81,
+            "waitcnt_total": 62,
+            "spill": false,
+            "tile_loop_instr_per_record_site": 20.2
+          }
+        },
+        "fi_validate_l2gran1": {
+          "num_vgpr": 47,
+          "numbered_sgpr": 35,
+          "spill": false,
+          "instr_total": 911,
+          "tile_loop_instr": 186,
+          "record_sites_total": 17,
+          "record_store_dwordx4_nt": 16,
+          "delta_vs_l0": {
+            "num_vgpr": 13,
+            "numbered_sgpr": 12,
+            "instr_total": 648,
+            "main_loop_instr_largest_region": 280,
+            "tile_loop_instr": 81,
+            "waitcnt_total": 54,
+            "spill": false,
+            "tile_loop_instr_per_record_site": 20.2
+          }
+        }
+      }
+    },
+    "decode": {
+      "index_file": "artifacts/decode/_index.json",
+      "per_dump": {
+        "fi_l0": {
+          "verdict": "PASS",
+          "trace_events": 0,
+          "records": 0,
+          "expect_empty_baseline": true,
+          "errors": {},
+          "span_us": 0.0,
+          "timer": "s_memrealtime",
+          "arch": "amd",
+          "meta_arch": "gfx942:sramecc+:xnack-",
+          "meta_gran": 0,
+          "clock_mhz_per_lane": null
+        },
+        "fi_l2": {
+          "verdict": "PASS",
+          "trace_events": 2502,
+          "records": 4744,
+          "expect_empty_baseline": false,
+          "errors": {},
+          "span_us": 795.14,
+          "timer": "s_memrealtime",
+          "arch": "amd",
+          "meta_arch": "gfx942:sramecc+:xnack-",
+          "meta_gran": 0,
+          "clock_mhz_per_lane": null
+        },
+        "fi_l2t1": {
+          "verdict": "PASS",
+          "trace_events": 2502,
+          "records": 4744,
+          "expect_empty_baseline": false,
+          "errors": {},
+          "span_us": 795.92,
+          "timer": "s_memtime+锚点",
+          "arch": "amd",
+          "meta_arch": "gfx942:sramecc+:xnack-",
+          "meta_gran": 0,
+          "clock_mhz_per_lane": {
+            "min": 1844.4,
+            "max": 1858.6
+          }
+        },
+        "fi_l2gran1": {
+          "verdict": "PASS",
+          "trace_events": 641,
+          "records": 1090,
+          "expect_empty_baseline": false,
+          "errors": {},
+          "span_us": 792.23,
+          "timer": "s_memrealtime",
+          "arch": "amd",
+          "meta_arch": "gfx942:sramecc+:xnack-",
+          "meta_gran": 1,
+          "clock_mhz_per_lane": null
+        },
+        "kb_facts_g0": {
+          "verdict": "PASS",
+          "trace_events": 162,
+          "records": 256,
+          "expect_empty_baseline": false,
+          "errors": {},
+          "span_us": 1.36,
+          "timer": "s_memrealtime",
+          "arch": "amd",
+          "meta_arch": "gfx942",
+          "meta_gran": 0,
+          "clock_mhz_per_lane": null
+        },
+        "kb_facts_g1": {
+          "verdict": "PASS",
+          "trace_events": 56,
+          "records": 64,
+          "expect_empty_baseline": false,
+          "errors": {},
+          "span_us": 1.76,
+          "timer": "s_memrealtime",
+          "arch": "amd",
+          "meta_arch": "gfx942",
+          "meta_gran": 1,
+          "clock_mhz_per_lane": null
+        }
+      },
+      "structural_errors_total": 0,
+      "all_trace_events_nonempty": true,
+      "trace_events_check": {
+        "fi_l0": true,
+        "fi_l2": true,
+        "fi_l2t1": true,
+        "fi_l2gran1": true,
+        "kb_facts_g0": true,
+        "kb_facts_g1": true
+      },
+      "baseline_zero_records_check": {
+        "fi_l0": true
+      },
+      "verdict": "PASS",
+      "format": "交付一律 <stem>.perfetto.json.gz（gzip 的 Chrome trace JSON），摘要 <stem>.summary.json"
+    },
+    "kb_facts_correctness": {
+      "g0": {
+        "lds_direct_positive_cases": {
+          "asm_wait_vmcnt": "PASS",
+          "asm_wait_both": "PASS",
+          "intrinsic_auto_waitcnt": "PASS"
+        },
+        "lds_direct_negative_control": {
+          "asm_wait_lgkmcnt_only": "FAIL"
+        },
+        "waitcnt_chain": "PASS",
+        "lane0_record_kernel": "PASS"
+      },
+      "g1": {
+        "lds_direct_positive_cases": {
+          "asm_wait_vmcnt": "PASS",
+          "asm_wait_both": "PASS",
+          "intrinsic_auto_waitcnt": "PASS"
+        },
+        "lds_direct_negative_control": {
+          "asm_wait_lgkmcnt_only": "FAIL"
+        },
+        "waitcnt_chain": "PASS",
+        "lane0_record_kernel": "PASS"
+      },
+      "negative_control_explained": "asm_wait_lgkmcnt_only 是负对照：故意在直写 LDS 之后只等 lgkmcnt 就读，预期出错。它 FAIL 才说明“直写 LDS 的完成由 vmcnt 计”这个结论是被实验证明的，不是从反汇编推的。"
+    },
+    "triton": {
+      "torch": "2.10.0+rocm7.2.0.gitb6ee5fde",
+      "triton": "3.6.0+rocm7.2.0.gitba5c1517",
+      "device": "AMD Instinct MI308X",
+      "cu_count_torch": 80,
+      "timer": {
+        "rt_hz": [
+          95768706.37875028,
+          98891140.49041702
+        ],
+        "mt_hz": [
+          1766273266.5685701,
+          1824448067.7961955
+        ],
+        "wall_s": [
+          0.0018117400407791139,
+          0.0070158357620239255
+        ],
+        "spins": [
+          100000,
+          400000
+        ],
+        "memrealtime_mhz": 97.3299,
+        "memtime_mhz": 1795.3607,
+        "raw_rt_ticks": 693804,
+        "raw_mt_ticks": 12800028,
+        "raw_acc_consumed": 70.103515625
+      },
+      "timer_error": null,
+      "timebase": {
+        "n_program": 80,
+        "memrealtime_spread_ns": 322,
+        "memtime_spread_cycles": 6705343666550,
+        "memrealtime_median": 266339280380382,
+        "memtime_median": 2121556259058555
+      },
+      "timebase_error": null,
+      "t2_persistent_gemm": {
+        "stdout": "triton_persistent_mm M=4096 N=4096 K=4096 grid=80 ITER_US median=876.59 min=873.45 max_abs_err=9.9994e-01 max_rel_err=2.869e-03 mean_abs_err=7.197e-02 CHECK=PASS",
+        "parsed": {
+          "M": "4096",
+          "N": "4096",
+          "K": "4096",
+          "grid": "80",
+          "median": "876.59",
+          "min": "873.45",
+          "max_abs_err": "9.9994e-01",
+          "max_rel_err": "2.869e-03",
+          "mean_abs_err": "7.197e-02",
+          "CHECK": "PASS"
+        },
+        "check": "PASS",
+        "iter_us_median": "876.59"
+      },
+      "t2_error": null,
+      "verdict": "PASS"
+    }
+  },
+  "limits": [
+    "只覆盖 gfx942（MI308X）+ ROCm 7.2 + hipcc 7.2.26015 + Triton 3.6.0+rocm7.2；gfx950 的 s_barrier_signal/wait、buffer_load_dwordx4 ... lds、s_waitcnt_depctr 在本机全部不可用，换架构必须重做取证。",
+    "助记符来自编译产物反汇编，不是 ISA 手册抄录；同一语义在不同优化档/不同写法下可能落成不同助记符（例如 global_load 与 buffer_load 的选择由编译器决定），检查器要做“同义组”匹配而不是单条匹配。",
+    "Triton 侧只能到 program（CTA）粒度：Triton 编程模型没有 lane/wave 概念，拿不到 __lane_id()，也没有 %smid 等价物，物理 CU 号得自己写 inline asm 读 hwreg。",
+    "本机 Triton 3.6.0+rocm7.2 上 num_stages=1 与 3 产物逐字节相同，没有异步拷贝可等；若换了 Triton 版本或后端启用了 async copy，本知识库关于“Triton 没有异步装载”的结论必须重测。",
+    "开销数字与 kernel 形态强相关：本知识库给的是 LDS 环流水这一种形态下的实测值（每 CTA 4 个 wave、7 类语义事件、grid/block 见 validation.builds.*.shape），换成寄存器压力大或事件更密的 kernel 要重测；插桩的寄存器/指令代价见 validation.perturbation_e2。",
+    "CuTeDSL 在 AMD 上的形态本组件未覆盖（本机没做 CuTeDSL 取证），草案里的 CuTeDSL 段落只适用于 NVIDIA。"
+  ],
+  "recorder_kb": {
+    "path": "configs/languages/hip_cpp/recorder_gfx942.json",
+    "description": "Recorder knowledge for record points, timing, and physical CU location.",
+    "legacy_value": "configs/languages/hip_cpp/recorder_gfx942.json（记录点/计时/物理位置三类，工具自身怎么记录的知识）"
+  }
+}

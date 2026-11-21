@@ -98,7 +98,7 @@ class ShadowWorkspace:
             raise ValueError("Source changed since probe identification")
         shutil.copytree(original, instrumented)
         source_text = (original / relative).read_text(encoding="utf-8")
-        engine = implementation("2_instrument.rule_engine")
+        engine = implementation("weaveprof.pipeline.instrument.rule_engine")
         lowered = engine.inject_probes(source_text, spec, check_sha=False)
         if not lowered["ok"]:
             raise ValueError(str(lowered["diagnostics"]))
@@ -110,7 +110,7 @@ class ShadowWorkspace:
 
     def environment(self, directory, baseline, instrumented):
         tree = directory / "L_inst"
-        libs = ROOT / "2_instrument" / "recorders"
+        libs = ROOT / "recorders"
         env = dict(os.environ)
         env.update(WEAVEPROF_ROOT=str(ROOT), WEAVEPROF_BASELINE_SOURCE=str(baseline),
                    WEAVEPROF_INSTRUMENTED_SOURCE=str(instrumented), WEAVEPROF_NAMES=str(directory / "names.json"),

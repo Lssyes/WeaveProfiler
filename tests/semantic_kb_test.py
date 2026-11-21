@@ -17,7 +17,7 @@ import unittest
 
 TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parent
-KB = ROOT / 'knowledge'
+KB = ROOT / 'configs'
 OPERATORS = KB / 'operators' / 'operators.json'
 FIXES = KB / 'validation' / 'fixes.json'
 

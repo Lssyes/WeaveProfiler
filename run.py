@@ -49,7 +49,7 @@ def _json_print(payload: Any) -> None:
 
 
 def _scan(argv: Sequence[str]) -> int:
-    return _load("1_scan/scan.py", "weaveprofiler_scan").main(list(argv))
+    return _load("weaveprof/pipeline/scan/scan.py", "weaveprofiler_scan").main(list(argv))
 
 
 def _instrument(argv: Sequence[str]) -> int:
@@ -74,7 +74,7 @@ def _instrument(argv: Sequence[str]) -> int:
         gen_argv = ["--scan", str(Path(args.scan).expanduser().resolve()),
                     "--selection", str(Path(args.selection).expanduser().resolve()),
                     "--out", str(plan)]
-        rc = _run_python("2_instrument/generate_edits.py", gen_argv)
+        rc = _run_python("weaveprof/pipeline/instrument/generate_edits.py", gen_argv)
         if rc != 0:
             return rc
     elif plan is None:
@@ -88,7 +88,7 @@ def _instrument(argv: Sequence[str]) -> int:
         apply_argv.append("--check")
     if args.diff_output:
         apply_argv.extend(["--diff-output", str(Path(args.diff_output).expanduser().resolve())])
-    rc = _run_python("2_instrument/apply_plan.py", apply_argv)
+    rc = _run_python("weaveprof/pipeline/instrument/apply_plan.py", apply_argv)
     if rc != 0:
         return rc
     _json_print({
@@ -218,7 +218,7 @@ def _capture(argv: Sequence[str]) -> int:
     if args.card == "b300" and not args.arch:
         parser.error("B300 requires --arch sm_100a or sm_103a")
     try:
-        from registry import resolve_target, UnsupportedTarget
+        from weaveprof.pipeline.core.registry import resolve_target, UnsupportedTarget
     except Exception as exc:
         _json_print({"ok": False, "error": "cannot import registry: {}".format(exc)})
         return 2
@@ -247,7 +247,7 @@ def _capture(argv: Sequence[str]) -> int:
     if platform == "nv":
         if args.collector not in (None, "auto", "nsys"):
             parser.error("H20/B300 use nsys; collector={!r} is invalid".format(args.collector))
-        script = ROOT / "3_capture" / "capture_nsys.py"
+        script = ROOT / "weaveprof/pipeline/capture" / "capture_nsys.py"
         tool_argv: List[str] = ["--root", str(root)]
         if out_dir is not None:
             tool_argv.extend(["--out-dir", str(out_dir)])
@@ -255,7 +255,7 @@ def _capture(argv: Sequence[str]) -> int:
     else:
         if args.collector == "nsys":
             parser.error("MI308X uses rocprof-sys with rocprofv3 fallback; nsys is invalid")
-        script = ROOT / "3_capture" / "capture_rocm.py"
+        script = ROOT / "weaveprof/pipeline/capture" / "capture_rocm.py"
         tool_argv = ["--root", str(root)]
         if out_dir is not None:
             tool_argv.extend(["--out-dir", str(out_dir)])
@@ -282,7 +282,7 @@ def _validate(argv: Sequence[str]) -> int:
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(list(argv))
     if args.selftest:
-        return _run_python("4_validate/validate_all.py", ["--selftest"])
+        return _run_python("weaveprof/pipeline/validate/validate_all.py", ["--selftest"])
     if not args.run_dir:
         parser.error("--run-dir is required")
     run_dir = Path(args.run_dir).expanduser().resolve()
@@ -296,7 +296,7 @@ def _validate(argv: Sequence[str]) -> int:
         _json_print({"ok": False, "error": "missing or ambiguous inputs",
                      "missing": missing, "run_dir": str(run_dir)})
         return 2
-    return _run_python("4_validate/validate_all.py",
+    return _run_python("weaveprof/pipeline/validate/validate_all.py",
                        ["--contract", str(contract), "--run-dir", str(run_dir),
                         "--trace", str(trace), "--out", str(out)])
 
@@ -321,44 +321,44 @@ def _check(argv: Sequence[str]) -> int:
     rest = list(args.rest)
     if rest and rest[0] == "--":
         rest = rest[1:]
-    return _run_python("4_validate/validate_run.py",
+    return _run_python("weaveprof/pipeline/validate/validate_run.py",
                        [str(run_dir), str(trace), *rest, "--json", str(out)])
 
 
 def _deliver(argv: Sequence[str]) -> int:
-    return _run_python("run_measurement.py", list(argv))
+    return _run_python("weaveprof/pipeline/core/run_measurement.py", list(argv))
 
 
 def _fast(argv: Sequence[str]) -> int:
-    # fast_path.py owns a ``fast`` subcommand; run.py already dispatched that
+    # weaveprof/pipeline/core/fast_path.py owns a ``fast`` subcommand; run.py already dispatched that
     # token.  Reinsert it so the public ``run.py fast --job ...`` entry is
     # identical to the standalone CLI instead of forwarding a bare --job.
-    return _load("fast_path.py", "weaveprofiler_fast_path").main(
+    return _load("weaveprof/pipeline/core/fast_path.py", "weaveprofiler_fast_path").main(
         ["fast", *list(argv)])
 
 
 def _gemm_probe(argv: Sequence[str]) -> int:
-    return _run_python("3_capture/gemm_probe.py", argv)
+    return _run_python("weaveprof/pipeline/capture/gemm_probe.py", argv)
 
 
 def _auto_gemm(argv: Sequence[str]) -> int:
-    return _run_python("3_capture/auto_gemm.py", argv)
+    return _run_python("weaveprof/pipeline/capture/auto_gemm.py", argv)
 
 
 def _probe_place(argv: Sequence[str]) -> int:
-    return _run_python("1_scan/llm_probe_placer.py", argv)
+    return _run_python("weaveprof/pipeline/scan/llm_probe_placer.py", argv)
 
 
 def _probe_reuse(argv: Sequence[str]) -> int:
-    return _run_python("2_instrument/incremental_reuse.py", argv)
+    return _run_python("weaveprof/pipeline/instrument/incremental_reuse.py", argv)
 
 
 def _probe_inject(argv: Sequence[str]) -> int:
-    return _run_python("2_instrument/rule_engine.py", argv)
+    return _run_python("weaveprof/pipeline/instrument/rule_engine.py", argv)
 
 
 def _auto_profile(argv: Sequence[str]) -> int:
-    return _run_python("4_validate/closed_loop_verifier.py", argv)
+    return _run_python("weaveprof/pipeline/validate/closed_loop_verifier.py", argv)
 
 
 def _install_agent(argv: Sequence[str]) -> int:
@@ -385,7 +385,7 @@ def _template(argv: Sequence[str]) -> int:
                         default="fast")
     args = parser.parse_args(list(argv))
     if args.mode == "fast":
-        _json_print(_load("fast_path.py", "weaveprofiler_fast_path").template())
+        _json_print(_load("weaveprof/pipeline/core/fast_path.py", "weaveprofiler_fast_path").template())
         return 0
     python_example = "/opt/venv/python3.14.4/bin/python3"
     examples = {

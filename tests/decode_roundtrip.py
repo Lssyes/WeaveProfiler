@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""离线端到端：合成 FILITE02 转储 -> 4_validate/tools/fi_lite_decode.py -> .perfetto.json.gz -> 校验。
+"""离线端到端：合成 FILITE02 转储 -> weaveprof/pipeline/validate/tools/fi_lite_decode.py -> .perfetto.json.gz -> 校验。
 
 覆盖五种口径（都不需要 GPU）：
   1. NVIDIA warp 粒度 + globaltimer（FI_TIMER=0）
@@ -24,7 +24,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
-DECODER = PKG / "4_validate" / "tools" / "fi_lite_decode.py"
+DECODER = PKG / "weaveprof/pipeline/validate" / "tools" / "fi_lite_decode.py"
 
 END, OPEN, MARK, CLK, CLOSE = 0x80000000, 0x40000000, 0x20000000, 0x10000000, 0x08000000
 

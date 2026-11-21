@@ -1,0 +1,1223 @@
+{
+  "note": "算子级 canonical 语义知识：operator 使用唯一的 semantic_id；stage 使用 configs/semantic_ids.json 中的 canonical semantic_ids、event_id 与 event_id_const，同时保留原五类 semantics 以兼容旧调用。不得在 operators.json 另建编号。evidence_status 只表示当前已有证据等级（measured/compiled/simulated/unverified），不能把结构映射或交叉编译当成目标卡实测。machine_check_catalog 定义每组算子在交付前必须执行的正确性、插桩开销、ISA 扰动、软硬件对齐和缓冲区完整性检查。",
+  "semantic_taxonomy": [
+    "装载",
+    "等待",
+    "计算",
+    "同步",
+    "写回"
+  ],
+  "how_to_use": [
+    "1) 先用 operator.semantic_id 固定任务身份（gemm/attention/reduction/moe/convolution/megakernel），显示名不得另起别名。",
+    "2) 在源码里按 stages 找阶段；stage.semantic_ids 与对应 event_id/event_id_const 只从 configs/semantic_ids.json 读取（mma 就叫 mma），原 five-class semantics 只用于兼容。",
+    "3) event_id、event_id_const、semantic_id 与 display_name 以 configs/semantic_ids.json 为唯一权威；unknown 不分配 event_id。",
+    "4) 用 stage.instrument 决定 B/E/M 放哪：异步操作的 E 一律放在 wait/mbarrier 返回之后。",
+    "5) kb_refs 是显式引用：file.json::entry:<construct> 指向实测条目，operators.json::stage:<semantic_id>::<stage> 复用算子阶段。",
+    "6) 交付前逐项执行 machine_check_catalog；evidence_status 只按实际证据升级，B300 无卡实跑不能标 measured。"
+  ],
+  "operators": [
+    {
+      "name": "GEMM（含持久化 tile 轮转）",
+      "aliases": [
+        "matmul",
+        "mm",
+        "persistent GEMM",
+        "tl.dot 主循环",
+        "wgmma/tcgen05/MFMA 主循环"
+      ],
+      "roles": [
+        {
+          "role": "装载 warp（生产者）",
+          "note": "CUDA C++ warp 特化时才有；Triton 全 CTA 同一控制流，没有这个角色"
+        },
+        {
+          "role": "计算 warp（消费者）",
+          "note": "同上"
+        },
+        {
+          "role": "整个 program/CTA",
+          "note": "Triton 与 CuTeDSL 的常见形态"
+        }
+      ],
+      "stages": [
+        {
+          "stage": "序言：资源准备",
+          "depends_on": [],
+          "typical_role": "全部 warp",
+          "semantics": [
+            "同步"
+          ],
+          "code_signature": "shared/tensor-memory 分配与 barrier 初始化：Blackwell 上 tcgen05.alloc（SASS UTCATOMSWS.FIND_AND_SET.ALIGN）、mbarrier.init（SYNCS.EXCH.64）；Hopper 上 mbarrier.init + smem 环分配；gfx942 上 LDS 环与标志位初始化。",
+          "instrument": "B 在 kernel 入口的 FI_OPEN 之后，E 在第一次进入主循环之前；单独成一段，才能把“序言开销”从主循环里剥出来。",
+          "phase": "prologue",
+          "kb_refs": [
+            "sm_100.json::entry:tcgen05.alloc / dealloc / relinquish_alloc_permit（tensor memory 分配）",
+            "sm_100.json::entry:mbarrier.init / arrive / arrive.expect_tx",
+            "sm_90.json::entry:mbarrier init / arrive wrappers"
+          ],
+          "semantic_ids": [
+            "barrier"
+          ]
+        },
+        {
+          "stage": "取 tile / 任务分派",
+          "depends_on": [
+            "序言：资源准备"
+          ],
+          "typical_role": "全部 warp（Triton）或控制器 warp（CUDA）",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "持久化轮转：targets/triton_persistent_mm.py 的 for tile_id in tl.range(pid, num_tiles, NUM_SMS)，以及 group_id/pm/pn 的索引换算；CUDA 侧常见 while ((t = atomicAdd(&ticket,1)) < n_tiles)。",
+          "instrument": "只在 tile 数少、索引换算复杂时才单独记；一般并入“取任务”或直接忽略——它是寄存器运算，通常量不出来。",
+          "phase": "prologue",
+          "semantic_ids": [
+            "dispatch"
+          ],
+          "kb_refs": [
+            "gfx942.json::entry:全局原子（到达计数 / 票据）",
+            "sm_100.json::entry:clusterlaunchcontrol.try_cancel（persistent/megakernel 取下一个任务）"
+          ]
+        },
+        {
+          "stage": "装载 A/B k-tile",
+          "depends_on": [
+            "取 tile / 任务分派"
+          ],
+          "typical_role": "装载 warp 或整个 CTA",
+          "semantics": [
+            "装载"
+          ],
+          "code_signature": "Hopper CUDA：cp.async.ca/cg.shared.global（SASS LDGSTS.E.128 / LDGSTS.E.BYPASS.128）；Hopper TMA：cp.async.bulk.tensor.2d（UTMALDG.2D）；Blackwell Triton 实测是 ld.global.b16 + STS.U16 两级 staging（没有 cp.async，也没有 TMA）；gfx942：global_load_* -> VGPR -> ds_write_b32 到 LDS，或 buffer_load_dword ... offen lds 直写 LDS。",
+          "instrument": "发射处记 FI_M，完成事件的 E 记在对应 wait 返回之后；不要拿发射时刻当数据就绪。",
+          "phase": "mainloop",
+          "kb_refs": [
+            "sm_90.json::entry:cp.async.ca.shared.global -> shared memory",
+            "sm_90.json::entry:cp.async.bulk.tensor.2d TMA load",
+            "sm_100.json::entry:tl.load（bf16 GEMM 操作数）：LDG + STS 两级 staging，本构建没有 cp.async",
+            "gfx942.json::entry:buffer 指令装载（__builtin_amdgcn_make_buffer_rsrc + raw_buffer_load_b32/b128）",
+            "gfx942.json::entry:tl.load（带 mask）：exec 掩码 + global_load"
+          ],
+          "semantic_ids": [
+            "load"
+          ]
+        },
+        {
+          "stage": "等装载完成",
+          "depends_on": [
+            "装载 A/B k-tile"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "等待"
+          ],
+          "code_signature": "cp.async.wait_group 0（LDGDEPBAR + DEPBAR.LE）、mbarrier.try_wait.parity 自旋（SYNCS.PHASECHK.TRANS64.TRYWAIT）、gfx942 的 s_waitcnt vmcnt(N)/lgkmcnt(N)（注意直写 LDS 计在 vmcnt）。",
+          "instrument": "B 在进入等待之前，E 在等待返回之后；这是“计算 warp 等装载”的主项，也是 Q2 归因要的数字。",
+          "phase": "mainloop",
+          "kb_refs": [
+            "sm_90.json::entry:cp.async.wait_group 0",
+            "sm_90.json::entry:mbarrier.try_wait.parity spin loop",
+            "gfx942.json::entry:全局访存等待 s_waitcnt vmcnt(N)（含部分等待）"
+          ],
+          "semantic_ids": [
+            "wait"
+          ]
+        },
+        {
+          "stage": "MMA 计算（k 累加）",
+          "depends_on": [
+            "等装载完成"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "Hopper：wgmma.mma_async（SASS HGMMA）；Blackwell：tcgen05.mma.cta_group::1/2（UTCHMMA / UTCHMMA.2CTA）；gfx942：v_mfma_f32_16x16x16_bf16 / v_mfma_f32_32x32x8_bf16（Triton tl.dot 实测落为 32x32x8 形态）。",
+          "instrument": "发射处记 FI_M，完成 E 记在 wgmma.wait_group / tcgen05.commit 的 mbarrier 等待返回之后。",
+          "phase": "mainloop",
+          "kb_refs": [
+            "sm_90.json::entry:wgmma.mma_async m64n8k16 f32.f16.f16",
+            "sm_100.json::entry:tcgen05.mma.cta_group::1.kind::f16（Blackwell 张量核，单 CTA）",
+            "gfx942.json::entry:MFMA bf16 16x16x16（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k）"
+          ],
+          "semantic_ids": [
+            "mma"
+          ]
+        },
+        {
+          "stage": "等 MMA 完成",
+          "depends_on": [
+            "MMA 计算（k 累加）"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "等待"
+          ],
+          "code_signature": "wgmma.wait_group.sync.aligned 0（WARPGROUP.DEPBAR.LE）；Blackwell 的 tcgen05.commit（UTCBAR）+ mbarrier try_wait。",
+          "instrument": "commit/wait_group 发射不是完成；E 必须在 wait 返回处，否则张量核在途时间被算成 0。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "wait"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:wgmma.wait_group.sync.aligned 0",
+            "sm_100.json::entry:tcgen05.commit.cta_group::1.mbarrier::arrive::one（MMA 完成通知）",
+            "sm_100.json::entry:mbarrier.try_wait.parity（Triton 生成的 tmem/MMA 等待）"
+          ]
+        },
+        {
+          "stage": "流水握手（full/empty）",
+          "depends_on": [
+            "装载 A/B k-tile",
+            "MMA 计算（k 累加）"
+          ],
+          "typical_role": "装载 warp 与计算 warp 各记一侧",
+          "semantics": [
+            "同步"
+          ],
+          "code_signature": "targets/ring_pipeline.cu 的命名栅栏：装载 warp bar_arrive(1+s) 通知“第 s 级已满”，计算 warp bar_sync(1+s) 等它，用完再 bar_arrive(1+STAGES+s) 归还；CUTLASS 风格用 mbarrier arrive/try_wait；gfx942 用 LDS 标志 + s_barrier。",
+          "instrument": "两侧各记一对：生产者记“等空槽”，消费者记“等满槽”。归因时这两段要分开，否则分不清是装载慢还是计算慢。",
+          "phase": "mainloop",
+          "kb_refs": [
+            "sm_90.json::entry:bar.sync / bar.arrive named barriers",
+            "gfx942.json::entry:LDS 标志自旋握手（生产者-消费者）",
+            "sm_100.json::entry:mbarrier.init / arrive / arrive.expect_tx"
+          ],
+          "semantic_ids": [
+            "barrier"
+          ]
+        },
+        {
+          "stage": "epilogue：累加器读出",
+          "depends_on": [
+            "等 MMA 完成"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "装载"
+          ],
+          "code_signature": "Blackwell 专有：tcgen05.ld（LDTM / LDTM.x64）把累加器从 tensor memory 搬进寄存器，随后 tcgen05.wait::ld；Hopper 与 gfx942 的累加器本来就在寄存器里，没有这一段。",
+          "instrument": "B/E 单独包住 LDTM 到 wait::ld 返回，别并进“计算”，否则算不清 epilogue 花在哪。",
+          "phase": "epilogue",
+          "kb_refs": [
+            "sm_100.json::entry:tcgen05.ld.sync.aligned（从 tensor memory 取累加器到寄存器）"
+          ],
+          "semantic_ids": [
+            "epilogue"
+          ]
+        },
+        {
+          "stage": "epilogue：类型转换/缩放",
+          "depends_on": [
+            "epilogue：累加器读出"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "acc.to(bf16)、alpha/beta 缩放、bias 加法；targets/triton_persistent_mm.py 的 acc.to(tl.bfloat16) 就是这一类。",
+          "instrument": "通常与写回连在一起；只有当 epilogue 明显长（量化/激活函数复杂）时才单独记一段。",
+          "phase": "epilogue",
+          "semantic_ids": [
+            "epilogue"
+          ],
+          "kb_refs": [
+            "sm_100.json::entry:标量 FFMA（epilogue/逐元素计算）",
+            "gfx942.json::entry:非 MFMA 的 FMA 主循环"
+          ]
+        },
+        {
+          "stage": "写回 C tile",
+          "depends_on": [
+            "epilogue：类型转换/缩放"
+          ],
+          "typical_role": "写回 warp 或整个 CTA",
+          "semantics": [
+            "写回"
+          ],
+          "code_signature": "tl.store / st.global（STG.E.U16、STG.E.128）；TMA store：cp.async.bulk.tensor.2d.global（UTMASTG.2D + UTMACMDFLUSH + DEPBAR.LE）；gfx942：global_store_dwordx4（记录点自己该用 ... nt 非时间局部性修饰）。",
+          "instrument": "普通 st.global 是同步语义，B/E 直接包住；TMA store 的 E 要记在 wait_group.read 返回之后。",
+          "phase": "epilogue",
+          "kb_refs": [
+            "sm_90.json::entry:st.global.f32",
+            "sm_90.json::entry:Tensor descriptor TMA store",
+            "gfx942.json::entry:global_store（标量与向量化）"
+          ],
+          "semantic_ids": [
+            "store"
+          ]
+        }
+      ],
+      "evidence": [
+        "targets/triton_persistent_mm.py（本项目被测 T2，randn 输入 + 全量比对，结构就是 tile 轮转 + k-tile 装载 + tl.dot + 写回）",
+        "targets/ring_pipeline.cu（本项目被测 T1，装载 warp / 计算 warp / 命名栅栏 full-empty 握手 / 拖尾 / 最后一个 CTA 归约）",
+        "configs/cards/h20.json、configs/cards/b300_sm_100a.json、configs/cards/b300_sm_103a.json、configs/cards/mi308x.json 里对应构造的实测 PTX/SASS/AMDGCN 助记符"
+      ],
+      "semantic_id": "gemm",
+      "machine_check": [
+        "correctness",
+        "overhead",
+        "assembly_change_rate",
+        "alignment",
+        "buffer_completeness"
+      ],
+      "evidence_status": "measured",
+      "evidence_note": "GEMM 主循环结构在 H20（sm_90）与 MI308X（gfx942）上都有实测转储与开销数字；Blackwell 的助记符来自本机交叉编译到 sm_100a/sm_103a 的反汇编（未在 B300 上运行）。"
+    },
+    {
+      "name": "attention（flash-attention 风格：Q/K/V 装载、QK、softmax、PV）",
+      "aliases": [
+        "flash attention",
+        "fmha",
+        "mha",
+        "self-attention",
+        "prefill/decode attention"
+      ],
+      "roles": [
+        {
+          "role": "整个 CTA/program",
+          "note": "常见形态：一个 CTA 负责一个 (batch, head, q-block)"
+        },
+        {
+          "role": "装载 warp / 计算 warp",
+          "note": "warp 特化实现（CUTLASS FMHA、部分手写 kernel）才有"
+        }
+      ],
+      "stages": [
+        {
+          "stage": "序言：Q tile 装载",
+          "depends_on": [],
+          "typical_role": "全部 warp",
+          "semantics": [
+            "装载"
+          ],
+          "code_signature": "把本 CTA 负责的 Q block 一次性搬进 shared/寄存器（TMA 或 cp.async），整个 k 循环期间常驻。",
+          "instrument": "B/E 包住这一次装载；它属于序言，不要与主循环里每个 k-block 的 K/V 装载混成一个事件号。",
+          "phase": "prologue",
+          "semantic_ids": [
+            "load"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:cp.async.ca.shared.global -> shared memory",
+            "sm_90.json::entry:cp.async.bulk.tensor.2d TMA load",
+            "sm_100.json::entry:cp.async.bulk.tensor.2d TMA load（mbarrier::complete_tx::bytes）"
+          ]
+        },
+        {
+          "stage": "K/V tile 装载（每个 k-block）",
+          "depends_on": [
+            "序言：Q tile 装载"
+          ],
+          "typical_role": "装载 warp 或整个 CTA",
+          "semantics": [
+            "装载"
+          ],
+          "code_signature": "内层循环里逐 k-block 搬 K、V：cp.async / TMA descriptor load / tl.load；gfx942 上 global_load + ds_write。",
+          "instrument": "每个 k-block 一对记录，aux 用 k-block 号；发射记 FI_M、完成 E 记在 wait 返回后。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "load"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:tl.load in num_stages=2 pipeline",
+            "gfx942.json::entry:tl.load（带 mask）：exec 掩码 + global_load",
+            "gfx942.json::entry:global -> VGPR -> LDS（常规 staging，没有 LDS 直写时的路径）"
+          ]
+        },
+        {
+          "stage": "QK^T = S",
+          "depends_on": [
+            "K/V tile 装载（每个 k-block）"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "张量核一次矩阵乘：wgmma / tcgen05.mma / v_mfma；Triton 里就是 tl.dot(q, k.T)。",
+          "instrument": "发射记 FI_M，E 记在对应 wait 返回之后（Blackwell 是 tcgen05.commit + mbarrier）。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "mma"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:wgmma.mma_async m64n8k16 f32.f16.f16",
+            "sm_100.json::entry:tcgen05.mma.cta_group::1.kind::f16（Blackwell 张量核，单 CTA）",
+            "gfx942.json::entry:MFMA bf16 16x16x16（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k）"
+          ]
+        },
+        {
+          "stage": "softmax：行 max 归约",
+          "depends_on": [
+            "QK^T = S"
+          ],
+          "typical_role": "warp 内 / 跨 warp",
+          "semantics": [
+            "计算",
+            "同步"
+          ],
+          "code_signature": "行方向 max：warp 内 __shfl_xor_sync（gfx942 落为 v_mbcnt/ds_bpermute 一类）是纯寄存器交换，算“计算”；跨 warp 归约要写 shared + 栅栏 + 读回，那部分是“同步”。",
+          "instrument": "把 shuffle 归约和跨 warp 的 shared+栅栏归约分成两段记；否则“等栅栏”会被算进 softmax 计算里。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "softmax",
+            "reduction",
+            "barrier"
+          ],
+          "kb_refs": [
+            "recorder_gfx942.json::entry:__shfl 的广播范围（wave 内 64 lane，不是整个 CTA）",
+            "gfx942.json::entry:__syncthreads()（工作组栅栏）"
+          ]
+        },
+        {
+          "stage": "softmax：exp 与行 sum",
+          "depends_on": [
+            "softmax：行 max 归约"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "exp2/exp 逐元素 + 行求和归约；这一段是特殊函数单元（SFU/MUFU）密集区。",
+          "instrument": "一段 B/E 即可；若 exp 占比异常高，配合硬件计数器看 SM/Tensor 活跃比再判断。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "softmax",
+            "reduction",
+            "compute"
+          ],
+          "kb_refs": [
+            "sm_100.json::entry:标量 FFMA（epilogue/逐元素计算）",
+            "gfx942.json::entry:非 MFMA 的 FMA 主循环"
+          ]
+        },
+        {
+          "stage": "softmax：rescale 旧累加器",
+          "depends_on": [
+            "softmax：exp 与行 sum"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "O = O * alpha（alpha 由新旧行 max 差得到），flash 算法特有的在线修正。",
+          "instrument": "通常很短；只有当它成为主循环里可见的一段时才单独记。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "softmax",
+            "compute"
+          ],
+          "kb_refs": [
+            "sm_100.json::entry:标量 FFMA（epilogue/逐元素计算）",
+            "gfx942.json::entry:非 MFMA 的 FMA 主循环"
+          ]
+        },
+        {
+          "stage": "PV = O 累加",
+          "depends_on": [
+            "softmax：rescale 旧累加器",
+            "K/V tile 装载（每个 k-block）"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "第二次张量核矩阵乘：tl.dot(p, v) / wgmma / tcgen05.mma / v_mfma。",
+          "instrument": "与 QK 用不同事件号，才能看出两次 MMA 之间的 softmax 是否是气泡来源。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "mma"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:wgmma.mma_async m64n8k16 f32.f16.f16",
+            "sm_100.json::entry:tcgen05.mma.cta_group::1.kind::f16（Blackwell 张量核，单 CTA）",
+            "gfx942.json::entry:MFMA bf16 16x16x16（__builtin_amdgcn_mfma_f32_16x16x16bf16_1k）"
+          ]
+        },
+        {
+          "stage": "causal mask / 边界处理",
+          "depends_on": [
+            "QK^T = S"
+          ],
+          "typical_role": "全部 warp",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "上三角置 -inf、尾块 mask；分支里不要出现 CTA 级栅栏。",
+          "instrument": "一般不单独记；若尾块明显变慢，用 aux 记 k-block 号后按 aux 分组看。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "compute"
+          ],
+          "kb_refs": []
+        },
+        {
+          "stage": "收尾：行归一化并写回 O",
+          "depends_on": [
+            "PV = O 累加"
+          ],
+          "typical_role": "全部 warp",
+          "semantics": [
+            "计算",
+            "写回"
+          ],
+          "code_signature": "O = O / l（行 sum 归一化）后写回全局：st.global / TMA store / global_store。",
+          "instrument": "写回单独一段（写回类），归一化算进计算；E 对 TMA store 要记在 wait_group.read 返回后。",
+          "phase": "epilogue",
+          "semantic_ids": [
+            "epilogue",
+            "store"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:st.global.f32",
+            "sm_90.json::entry:Tensor descriptor TMA store",
+            "sm_100.json::entry:tcgen05.ld / tcgen05.st + tl.store（累加器出 tmem 再写全局）",
+            "gfx942.json::entry:global_store（标量与向量化）"
+          ]
+        }
+      ],
+      "evidence": [
+        "configs/*.json 里 tl.dot / wgmma / tcgen05.mma / v_mfma 的实测助记符（QK 与 PV 两段都落在这上面）",
+        "configs/cards/h20.json、configs/cards/mi308x.json 里 warp 内 shuffle 归约与跨 warp shared+栅栏归约的构造",
+        "targets/ring_pipeline.cu 的 __shfl_xor_sync 归约与“最后一个 CTA 归约”写法（跨 warp/跨 CTA 归约的真实形态）"
+      ],
+      "semantic_id": "attention",
+      "machine_check": [
+        "correctness",
+        "overhead",
+        "assembly_change_rate",
+        "alignment",
+        "buffer_completeness"
+      ],
+      "evidence_status": "unverified",
+      "evidence_note": "attention 的各阶段与语义映射按上面的 kb 构造推出；本项目没有对完整 attention kernel 做整机插桩实测，因此各阶段的耗时占比没有实测数字，打点位置需在目标 kernel 上按 kb 回查后确定。"
+    },
+    {
+      "name": "reduce（归约：warp 内 -> 跨 warp -> 跨 CTA）",
+      "aliases": [
+        "reduction",
+        "sum/max/mean reduce",
+        "row reduce",
+        "全局归约"
+      ],
+      "roles": [
+        {
+          "role": "全部 warp",
+          "note": "同构归约"
+        },
+        {
+          "role": "最后一个完成的 CTA",
+          "note": "跨 CTA 单遍归约时的收尾角色"
+        }
+      ],
+      "stages": [
+        {
+          "stage": "装载待归约数据",
+          "depends_on": [],
+          "typical_role": "全部 warp",
+          "semantics": [
+            "装载"
+          ],
+          "code_signature": "global -> 寄存器（ld.global / LDG.E、global_load_dword）或 global -> shared（cp.async / LDGSTS）。",
+          "instrument": "一段 B/E；异步搬运的 E 记在 wait 返回后。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "load"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:tl.load simple global load",
+            "sm_90.json::entry:cp.async.ca.shared.global -> shared memory",
+            "gfx942.json::entry:tl.load（带 mask）：exec 掩码 + global_load"
+          ]
+        },
+        {
+          "stage": "warp 内归约",
+          "depends_on": [
+            "装载待归约数据"
+          ],
+          "typical_role": "每个 warp",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "for (o=16;o>0;o>>=1) acc += __shfl_xor_sync(...)（见 targets/ring_pipeline.cu）；gfx942 是 wave64，偏移从 32 起，且不能用 &31/>>5 这套 warp32 的算法。",
+          "instrument": "B/E 包住整个 shuffle 链；这段是纯寄存器交换，不要指望它能被“装载未掩盖”解释。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "reduction",
+            "compute"
+          ],
+          "kb_refs": [
+            "recorder_gfx942.json::entry:__shfl 的广播范围（wave 内 64 lane，不是整个 CTA）"
+          ]
+        },
+        {
+          "stage": "跨 warp归约（shared + 栅栏）",
+          "depends_on": [
+            "warp 内归约"
+          ],
+          "typical_role": "CTA 内全部 warp",
+          "semantics": [
+            "同步",
+            "写回",
+            "装载"
+          ],
+          "code_signature": "lane0 写 shared 数组 -> __syncthreads()（BAR.SYNC.DEFER_BLOCKING / s_barrier）-> tid0 或第一个 warp 读回相加。",
+          "instrument": "三段分开记：写 shared（写回）、栅栏（同步）、读回并相加（装载+计算）。合成一段会看不出栅栏占多少。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "reduction",
+            "barrier",
+            "load",
+            "store"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:bar.sync / bar.arrive named barriers",
+            "gfx942.json::entry:__syncthreads()（工作组栅栏）",
+            "gfx942.json::entry:tl.debug_barrier()"
+          ]
+        },
+        {
+          "stage": "跨 CTA 归约（atomic 或最后一个 CTA 收尾）",
+          "depends_on": [
+            "跨 warp归约（shared + 栅栏）"
+          ],
+          "typical_role": "每个 CTA 的 tid0；收尾由最后一个 CTA 承担",
+          "semantics": [
+            "同步",
+            "写回",
+            "等待"
+          ],
+          "code_signature": "atomicAdd 到全局 partial（gfx942 落为 global_atomic_*），或“票号 == gridDim-1 的 CTA 做最终归约”（targets/ring_pipeline.cu 的 done_counter + is_last 写法）。",
+          "instrument": "票号必须广播到 CTA 内全部 warp 之后再分支：gfx942 上 __shfl 只在 wave 内广播，要用 shared + 栅栏；分支内部再出现栅栏就是错误信号（实测会导致 final 结果全错且 kernel 时长虚高）。",
+          "phase": "epilogue",
+          "kb_refs": [
+            "gfx942.json::entry:全 CTA 广播一个标量（最后一个 CTA 归约的票号写法）",
+            "gfx942.json::entry:全局原子（到达计数 / 票据）",
+            "gfx942.json::entry:内存栅栏 __threadfence 系列",
+            "sm_100.json::entry:barrier.cluster.arrive / barrier.cluster.wait（cluster 栅栏）"
+          ],
+          "semantic_ids": [
+            "reduction",
+            "barrier",
+            "wait",
+            "store",
+            "communication"
+          ]
+        },
+        {
+          "stage": "写回归约结果",
+          "depends_on": [
+            "跨 CTA 归约（atomic 或最后一个 CTA 收尾）"
+          ],
+          "typical_role": "收尾 CTA",
+          "semantics": [
+            "写回"
+          ],
+          "code_signature": "result[0] = s; 以及复位计数器（*done_counter = 0）。",
+          "instrument": "B/E 包住；复位写也要包进去，否则下一次 launch 的第一个 tile 会读到脏值却查不出来。",
+          "phase": "epilogue",
+          "semantic_ids": [
+            "store"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:st.global.f32",
+            "gfx942.json::entry:global_store（标量与向量化）"
+          ]
+        }
+      ],
+      "evidence": [
+        "targets/ring_pipeline.cu（收尾归约的完整真实实现：__threadfence + atomicAdd 票号 + is_last 广播 + 两级 shuffle/shared 归约 + 复位）",
+        "configs/cards/mi308x.json 的“全 CTA 广播一个标量”条目（wave64 上 __shfl 只在 wave 内广播的实测故障链）",
+        "configs/cards/b300_sm_100a.json、configs/cards/b300_sm_103a.json 的 __syncthreads -> BAR.SYNC.DEFER_BLOCKING 实测"
+      ],
+      "semantic_id": "reduction",
+      "machine_check": [
+        "correctness",
+        "overhead",
+        "assembly_change_rate",
+        "alignment",
+        "buffer_completeness"
+      ],
+      "evidence_status": "measured",
+      "evidence_note": "T1 ring_pipeline 的收尾归约在 H20 与 MI308X 上都实测过（MI308X 上曾因票号未广播导致 final 全错，已修复并复测 PASS）。"
+    },
+    {
+      "name": "MoE dispatch 与 combine（专家路由 -> 分发 -> 专家计算 -> 合并）",
+      "aliases": [
+        "mixture of experts",
+        "moe",
+        "expert parallel",
+        "permute/unpermute",
+        "token dispatch"
+      ],
+      "roles": [
+        {
+          "role": "路由 CTA/warp",
+          "note": "算 gating 与偏移"
+        },
+        {
+          "role": "搬运 CTA/warp",
+          "note": "scatter/gather token"
+        },
+        {
+          "role": "专家计算 CTA",
+          "note": "跑该专家的 GEMM（见 GEMM 算子）"
+        }
+      ],
+      "stages": [
+        {
+          "stage": "路由计算（gating + topk）",
+          "depends_on": [],
+          "typical_role": "全部 warp",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "logits = x @ W_gate；softmax over experts；top-k 选择与权重归一化。",
+          "instrument": "一段 B/E；topk 里的排序/选择是纯寄存器与 shared 操作，别和 GEMM 混用事件号。",
+          "phase": "prologue",
+          "semantic_ids": [
+            "dispatch",
+            "compute"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:tl.dot -> wgmma m64n128k8 tf32",
+            "gfx942.json::entry:tl.dot（bf16，T2 用的数据类型）"
+          ]
+        },
+        {
+          "stage": "专家直方图与前缀和",
+          "depends_on": [
+            "路由计算（gating + topk）"
+          ],
+          "typical_role": "全部 CTA",
+          "semantics": [
+            "同步",
+            "计算"
+          ],
+          "code_signature": "atomicAdd 统计每个专家的 token 数（gfx942 global_atomic_*，NVIDIA red/atom），再做 exclusive scan 得到每个专家的写入偏移。",
+          "instrument": "原子累加是跨 CTA 竞争点：单独记一段（同步类），它常常是 dispatch 的真正瓶颈而不是搬运。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "dispatch",
+            "barrier",
+            "compute"
+          ],
+          "kb_refs": [
+            "gfx942.json::entry:全局原子（到达计数 / 票据）",
+            "gfx942.json::entry:LDS 原子（标志发布 / 归还槽位）"
+          ]
+        },
+        {
+          "stage": "dispatch：scatter token 到专家缓冲",
+          "depends_on": [
+            "专家直方图与前缀和"
+          ],
+          "typical_role": "搬运 warp/CTA",
+          "semantics": [
+            "装载",
+            "写回"
+          ],
+          "code_signature": "按 (专家, 槽位) 读源 token（gather 读）、写到连续专家缓冲（scatter 写）；同时写反向索引表供 combine 用。",
+          "instrument": "读与写分成两段（装载 / 写回），aux 记专家号；跨 CTA 的写冲突要看这一段是否被原子偏移计算拖住。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "dispatch",
+            "load",
+            "store"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:tl.store simple global store",
+            "gfx942.json::entry:tl.load（带 mask）：exec 掩码 + global_load",
+            "gfx942.json::entry:global_store（标量与向量化）"
+          ]
+        },
+        {
+          "stage": "依赖等待：分发完成通知",
+          "depends_on": [
+            "dispatch：scatter token 到专家缓冲"
+          ],
+          "typical_role": "专家计算 CTA",
+          "semantics": [
+            "等待",
+            "同步"
+          ],
+          "code_signature": "跨 CTA/跨 GPU 的到达计数：global flag 自旋 + __threadfence（gfx942 上 __threadfence 落为 buffer_inv + buffer_wbl2，__threadfence_block 不产生缓存指令，只有 s_waitcnt），或 cluster/mbarrier 通知。",
+          "instrument": "B 在开始自旋前，E 在标志可见之后；这一段就是 MoE 的“等依赖”，要单独成事件才能与专家计算分开。",
+          "phase": "mainloop",
+          "kb_refs": [
+            "gfx942.json::entry:内存栅栏 __threadfence 系列",
+            "gfx942.json::entry:全局标志自旋（跨 CTA）"
+          ],
+          "semantic_ids": [
+            "wait",
+            "barrier",
+            "communication"
+          ]
+        },
+        {
+          "stage": "专家计算（每专家 GEMM）",
+          "depends_on": [
+            "依赖等待：分发完成通知"
+          ],
+          "typical_role": "专家计算 CTA",
+          "semantics": [
+            "装载",
+            "计算",
+            "写回"
+          ],
+          "code_signature": "就是 GEMM 算子的 k 循环：装载 -> MMA -> 写回；up/gate/down 三段投影时，每段各记一组事件号。",
+          "instrument": "直接复用 GEMM 的阶段划分；aux 记专家号，才能看出专家之间的负载不均（这是 MoE 拖尾的主因）。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "load",
+            "mma",
+            "store"
+          ],
+          "kb_refs": [
+            "operators.json::stage:gemm::装载 A/B k-tile",
+            "operators.json::stage:gemm::MMA 计算（k 累加）",
+            "operators.json::stage:gemm::写回 C tile"
+          ]
+        },
+        {
+          "stage": "combine：gather 专家输出并按权重合并",
+          "depends_on": [
+            "专家计算（每专家 GEMM）"
+          ],
+          "typical_role": "搬运 warp/CTA",
+          "semantics": [
+            "装载",
+            "计算",
+            "写回"
+          ],
+          "code_signature": "用反向索引表把每个 token 的 k 份专家输出读回、按路由权重加权求和（unpermute），写回输出张量。",
+          "instrument": "读回（装载）、加权求和（计算）、写回分三段；aux 记 token 或 expert 号。",
+          "phase": "epilogue",
+          "semantic_ids": [
+            "epilogue",
+            "load",
+            "compute",
+            "store"
+          ],
+          "kb_refs": [
+            "gfx942.json::entry:tl.load（带 mask）：exec 掩码 + global_load",
+            "sm_90.json::entry:tl.store simple global store",
+            "gfx942.json::entry:global_store（标量与向量化）",
+            "sm_100.json::entry:标量 FFMA（epilogue/逐元素计算）"
+          ]
+        },
+        {
+          "stage": "combine 完成通知",
+          "depends_on": [
+            "combine：gather 专家输出并按权重合并"
+          ],
+          "typical_role": "全部 CTA",
+          "semantics": [
+            "同步"
+          ],
+          "code_signature": "到达计数/栅栏，让下一层可以开始；EP 场景下还包含跨卡通信的边界。",
+          "instrument": "一段 B/E（同步类）；跨卡部分不在本工具范围内，只能记到“本卡发出/收到”的边界。",
+          "phase": "epilogue",
+          "semantic_ids": [
+            "barrier",
+            "communication"
+          ],
+          "kb_refs": [
+            "gfx942.json::entry:内存栅栏 __threadfence 系列",
+            "gfx942.json::entry:全局原子（到达计数 / 票据）",
+            "sm_100.json::entry:barrier.cluster.arrive / barrier.cluster.wait（cluster 栅栏）"
+          ]
+        }
+      ],
+      "evidence": [
+        "configs/cards/mi308x.json 的全局原子、LDS 原子、内存栅栏、全局标志自旋条目（dispatch/combine 的同步原语实测助记符）",
+        "configs/cards/h20.json、configs/cards/b300_sm_100a.json 的 bar.sync / mbarrier / cluster 栅栏条目",
+        "GEMM 算子的阶段划分（专家计算直接复用）"
+      ],
+      "semantic_id": "moe",
+      "machine_check": [
+        "correctness",
+        "overhead",
+        "assembly_change_rate",
+        "alignment",
+        "buffer_completeness"
+      ],
+      "evidence_status": "unverified",
+      "evidence_note": "本项目没有对真实 MoE kernel 做整机插桩实测；阶段划分来自 dispatch/combine 的通用结构，其中的原子、栅栏、标志自旋等构造的助记符与打点规则取自 kb 的实测条目。"
+    },
+    {
+      "name": "卷积（implicit GEMM）",
+      "aliases": [
+        "conv",
+        "conv2d",
+        "implicit gemm",
+        "fprop/dgrad/wgrad"
+      ],
+      "roles": [
+        {
+          "role": "装载 warp（含 halo/padding 处理）",
+          "note": "warp 特化实现"
+        },
+        {
+          "role": "计算 warp",
+          "note": "MMA 主循环"
+        },
+        {
+          "role": "整个 CTA",
+          "note": "Triton/CuTeDSL 常见形态"
+        }
+      ],
+      "stages": [
+        {
+          "stage": "序言：迭代空间与索引映射",
+          "depends_on": [],
+          "typical_role": "全部 warp",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "把 (n, p, q, k) 映射成 implicit GEMM 的 (M, N, K)：M=输出像素、N=输出通道、K=Cin×filter taps；含 padding/stride/dilation 的边界判断表。",
+          "instrument": "并入序言一段；这部分索引计算在小 tile 上可能占比不小，别默认它可以忽略。",
+          "phase": "prologue",
+          "semantic_ids": [
+            "compute"
+          ],
+          "kb_refs": []
+        },
+        {
+          "stage": "装载 activation tile（含 halo）",
+          "depends_on": [
+            "序言：迭代空间与索引映射"
+          ],
+          "typical_role": "装载 warp 或整个 CTA",
+          "semantics": [
+            "装载",
+            "计算"
+          ],
+          "code_signature": "cp.async / TMA / global_load 搬 activation；halo 与越界像素要补零（predicated load 或 shared 预清零）。",
+          "instrument": "装载与补零分开记：补零是计算/写 shared，混在一起会让“装载未掩盖”误判。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "load",
+            "compute"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:cp.async.ca.shared.global -> shared memory",
+            "sm_90.json::entry:cp.async.bulk.tensor.2d TMA load",
+            "gfx942.json::entry:tl.load（带 mask）：exec 掩码 + global_load"
+          ]
+        },
+        {
+          "stage": "装载 filter/权重 tile",
+          "depends_on": [
+            "序言：迭代空间与索引映射"
+          ],
+          "typical_role": "装载 warp 或整个 CTA",
+          "semantics": [
+            "装载"
+          ],
+          "code_signature": "权重通常常驻或按 K 分块搬；TMA descriptor load / cp.async。",
+          "instrument": "与 activation 装载用不同事件号，才能看出是权重还是 activation 拖慢。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "load"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:cp.async.ca.shared.global -> shared memory",
+            "sm_100.json::entry:tensor descriptor TMA load（tl.make_tensor_descriptor + desc.load）"
+          ]
+        },
+        {
+          "stage": "等装载完成",
+          "depends_on": [
+            "装载 activation tile（含 halo）",
+            "装载 filter/权重 tile"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "等待"
+          ],
+          "code_signature": "cp.async.wait_group / mbarrier.try_wait / s_waitcnt vmcnt+lgkmcnt。",
+          "instrument": "B/E 包住等待；这是卷积里最常见的“装载未掩盖”位置。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "wait"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:cp.async.wait_group 0",
+            "sm_100.json::entry:mbarrier.try_wait.parity 自旋等待",
+            "gfx942.json::entry:s_waitcnt 的部分等待（vmcnt 与 lgkmcnt 分开计数）"
+          ]
+        },
+        {
+          "stage": "MMA 主循环（Cin × taps 累加）",
+          "depends_on": [
+            "等装载完成"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算"
+          ],
+          "code_signature": "wgmma / tcgen05.mma / v_mfma 在 K = Cin×taps 方向累加。",
+          "instrument": "每个 (tap, cin-block) 一对记录，aux 记 tap 号；发射记 FI_M，E 记在 wait 返回后。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "mma"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:wgmma.mma_async m64n8k16 f32.f16.f16",
+            "sm_100.json::entry:tcgen05.mma.cta_group::1.kind::f16（Blackwell 张量核，单 CTA）",
+            "gfx942.json::entry:MFMA f16 16x16x16 / 32x32x8"
+          ]
+        },
+        {
+          "stage": "流水握手（多级 shared 环）",
+          "depends_on": [
+            "装载 activation tile（含 halo）",
+            "MMA 主循环（Cin × taps 累加）"
+          ],
+          "typical_role": "装载 warp 与计算 warp 各记一侧",
+          "semantics": [
+            "同步"
+          ],
+          "code_signature": "与 GEMM 相同的 full/empty 握手：命名栅栏或 mbarrier；gfx942 用 LDS 标志 + s_barrier。",
+          "instrument": "生产者记“等空槽”，消费者记“等满槽”，两侧分开。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "barrier"
+          ],
+          "kb_refs": [
+            "sm_90.json::entry:bar.sync / bar.arrive named barriers",
+            "gfx942.json::entry:LDS 标志自旋握手（生产者-消费者）"
+          ]
+        },
+        {
+          "stage": "epilogue：bias/激活函数并写回",
+          "depends_on": [
+            "MMA 主循环（Cin × taps 累加）"
+          ],
+          "typical_role": "计算 warp 或整个 CTA",
+          "semantics": [
+            "计算",
+            "写回"
+          ],
+          "code_signature": "加 bias、ReLU/GELU、类型转换后写回 NHWC/NC4HW4 布局（可能是 scatter 写）。",
+          "instrument": "写回布局转置会引入 shared 往返：把“shared 转置”与“全局写”分成两段，转置是同步+装载/写回混合。",
+          "phase": "epilogue",
+          "semantic_ids": [
+            "epilogue",
+            "compute",
+            "store"
+          ],
+          "kb_refs": [
+            "sm_100.json::entry:tcgen05.ld / tcgen05.st + tl.store（累加器出 tmem 再写全局）",
+            "sm_90.json::entry:Tensor descriptor TMA store",
+            "gfx942.json::entry:global_store（标量与向量化）",
+            "sm_100.json::entry:标量 FFMA（epilogue/逐元素计算）"
+          ]
+        }
+      ],
+      "evidence": [
+        "configs/*.json 的 cp.async / TMA / MMA / 栅栏条目（卷积主循环与 GEMM 共用同一批构造）",
+        "targets/ring_pipeline.cu 的多级 shared 环 + full/empty 握手（卷积流水的真实同构形态）"
+      ],
+      "semantic_id": "convolution",
+      "machine_check": [
+        "correctness",
+        "overhead",
+        "assembly_change_rate",
+        "alignment",
+        "buffer_completeness"
+      ],
+      "evidence_status": "unverified",
+      "evidence_note": "本项目没有对卷积 kernel 做整机插桩实测；阶段划分按 implicit GEMM 结构给出，其中每条构造的助记符与打点规则取自 kb 的实测条目。"
+    },
+    {
+      "name": "megakernel（取任务 -> 等依赖 -> 执行 -> 通知）",
+      "aliases": [
+        "mega kernel",
+        "fused persistent kernel",
+        "device-side scheduler",
+        "task graph kernel"
+      ],
+      "roles": [
+        {
+          "role": "控制器/调度 warp",
+          "note": "取任务、发布依赖"
+        },
+        {
+          "role": "工作 warp",
+          "note": "执行算子阶段"
+        },
+        {
+          "role": "整个 CTA",
+          "note": "没有 warp 特化时的形态"
+        }
+      ],
+      "stages": [
+        {
+          "stage": "取任务",
+          "depends_on": [],
+          "typical_role": "控制器 warp 或整个 CTA",
+          "semantics": [
+            "装载",
+            "同步"
+          ],
+          "code_signature": "三种真实形态：(1) Blackwell 原生 clusterlaunchcontrol.try_cancel（SASS UGETNEXTWORKID.BROADCAST，work id 异步写进 shared 并由 mbarrier 通知）；(2) 全局 atomicAdd 领票号；(3) 读设备侧任务队列 + 标志自旋。",
+          "instrument": "发射处记 FI_M，拿到任务的 E 记在 mbarrier/自旋返回之后；aux 记任务号。这一段必须单独成区间，否则“任务队列饥饿”会和“等依赖”混在一起。",
+          "phase": "mainloop",
+          "kb_refs": [
+            "sm_100.json::entry:clusterlaunchcontrol.try_cancel（persistent/megakernel 取下一个任务）",
+            "gfx942.json::entry:全局原子（到达计数 / 票据）",
+            "gfx942.json::entry:全局标志自旋（跨 CTA）"
+          ],
+          "semantic_ids": [
+            "dispatch",
+            "load",
+            "barrier"
+          ]
+        },
+        {
+          "stage": "等依赖",
+          "depends_on": [
+            "取任务"
+          ],
+          "typical_role": "工作 warp 或整个 CTA",
+          "semantics": [
+            "等待"
+          ],
+          "code_signature": "等前驱任务完成：global/LDS 标志自旋、mbarrier try_wait、s_waitcnt；跨 CTA 时还要 __threadfence 保证可见性。",
+          "instrument": "B 在开始自旋前，E 在依赖可见之后；aux 记被等的任务号，才能画出依赖等待的来源分布。",
+          "phase": "mainloop",
+          "kb_refs": [
+            "gfx942.json::entry:全局标志自旋（跨 CTA）",
+            "gfx942.json::entry:LDS 标志自旋握手（生产者-消费者）"
+          ],
+          "semantic_ids": [
+            "wait",
+            "barrier"
+          ]
+        },
+        {
+          "stage": "执行",
+          "depends_on": [
+            "等依赖"
+          ],
+          "typical_role": "工作 warp 或整个 CTA",
+          "semantics": [
+            "装载",
+            "计算",
+            "写回"
+          ],
+          "code_signature": "按任务类型展开：GEMM 的装载/MMA/写回、attention 的 QK-softmax-PV、reduce 的两级归约等（见对应算子）。",
+          "instrument": "每类任务用独立事件号段；aux 记任务号，Perfetto 里才能按 aux 搜同一个任务在不同角色上的处理时刻。",
+          "phase": "mainloop",
+          "semantic_ids": [
+            "load",
+            "compute",
+            "store"
+          ],
+          "kb_refs": [
+            "operators.json::stage:gemm::装载 A/B k-tile",
+            "operators.json::stage:gemm::MMA 计算（k 累加）",
+            "operators.json::stage:attention::QK^T = S",
+            "operators.json::stage:reduction::跨 warp归约（shared + 栅栏）"
+          ]
+        },
+        {
+          "stage": "通知",
+          "depends_on": [
+            "执行"
+          ],
+          "typical_role": "控制器 warp 或整个 CTA",
+          "semantics": [
+            "同步",
+            "写回"
+          ],
+          "code_signature": "发布完成：__threadfence（gfx942 落为 buffer_inv + buffer_wbl2）后写完成标志或 atomicAdd 到达计数；Blackwell cluster 内用 barrier.cluster.arrive/wait（UCGABAR_ARV/UCGABAR_WAIT），tcgen05 路径用 tcgen05.commit（UTCBAR）挂到 mbarrier。",
+          "instrument": "fence 与标志写要包在同一段里（顺序错了下游会读到旧数据）；aux 记任务号。",
+          "phase": "epilogue",
+          "kb_refs": [
+            "gfx942.json::entry:内存栅栏 __threadfence 系列",
+            "sm_100.json::entry:barrier.cluster.arrive / barrier.cluster.wait（cluster 栅栏）",
+            "gfx942.json::entry:全局原子（到达计数 / 票据）"
+          ],
+          "semantic_ids": [
+            "barrier",
+            "store",
+            "communication"
+          ]
+        },
+        {
+          "stage": "收尾：全局归约与状态复位",
+          "depends_on": [
+            "通知"
+          ],
+          "typical_role": "最后一个完成的 CTA",
+          "semantics": [
+            "等待",
+            "计算",
+            "写回"
+          ],
+          "code_signature": "同 reduce 算子的跨 CTA 归约；megakernel 还要把设备侧调度状态（票号、队列头、完成计数）复位，否则下一次 launch 直接错。",
+          "instrument": "复位写必须记进区间并在正确性比对里覆盖；票号广播到全部 wave/warp 之后再分支。",
+          "phase": "epilogue",
+          "kb_refs": [
+            "gfx942.json::entry:全 CTA 广播一个标量（最后一个 CTA 归约的票号写法）",
+            "gfx942.json::entry:全局原子（到达计数 / 票据）",
+            "gfx942.json::entry:global_store（标量与向量化）"
+          ],
+          "semantic_ids": [
+            "wait",
+            "reduction",
+            "store",
+            "barrier"
+          ]
+        }
+      ],
+      "evidence": [
+        "configs/cards/b300_sm_100a.json、configs/cards/b300_sm_103a.json 的 clusterlaunchcontrol.try_cancel -> UGETNEXTWORKID.BROADCAST 实测（取任务的原生形态）",
+        "configs/cards/b300_sm_100a.json、configs/cards/b300_sm_103a.json 的 barrier.cluster.arrive/wait -> UCGABAR_ARV/UCGABAR_WAIT 实测（cluster 内通知）",
+        "configs/cards/mi308x.json 的全局标志自旋、LDS 标志自旋、内存栅栏、全局原子条目（等依赖与通知的实测助记符）",
+        "targets/ring_pipeline.cu 的“最后一个 CTA 收尾归约 + 复位 done_counter”真实实现"
+      ],
+      "semantic_id": "megakernel",
+      "machine_check": [
+        "correctness",
+        "overhead",
+        "assembly_change_rate",
+        "alignment",
+        "buffer_completeness"
+      ],
+      "evidence_status": "unverified",
+      "evidence_note": "取任务/通知的 Blackwell 原生原语来自本机交叉编译反汇编（未在 B300 上运行）；标志自旋与栅栏在 H20、MI308X 上有实测；完整 megakernel 的端到端插桩本项目未做。"
+    }
+  ],
+  "schema": "weaveprofiler-operators/v2",
+  "canonical_semantic_source": "configs/semantic_ids.json",
+  "machine_check_catalog": {
+    "correctness": {
+      "required": true,
+      "what": "全输出正确性",
+      "pass_condition": "覆盖全部输出及复位副作用，shape/dtype/layout 一致，逐元素按声明容差比较；禁止只比较键交集、单个元素或部分输出。"
+    },
+    "overhead": {
+      "required": true,
+      "what": "插桩开销",
+      "pass_condition": "同一输入与同一二进制配置下比较未插桩和插桩版本的中位耗时，报告绝对/相对开销与采样次数，并满足声明的上限。"
+    },
+    "assembly_change_rate": {
+      "required": true,
+      "what": "SASS/GCN 代码变化率",
+      "pass_condition": "按基线与插桩后的指令操作码序列计算 assembly_change_rate = 1 - LCS(I0, Iinst) / len(I0)。记录两侧 spill 总字节数及差值，要求 delta_spill_bytes <= 0。检查寄存器、栈与关键指令序列，语义关键指令缺失或出现无法解释的控制流变化即失败。"
+    },
+    "alignment": {
+      "required": true,
+      "what": "软硬件对齐",
+      "pass_condition": "软件事件与硬件时间轴使用同一时钟域和严格 kernel 窗口；卡型/架构/collector 身份一致，断档、负偏移或越界样本必须显式失败。"
+    },
+    "buffer_completeness": {
+      "required": true,
+      "what": "缓冲区完整性",
+      "pass_condition": "overflow 标志为 false，记录数与期望 begin/end 对数一致，slot/event_id/角色/物理 ID 无越界或丢失。"
+    }
+  }
+}

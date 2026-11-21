@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract tests for 2_instrument/apply_plan.py."""
+"""Contract tests for weaveprof/pipeline/instrument/apply_plan.py."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "2_instrument" / "apply_plan.py"
+MODULE_PATH = ROOT / "weaveprof/pipeline/instrument" / "apply_plan.py"
 SPEC = importlib.util.spec_from_file_location("weaveprofiler_apply_plan", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 apply_plan = importlib.util.module_from_spec(SPEC)

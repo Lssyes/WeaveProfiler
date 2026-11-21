@@ -1,0 +1,54 @@
+{
+  "_PROJECT_HOOK": "===== PROJECT HOOK: list the exact GPU PM metric names YOUR kernel needs =====",
+  "_how_to_fill": "Replace the keep/required lists with the exact metric names as they appear in nsys (case-insensitive substring match). Run `extract_gpu_metrics.py --keep-all` once against a capture to dump every available metric name, then narrow to the SM/DRAM/NVLink counters that matter for your kernel. `required` metrics MUST have >=1 sample in the kernel window or extract_gpu_metrics.py fails.",
+  "_READ_THIS_BEFORE_COPYING": "combine and scale are NOT decoration and NOT safe to copy verbatim. Two real deliveries shipped wrong because this file was copied without thinking: (1) a cut-down SKU reported Tensor Active against the full-die peak, so the raw curve plateaued at 25 instead of 100 and understated tensor utilisation 4x; (2) DRAM was delivered as read+write components with no summed total, so the roofline number was missing. Both are now caught by skill-side mandatory audits (hw_scale_plausibility, hw_required_totals) in weaveprof/pipeline/validate/validate_all.py, which fail the whole run — you cannot ship past them, so fill these sections deliberately.",
+  "schema": "gpu-metrics-whitelist/v1",
+  "sampling": {
+    "frequency_hz": 200000,
+    "expected_interval_ns": 5000,
+    "rationale": "200 kHz device-wide PM sampling: fine enough to resolve short kernel phases while staying within nsys overhead limits; align_sw_hw.py uses the observed median interval to compute window coverage.",
+    "capture_range": "cudaProfilerApi",
+    "capture_range_note": "PM sampling is bounded to the cudaProfilerStart/Stop window so counters are not diluted by warmup/other kernels"
+  },
+  "keep": [
+    "SM Active",
+    "SM Issue",
+    "Tensor Active",
+    "DRAM Read Throughput",
+    "DRAM Write Throughput",
+    "NVLink Receive Throughput",
+    "NVLink Transmit Throughput"
+  ],
+  "required": [
+    "SM Active",
+    "Tensor Active",
+    "DRAM Read Throughput",
+    "DRAM Write Throughput"
+  ],
+  "combine": [
+    {
+      "_comment": "REQUIRED whenever both DRAM component curves are kept. Read and write throughput are both 'fraction of cycles the shared DRAM interface was active' on the same physical interface, so the per-sample sum is the number you compare against the roofline. Sum per sample, never by adding the two maxima: on a measured H20 capture read peaked at 44 and write at 21, but the total peaked at 45 rather than 65 because the peaks did not co-occur. Keep drop_sources=false so the read/write split stays readable.",
+      "name": "DRAM Bandwidth Total",
+      "sum_of": ["DRAM Read Throughput", "DRAM Write Throughput"],
+      "unit": "Throughput %",
+      "drop_sources": false
+    },
+    {
+      "_comment": "REQUIRED whenever both NVLink direction/packet-class components are kept, for the same reason as DRAM. Adjust the source names to whatever this nsys build exposes; if you only keep one component, delete this entry.",
+      "name": "NVLink Total Throughput",
+      "sum_of": ["NVLink Receive Throughput", "NVLink Transmit Throughput"],
+      "unit": "Throughput %",
+      "drop_sources": false
+    }
+  ],
+  "scale": [
+    {
+      "_comment": "DECIDE THIS, DO NOT COPY IT. Percentage PM counters are normalized against a peak that on cut-down SKUs belongs to the full die rather than the shipped part, so the curve tops out at exactly 100/2^k. How to decide, once, against a real capture: compare each percentage counter's peak with a counter you know saturates (SM Active usually reaches a true 100). If a counter plateaus at exactly 100/2, 100/4, 100/8 or 100/16 with several samples pinned there, it needs a factor of that divisor. Measured H20 example: raw Tensor Active pinned at 25 (= 100/4) through dense WGMMA stretches while SM Active on the same capture reached 100 -> factor 4, device_name_regex 'H20'. apply_scale_rules then publishes a DERIVED '<name> (corrected xN)' lane and leaves the raw curve untouched, so both stay auditable in hw_metrics.json scale_rules.",
+      "_if_no_correction_is_needed": "Delete this entry. Do NOT leave it with factor 1 and an empty regex — that reads like a decision but applies nothing, which is exactly how a real delivery lost its x4 correction. If a counter genuinely plateaus at 100/2^k for a physical reason, record that reasoning in the contract under capture.hardware.normalization_plateau_reviewed so the skill audit can see an explicit decision instead of silence.",
+      "name": "REPLACE_WITH_COUNTER_NAME_OR_DELETE_THIS_ENTRY",
+      "factor": 4,
+      "device_name_regex": "REPLACE_WITH_YOUR_GPU_NAME_SUBSTRING",
+      "rationale": "REPLACE with the measured evidence: which counter plateaued, at what value, over how many samples, and which sibling counter reached a true 100"
+    }
+  ]
+}

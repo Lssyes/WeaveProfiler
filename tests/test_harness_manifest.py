@@ -12,8 +12,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST_PY = ROOT / "4_validate" / "harness" / "manifest.py"
-MANIFEST_REL = Path("4_validate") / "harness" / "MANIFEST.json"
+MANIFEST_PY = ROOT / "weaveprof/pipeline/validate" / "harness" / "manifest.py"
+MANIFEST_REL = Path("weaveprof/pipeline/validate") / "harness" / "MANIFEST.json"
 
 
 def load_manifest_module():
@@ -34,7 +34,7 @@ class HarnessManifestTest(unittest.TestCase):
         self.addCleanup(self.tmp_obj.cleanup)
         self.root = Path(self.tmp_obj.name)
         (self.root / "kernel.txt").write_text("stable input\n", encoding="utf-8")
-        (self.root / "4_validate" / "harness").mkdir(parents=True)
+        (self.root / "weaveprof/pipeline/validate" / "harness").mkdir(parents=True)
 
     def test_build_writes_canonical_path_and_tree_verify_uses_it(self):
         payload = MANIFEST.build(self.root)

@@ -55,13 +55,13 @@ def _load(rel: str, name: str):
     return mod
 
 
-DECODER = _load("4_validate/tools/fi_lite_decode.py", "fg_decoder")
-PLACER = _load("1_scan/llm_probe_placer.py", "fg_placer")
+DECODER = _load("weaveprof/pipeline/validate/tools/fi_lite_decode.py", "fg_decoder")
+PLACER = _load("weaveprof/pipeline/scan/llm_probe_placer.py", "fg_placer")
 
 
 class TestFidelityGatesAndCausal(unittest.TestCase):
     def test_fi_lite_cuh_smem_zreg_and_role_switch_decode(self) -> None:
-        hdr = (ROOT / "2_instrument" / "recorders" / "cuda_cpp" / "fi_lite.cuh").read_text(encoding="utf-8")
+        hdr = (ROOT / "recorders" / "cuda_cpp" / "fi_lite.cuh").read_text(encoding="utf-8")
         for token in (
             "FI_SMEM_ZREG",
             "struct FiSmemCtx",

@@ -87,11 +87,11 @@ _WP_DECODE: Any = None
 # ---------------------------------------------------------------------------
 
 def load_wp_decode() -> Any:
-    """Import ``4_validate/tools/wp_decode.py`` once (the package path starts with a digit)."""
+    """Import ``weaveprof/pipeline/validate/tools/wp_decode.py`` once (the package path starts with a digit)."""
     global _WP_DECODE
     if _WP_DECODE is not None:
         return _WP_DECODE
-    path = (ROOT / "4_validate" / "tools" / "wp_decode.py").resolve()
+    path = (ROOT / "weaveprof/pipeline/validate" / "tools" / "wp_decode.py").resolve()
     mod = sys.modules.get("wp_decode")
     if mod is None or Path(getattr(mod, "__file__", "") or "").resolve() != path:
         spec = importlib.util.spec_from_file_location("wp_decode", path)
@@ -922,7 +922,7 @@ def _argv(cmd: Sequence[str] | str, subs: Mapping[str, str]) -> List[str]:
 
 
 def _shadow_env(l0: Path, inst: Path, out: Path, l0_cache: Optional[Path]) -> Dict[str, str]:
-    libs = ROOT / "2_instrument" / "recorders"
+    libs = ROOT / "recorders"
     env = dict(os.environ)
     env.update(
         WEAVEPROF_ROOT=str(ROOT), WEAVEPROF_L0_DIR=str(l0), WEAVEPROF_INST_DIR=str(inst),

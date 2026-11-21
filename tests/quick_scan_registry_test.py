@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import registry  # noqa: E402
+from weaveprof.pipeline.core import registry  # noqa: E402
 
 
 def load_module(name, relative_path):
@@ -33,8 +33,8 @@ def load_module(name, relative_path):
     return module
 
 
-quick_scan = load_module("weaveprofiler_quick_scan_registry_test", "1_scan/quick_scan.py")
-preflight = load_module("weaveprofiler_fi_preflight_registry_test", "4_validate/tools/fi_preflight.py")
+quick_scan = load_module("weaveprofiler_quick_scan_registry_test", "weaveprof/pipeline/scan/quick_scan.py")
+preflight = load_module("weaveprofiler_fi_preflight_registry_test", "weaveprof/pipeline/validate/tools/fi_preflight.py")
 
 
 HIP_SOURCE = """\
@@ -77,7 +77,7 @@ class FrameworkDetectionTests(unittest.TestCase):
         self.assertEqual(route["target"]["platform"], "amd")
         self.assertEqual(route["target"]["arch"], "gfx942")
         self.assertEqual(route["language"], "hip_cpp")
-        self.assertEqual(route["recorder"], "2_instrument/recorders/hip_cpp/fi_lite_hip.h")
+        self.assertEqual(route["recorder"], "recorders/hip_cpp/fi_lite_hip.h")
         self.assertEqual(route["profiler"]["primary"], "rocprof-sys")
 
     def test_hip_extension_wins_even_with_only_global_marker(self):
@@ -104,7 +104,7 @@ class FrameworkDetectionTests(unittest.TestCase):
             card="mi308x", arch="gfx942", language=framework["dominant"],
             file_texts=[("gemm.py", TRITON_SOURCE)])
         self.assertEqual(route["language"], "triton")
-        self.assertEqual(route["recorder"], "2_instrument/recorders/triton/fi_triton_amd.py")
+        self.assertEqual(route["recorder"], "recorders/triton/fi_triton_amd.py")
         self.assertEqual(route["profiler"]["primary"], "rocprof-sys")
 
 
@@ -123,7 +123,7 @@ class QuickScanRouteTests(unittest.TestCase):
         self.assertEqual(report["target"]["platform"], "nv")
         self.assertEqual(report["target"]["arch"], "sm_90")
         self.assertEqual(report["language"], "cuda_cpp")
-        self.assertEqual(report["recorder"], "2_instrument/recorders/cuda_cpp/fi_lite.cuh")
+        self.assertEqual(report["recorder"], "recorders/cuda_cpp/fi_lite.cuh")
         self.assertEqual(report["profiler"]["primary"], "nsys")
         self.assertTrue(report["route_resolved"])
         self.assertIsNone(report["route_error"])
@@ -136,7 +136,7 @@ class QuickScanRouteTests(unittest.TestCase):
         self.assertEqual(report["target"]["platform"], "nv")
         self.assertEqual(report["target"]["arch"], "sm_103a")
         self.assertEqual(report["language"], "triton")
-        self.assertEqual(report["recorder"], "2_instrument/recorders/triton/fi_triton.py")
+        self.assertEqual(report["recorder"], "recorders/triton/fi_triton.py")
         self.assertEqual(report["profiler"]["primary"], "nsys")
         self.assertEqual(report["evidence_status"], "cross_compile_only")
 
@@ -147,7 +147,7 @@ class QuickScanRouteTests(unittest.TestCase):
         self.assertEqual(report["target"]["platform"], "amd")
         self.assertEqual(report["target"]["arch"], "gfx942")
         self.assertEqual(report["language"], "hip_cpp")
-        self.assertEqual(report["recorder"], "2_instrument/recorders/hip_cpp/fi_lite_hip.h")
+        self.assertEqual(report["recorder"], "recorders/hip_cpp/fi_lite_hip.h")
         self.assertEqual(report["profiler"]["primary"], "rocprof-sys")
 
         unresolved = self._report(
@@ -227,7 +227,7 @@ class QuickScanCliTests(unittest.TestCase):
             source = Path(tmp) / "gemm.cpp"
             source.write_text(HIP_SOURCE, encoding="utf-8")
             output = Path(tmp) / "scan.json"
-            command = [sys.executable, "-B", str(ROOT / "1_scan" / "quick_scan.py"),
+            command = [sys.executable, "-B", str(ROOT / "weaveprof/pipeline/scan" / "quick_scan.py"),
                        "--version-root", tmp, "--card", "mi308x", "--arch", "gfx942",
                        "--language", "hip_cpp", "--json", str(output)]
             completed = subprocess.run(command, stdout=subprocess.PIPE,
@@ -238,7 +238,7 @@ class QuickScanCliTests(unittest.TestCase):
         self.assertEqual(doc["target"]["platform"], "amd")
         self.assertEqual(doc["target"]["arch"], "gfx942")
         self.assertEqual(doc["language"], "hip_cpp")
-        self.assertEqual(doc["recorder"], "2_instrument/recorders/hip_cpp/fi_lite_hip.h")
+        self.assertEqual(doc["recorder"], "recorders/hip_cpp/fi_lite_hip.h")
         self.assertEqual(doc["profiler"]["primary"], "rocprof-sys")
         self.assertEqual(doc["evidence_status"], "measured_on_mi308x_gemm_route")
 

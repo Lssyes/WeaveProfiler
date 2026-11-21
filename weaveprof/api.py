@@ -35,7 +35,7 @@ from .workspace import ShadowWorkspace, cache_root, digest, implementation, read
 
 
 def _bind(doc, source, card="auto"):
-    placer = implementation("1_scan.llm_probe_placer")
+    placer = implementation("weaveprof.pipeline.scan.llm_probe_placer")
     raw = source.read_bytes()
     sha = digest(source)
     if doc.get("source_sha256") not in (None, sha):
@@ -67,7 +67,7 @@ def identify(source, out=None, *, feedback=None, model="qwen4-max", card="auto",
     if prior and not feedback:
         doc = _bind(prior, source, card)
     else:
-        placer = implementation("1_scan.llm_probe_placer")
+        placer = implementation("weaveprof.pipeline.scan.llm_probe_placer")
         doc = placer.identify_source(source, model=model, card=card, offline_heuristic=offline_heuristic,
                                      previous=prior, feedback=feedback, llm_caller=llm_caller)
         doc = _bind(doc, source, card)
@@ -296,7 +296,7 @@ class _Session(ContextDecorator):
                     revised = revise_probe_spec(self.spec, self.result, self.source_text)
                 else:
                     escalation_tag = None
-                    placer = implementation("1_scan.llm_probe_placer")
+                    placer = implementation("weaveprof.pipeline.scan.llm_probe_placer")
                     revised = placer.identify_source(
                         self.source, previous=self.spec, feedback=self.result,
                         model=self.model, card=self.card,

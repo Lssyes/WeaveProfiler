@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline contract tests for knowledge/languages/**/patterns.json.
+"""Offline contract tests for configs/languages/**/patterns.json.
 
 The library is intentionally data-only.  These tests enforce the shared
 schema, complete canonical coverage, stable trace names, real language APIs,
@@ -14,8 +14,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PATTERN_DIR = ROOT / "knowledge" / "languages"
-SEMANTIC_PATH = ROOT / "knowledge" / "semantic_ids.json"
+PATTERN_DIR = ROOT / "configs" / "languages"
+SEMANTIC_PATH = ROOT / "configs" / "semantic_ids.json"
 
 EXPECTED_FILES = {
     "cuda_cpp/patterns.json": ("cuda_cpp", "nv", {"h20", "b300"}),
@@ -215,8 +215,8 @@ def validate_document(doc: dict, filename: str) -> None:
         raise AssertionError(f"{filename}: semantic_policy keys mismatch")
     if not all(policy[key] is True for key in POLICY_KEYS - {"canonical_source"}):
         raise AssertionError(f"{filename}: semantic policy flags must all be true")
-    if policy["canonical_source"] != "knowledge/semantic_ids.json":
-        raise AssertionError(f"{filename}: canonical_source must point to knowledge/semantic_ids.json")
+    if policy["canonical_source"] != "configs/semantic_ids.json":
+        raise AssertionError(f"{filename}: canonical_source must point to configs/semantic_ids.json")
 
     contract = doc["record_contract"]
     if set(contract) != CONTRACT_KEYS:

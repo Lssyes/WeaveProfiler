@@ -1,0 +1,177 @@
+{
+  "schema": "weaveprofiler.recipe-index/v1",
+  "version": 1,
+  "supported_public_cards": [
+    "h20",
+    "b300",
+    "mi308x"
+  ],
+  "semantic_authority": "configs/semantic_ids.json",
+  "semantic_policy": {
+    "display_name_equals_semantic_id": true,
+    "unknown_or_ambiguous_fails_closed": true,
+    "source_patterns_are_hints_only": true
+  },
+  "recipes": [
+    {
+      "recipe_id": "nv/h20/cuda_cpp",
+      "card": "h20",
+      "architectures": [
+        "sm_90"
+      ],
+      "language": "cuda_cpp",
+      "path": "configs/recipes/nv/h20/cuda_cpp.json",
+      "evidence_status": "measured",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "nv/h20/triton",
+      "card": "h20",
+      "architectures": [
+        "sm_90"
+      ],
+      "language": "triton",
+      "path": "configs/recipes/nv/h20/triton.json",
+      "evidence_status": "measured",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "nv/h20/cutedsl",
+      "card": "h20",
+      "architectures": [
+        "sm_90"
+      ],
+      "language": "cutedsl",
+      "path": "configs/recipes/nv/h20/cutedsl.json",
+      "evidence_status": "measured",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "nv/b300/cuda_cpp",
+      "card": "b300",
+      "architecture": "sm_100a",
+      "architectures": [
+        "sm_100a"
+      ],
+      "language": "cuda_cpp",
+      "path": "configs/recipes/nv/b300/cuda_cpp.json",
+      "machine_profile": "configs/cards/b300_sm_100a.json",
+      "evidence_status": "compiled",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "nv/b300/cuda_cpp",
+      "card": "b300",
+      "architecture": "sm_103a",
+      "architectures": [
+        "sm_103a"
+      ],
+      "language": "cuda_cpp",
+      "path": "configs/recipes/nv/b300/cuda_cpp.json",
+      "machine_profile": "configs/cards/b300_sm_103a.json",
+      "evidence_status": "measured",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "nv/b300/triton",
+      "card": "b300",
+      "architecture": "sm_100a",
+      "architectures": [
+        "sm_100a"
+      ],
+      "language": "triton",
+      "path": "configs/recipes/nv/b300/triton.json",
+      "machine_profile": "configs/cards/b300_sm_100a.json",
+      "evidence_status": "compiled",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "nv/b300/triton",
+      "card": "b300",
+      "architecture": "sm_103a",
+      "architectures": [
+        "sm_103a"
+      ],
+      "language": "triton",
+      "path": "configs/recipes/nv/b300/triton.json",
+      "machine_profile": "configs/cards/b300_sm_103a.json",
+      "evidence_status": "measured",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "nv/b300/cutedsl",
+      "card": "b300",
+      "architecture": "sm_100a",
+      "architectures": [
+        "sm_100a"
+      ],
+      "language": "cutedsl",
+      "path": "configs/recipes/nv/b300/cutedsl.json",
+      "machine_profile": "configs/cards/b300_sm_100a.json",
+      "evidence_status": "unverified",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true,
+      "support_level": "experimental_unverified"
+    },
+    {
+      "recipe_id": "nv/b300/cutedsl",
+      "card": "b300",
+      "architecture": "sm_103a",
+      "architectures": [
+        "sm_103a"
+      ],
+      "language": "cutedsl",
+      "path": "configs/recipes/nv/b300/cutedsl.json",
+      "machine_profile": "configs/cards/b300_sm_103a.json",
+      "evidence_status": "unverified",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true,
+      "support_level": "experimental_unverified"
+    },
+    {
+      "recipe_id": "amd/mi308x/hip_cpp",
+      "card": "mi308x",
+      "architectures": [
+        "gfx942"
+      ],
+      "language": "hip_cpp",
+      "path": "configs/recipes/amd/mi308x/hip_cpp.json",
+      "evidence_status": "measured",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    },
+    {
+      "recipe_id": "amd/mi308x/triton",
+      "card": "mi308x",
+      "architectures": [
+        "gfx942"
+      ],
+      "language": "triton",
+      "path": "configs/recipes/amd/mi308x/triton.json",
+      "evidence_status": "measured",
+      "semantic_count": 16,
+      "required_semantic_ids_present": true
+    }
+  ],
+  "platform_notes": {
+    "triton_nvidia": {
+      "path": "configs/recipes/nv/h20/triton.json and configs/recipes/nv/b300/triton.json",
+      "frontend": "recorders/triton/fi_triton.py",
+      "backend": "NVIDIA PTX, warp32"
+    },
+    "triton_amd": {
+      "path": "configs/recipes/amd/mi308x/triton.json",
+      "frontend": "recorders/triton/fi_triton_amd.py",
+      "backend": "gfx942 AMDGCN, wave64"
+    },
+    "cutedsl": "NVIDIA only: H20 and B300 recipes; no MI308X CuTeDSL recipe.",
+    "b300": "sm_100a and sm_103a are distinct machine profiles and must be selected explicitly."
+  }
+}

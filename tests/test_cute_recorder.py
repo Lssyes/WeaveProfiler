@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND = ROOT / "2_instrument" / "recorders" / "cutedsl" / "fi_cute.py"
+FRONTEND = ROOT / "recorders" / "cutedsl" / "fi_cute.py"
 
 
 class Scalar:
@@ -324,7 +324,7 @@ def _read_dump(path):
 
 def _load_decoder():
     spec = importlib.util.spec_from_file_location(
-        "fi_lite_decode_under_test", ROOT / "4_validate" / "tools" / "fi_lite_decode.py"
+        "fi_lite_decode_under_test", ROOT / "weaveprof/pipeline/validate" / "tools" / "fi_lite_decode.py"
     )
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load decoder")

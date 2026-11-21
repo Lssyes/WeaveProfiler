@@ -14,11 +14,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCAN_PATH = ROOT / "1_scan" / "scan.py"
+SCAN_PATH = ROOT / "weaveprof/pipeline/scan" / "scan.py"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import registry  # noqa: E402
+from weaveprof.pipeline.core import registry  # noqa: E402
 
 
 def load_scan_module():
@@ -198,13 +198,13 @@ class RouteEvidenceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="weaveprofiler-route-evidence-")
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
-        self.semantic_path = self.repo / "knowledge" / "semantic_ids.json"
-        self.recipe_index_path = self.repo / "knowledge" / "recipes" / "index.json"
-        self.recipe_path = self.repo / "knowledge" / "recipes" / "nv" / "b300" / "triton.json"
-        self.profile_100_path = self.repo / "knowledge" / "cards" / "b300_sm_100a.json"
-        self.profile_103_path = self.repo / "knowledge" / "cards" / "b300_sm_103a.json"
-        self.pattern_path = self.repo / "knowledge" / "languages" / "triton" / "nvidia_patterns.json"
-        self.recorder_path = self.repo / "2_instrument" / "recorders" / "triton" / "fi_triton.py"
+        self.semantic_path = self.repo / "configs" / "semantic_ids.json"
+        self.recipe_index_path = self.repo / "configs" / "recipes" / "index.json"
+        self.recipe_path = self.repo / "configs" / "recipes" / "nv" / "b300" / "triton.json"
+        self.profile_100_path = self.repo / "configs" / "cards" / "b300_sm_100a.json"
+        self.profile_103_path = self.repo / "configs" / "cards" / "b300_sm_103a.json"
+        self.pattern_path = self.repo / "configs" / "languages" / "triton" / "nvidia_patterns.json"
+        self.recorder_path = self.repo / "recorders" / "triton" / "fi_triton.py"
         self._write_repo()
 
     def _write_json(self, relative: str, value: object) -> Path:
@@ -214,34 +214,34 @@ class RouteEvidenceTests(unittest.TestCase):
         return path
 
     def _write_repo(self) -> None:
-        self._write_json("knowledge/semantic_ids.json", {"semantics": []})
-        self._write_json("knowledge/recipes/index.json", {
+        self._write_json("configs/semantic_ids.json", {"semantics": []})
+        self._write_json("configs/recipes/index.json", {
             "schema": "weaveprofiler.recipe-index/v1",
-            "semantic_authority": "knowledge/semantic_ids.json",
+            "semantic_authority": "configs/semantic_ids.json",
             "recipes": [{
                 "recipe_id": "nv/b300/triton",
                 "card": "b300",
                 "architectures": ["sm_100a", "sm_103a"],
                 "language": "triton",
-                "path": "knowledge/recipes/nv/b300/triton.json",
+                "path": "configs/recipes/nv/b300/triton.json",
             }],
         })
-        self._write_json("knowledge/recipes/nv/b300/triton.json", {
+        self._write_json("configs/recipes/nv/b300/triton.json", {
             "schema": "weaveprofiler.recipe/v1",
             "recipe_id": "nv/b300/triton",
             "language": "triton",
             "target": {"card": "b300", "platform": "nv"},
             "machine_profiles": [
-                "knowledge/cards/b300_sm_100a.json",
-                "knowledge/cards/b300_sm_103a.json",
+                "configs/cards/b300_sm_100a.json",
+                "configs/cards/b300_sm_103a.json",
             ],
-            "recorder": {"path": "2_instrument/recorders/triton/fi_triton.py"},
+            "recorder": {"path": "recorders/triton/fi_triton.py"},
         })
-        self._write_json("knowledge/cards/b300_sm_100a.json", {
+        self._write_json("configs/cards/b300_sm_100a.json", {
             "schema": "weaveprofiler.card-machine/v1", "card": "b300", "arch": "sm_100a"})
-        self._write_json("knowledge/cards/b300_sm_103a.json", {
+        self._write_json("configs/cards/b300_sm_103a.json", {
             "schema": "weaveprofiler.card-machine/v1", "card": "b300", "arch": "sm_103a"})
-        self._write_json("knowledge/languages/triton/nvidia_patterns.json", {
+        self._write_json("configs/languages/triton/nvidia_patterns.json", {
             "schema": "weaveprofiler-code-patterns/v1", "language": "triton", "backend": "nv"})
         self.recorder_path.parent.mkdir(parents=True, exist_ok=True)
         self.recorder_path.write_text("// test recorder\n", encoding="utf-8")
@@ -265,11 +265,11 @@ class RouteEvidenceTests(unittest.TestCase):
         evidence_100 = self._evidence(self._route("sm_100a"))
         evidence_103 = self._evidence(self._route("sm_103a"))
         self.assertEqual(
-            ["knowledge/cards/b300_sm_100a.json"],
+            ["configs/cards/b300_sm_100a.json"],
             [item["path"] for item in evidence_100["card_profiles"]],
         )
         self.assertEqual(
-            ["knowledge/cards/b300_sm_103a.json"],
+            ["configs/cards/b300_sm_103a.json"],
             [item["path"] for item in evidence_103["card_profiles"]],
         )
         self.assertEqual("sm_100a", evidence_100["card_profiles"][0]["arch"])
@@ -362,21 +362,21 @@ class LanguageCueTests(unittest.TestCase):
         self.assertEqual("triton", nv_triton["language"])
         self.assertEqual("triton", amd_triton["language"])
         self.assertEqual(
-            "knowledge/languages/triton/nvidia_patterns.json",
+            "configs/languages/triton/nvidia_patterns.json",
             nv_triton["language_pattern_library"],
         )
         self.assertEqual(
-            "knowledge/languages/triton/amd_patterns.json",
+            "configs/languages/triton/amd_patterns.json",
             amd_triton["language_pattern_library"],
         )
 
     def test_language_pattern_library_mapping(self) -> None:
         cases = (
-            ("cuda_cpp", "nv", "knowledge/languages/cuda_cpp/patterns.json"),
-            ("hip_cpp", "amd", "knowledge/languages/hip_cpp/patterns.json"),
-            ("triton", "nv", "knowledge/languages/triton/nvidia_patterns.json"),
-            ("triton", "amd", "knowledge/languages/triton/amd_patterns.json"),
-            ("cutedsl", "nv", "knowledge/languages/cutedsl/patterns.json"),
+            ("cuda_cpp", "nv", "configs/languages/cuda_cpp/patterns.json"),
+            ("hip_cpp", "amd", "configs/languages/hip_cpp/patterns.json"),
+            ("triton", "nv", "configs/languages/triton/nvidia_patterns.json"),
+            ("triton", "amd", "configs/languages/triton/amd_patterns.json"),
+            ("cutedsl", "nv", "configs/languages/cutedsl/patterns.json"),
         )
         for language, platform, expected in cases:
             self.assertEqual(expected, registry.language_pattern_path(language, platform))

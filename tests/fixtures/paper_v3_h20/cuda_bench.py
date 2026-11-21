@@ -38,7 +38,7 @@ def compile_kernel(work, name, source):
     cmd = ["nvcc", "-O3", "-arch=sm_90a", "-shared", "-Xcompiler=-fPIC",
            "-Xlinker=-Bsymbolic", "-Xptxas=-v", "-DFI_LEVEL=" + ("2" if instrumented else "0")]
     if instrumented:
-        headers = Path(os.environ["WEAVEPROF_ROOT"]) / "2_instrument/recorders/cuda_cpp"
+        headers = Path(os.environ["WEAVEPROF_ROOT"]) / "recorders/cuda_cpp"
         cmd += ["-I", str(headers)]
     comp = subprocess.run([*cmd, str(wrapper), "-o", str(lib)], stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True)

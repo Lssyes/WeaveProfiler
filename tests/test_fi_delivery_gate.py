@@ -16,8 +16,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
-CHECK = PKG / "4_validate" / "tools" / "fi_check.py"
-LOGCHECK = PKG / "4_validate" / "tools" / "fi_logcheck.py"
+CHECK = PKG / "weaveprof/pipeline/validate" / "tools" / "fi_check.py"
+LOGCHECK = PKG / "weaveprof/pipeline/validate" / "tools" / "fi_logcheck.py"
 AMD_PROFILES = HERE / "cases" / "amd_mi308x_resource_profiles.json"
 
 

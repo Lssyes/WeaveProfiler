@@ -23,12 +23,12 @@ def _load(rel: str, name: str):
     return mod
 
 
-PLACER = _load("1_scan/llm_probe_placer.py", "test_wp_placer")
-REUSE = _load("2_instrument/incremental_reuse.py", "test_wp_reuse")
-ENGINE = _load("2_instrument/rule_engine.py", "test_wp_engine")
-VERIFIER = _load("4_validate/closed_loop_verifier.py", "test_wp_verifier")
-DIRECT_AGENT = _load("1_scan/direct_probe_agent.py", "test_wp_direct_agent")
-VERIFY_PY = _load("verify.py", "test_wp_verify_py")
+PLACER = _load("weaveprof/pipeline/scan/llm_probe_placer.py", "test_wp_placer")
+REUSE = _load("weaveprof/pipeline/instrument/incremental_reuse.py", "test_wp_reuse")
+ENGINE = _load("weaveprof/pipeline/instrument/rule_engine.py", "test_wp_engine")
+VERIFIER = _load("weaveprof/pipeline/validate/closed_loop_verifier.py", "test_wp_verifier")
+DIRECT_AGENT = _load("weaveprof/pipeline/scan/direct_probe_agent.py", "test_wp_direct_agent")
+VERIFY_PY = _load("weaveprof/pipeline/core/verify.py", "test_wp_verify_py")
 
 
 SAMPLE_CUDA_SUBFUNC = """#include <cuda_runtime.h>
@@ -419,7 +419,7 @@ class ProbePipelineTests(unittest.TestCase):
         self.assertIsNone(DIRECT_AGENT.incremental_inherit_probes(cpp_curr, cpp_prev, conflict_inst))
 
         # CPython 3.14 + NumPy 2.x `~nonzero` temporary elision guard in fi_cute.py (#85 regression)
-        fi_cute_src = (ROOT / "2_instrument" / "recorders" / "cutedsl" / "fi_cute.py").read_text(encoding="utf-8")
+        fi_cute_src = (ROOT / "recorders" / "cutedsl" / "fi_cute.py").read_text(encoding="utf-8")
         self.assertNotIn("np.any(~nonzero", fi_cute_src)
         self.assertNotIn("np.argmax(~nonzero", fi_cute_src)
         self.assertIn("is_zero = tag == np.uint32(0)", fi_cute_src)
