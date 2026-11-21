@@ -35,6 +35,7 @@ import shutil
 import sqlite3
 import statistics
 import subprocess
+import tempfile
 import time
 import uuid
 from collections import defaultdict
@@ -52,6 +53,7 @@ from .harness import (
     verify_semantic_body_and_stubs,
     verify_stage_granularity,
     verify_sw_hw_coverage,
+    verify_warp_completeness,
 )
 from .workspace import ROOT, digest, read_json, write_json
 
@@ -846,13 +848,22 @@ def _gate_events(summary: Mapping[str, Any], trace: Mapping[str, Any], rm: Mappi
         if rm.get("allow_single_stage_collapse") is True
         else verify_stage_granularity(trace)
     )
+    warp_gate = (
+        {"ok": True, "code": None, "skipped": True}
+        if rm.get("allow_partial_warps") is True
+        else verify_warp_completeness(summary, trace, expected_warps=rm.get("expected_warps_per_cta"))
+    )
     overflow = int(summary.get("overflow") or 0)
     pairing = int(sum(int(v) for v in (summary.get("errors") or {}).values()))
     spans = int(summary.get("spans") or 0)
     return {
-        "ok": bool(stub["ok"]) and bool(gran_gate["ok"]) and overflow == 0 and pairing == 0 and spans > 0,
+        "ok": (
+            bool(stub["ok"]) and bool(gran_gate["ok"]) and bool(warp_gate["ok"])
+            and overflow == 0 and pairing == 0 and spans > 0
+        ),
         "stub_gate": stub,
         "granularity_gate": gran_gate,
+        "warp_gate": warp_gate,
         "overflow": overflow,
         "pairing_errors": pairing,
         "spans": spans,
@@ -885,6 +896,11 @@ def _cache_base() -> Path:
     configured = os.environ.get("WEAVEPROF_CACHE")
     if configured:
         return Path(configured).resolve()
+    # Keep ephemeral shadow copies / L0 build caches on local /tmp (high-inode FS) rather than
+    # network-mounted $HOME (e.g. JuiceFS with tight inode quotas).
+    if os.name != "nt":
+        uid = os.getuid() if hasattr(os, "getuid") else 0
+        return (Path(tempfile.gettempdir()) / f"weaveprof-cache-{uid}").resolve()
     return (Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "weaveprof").resolve()
 
 
@@ -1729,6 +1745,12 @@ def run_megakernel_audit(
     gran_gate = g_events.get("granularity_gate") or {"ok": True}
     if not gran_gate.get("ok", True):
         blockers.append(f"SINGLE_STAGE_LOOP_COLLAPSE: {gran_gate.get('dominant_stage')} ({gran_gate.get('dominant_share_pct')}%)")
+    warp_gate = g_events.get("warp_gate") or {"ok": True}
+    if not warp_gate.get("ok", True):
+        blockers.append(
+            f"WARP_COVERAGE_INCOMPLETE: {len(warp_gate.get('observed_warps') or [])}/"
+            f"{warp_gate.get('expected_warps')} warps"
+        )
     gate_view = {
         "compiler_spill": {"ok": checks["assembly"], "codes": [v.get("code") for v in g_compiler.get("violations") or []][:4],
                            "reg_blind_spot": bool(g_compiler.get("register_count_blind_spot"))},
@@ -1737,6 +1759,8 @@ def run_megakernel_audit(
                  "stubs": [s["stage"] for s in g_events["stub_gate"].get("stubs") or []][:4]},
         "granularity": {"ok": bool(gran_gate.get("ok", True)),
                         **({"code": gran_gate.get("code")} if gran_gate.get("code") else {})},
+        "warps": {"ok": bool(warp_gate.get("ok", True)),
+                  **({"code": warp_gate.get("code")} if warp_gate.get("code") else {})},
         "overflow": g_events.get("overflow"),
         "pairing_errors": g_events.get("pairing_errors"),
         "overhead": {"ok": checks["overhead"], "ratio": _r(g_overhead.get("overhead_ratio"), 5),

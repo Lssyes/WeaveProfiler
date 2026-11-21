@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,8 +73,12 @@ class ShadowWorkspace:
     def __init__(self, source, location=None):
         self.source = Path(source).resolve(strict=True)
         self.project = project_root(self.source)
-        base = Path(location or os.environ.get("WEAVEPROF_WORKDIR") or
-                    Path.home() / ".cache" / "weaveprof" / "runs").resolve()
+        default_base = (
+            Path(tempfile.gettempdir()) / f"weaveprof-runs-{os.getuid() if hasattr(os, 'getuid') else 0}"
+            if os.name != "nt"
+            else Path.home() / ".cache" / "weaveprof" / "runs"
+        )
+        base = Path(location or os.environ.get("WEAVEPROF_WORKDIR") or default_base).resolve()
         if base.is_relative_to(self.project):
             raise ValueError(f"Shadow workspace must be outside {self.project}")
         self.path = base / uuid.uuid4().hex

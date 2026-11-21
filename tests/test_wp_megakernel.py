@@ -611,6 +611,34 @@ class MegakernelAuditTest(_TmpCase):
         self.assertEqual(rep["fidelity_gates"]["granularity"]["code"], "SINGLE_STAGE_LOOP_COLLAPSE")
         self.assertTrue(any("SINGLE_STAGE_LOOP_COLLAPSE" in b for b in rep["structural_blockers"]), rep)
 
+    def test_partial_warp_filtering_fails_gate(self):
+        # Recording only 3 representative warps (0, 4, 8) out of wpc=12 MUST fail WARP_COVERAGE_INCOMPLETE.
+        wpc = 12
+        n_ctas = 4
+        slots = {}
+        for cta in range(n_ctas):
+            for w in (0, 4, 8):
+                s = cta * wpc + w
+                slots[s] = [
+                    (BASE_NS, OPEN | (0 if w == 0 else 1), cta),
+                    (BASE_NS + 1_000, E_LOAD, cta), (BASE_NS + 15_000, END | E_LOAD, cta),
+                    (BASE_NS + 15_000, E_MMA, cta), (BASE_NS + 60_000, END | E_MMA, cta),
+                    (BASE_NS + 61_000, CLOSE, 0),
+                ]
+        dump = self.tmp / "partial_warps.wp02.bin"
+        dump.write_bytes(WPD.build_dump_bytes(slots, n_slots=n_ctas * wpc, cap=16, wpc=wpc,
+                                              meta={"arch": "sm_90", "gran": 0, "kernel": "partial_warps"}))
+        ws = self._workspace()
+        rep = mk.run_megakernel_audit(
+            ws, entry_source="sparse_mla.cu", dump_path=dump, names=NAMES,
+            runtime_metrics=runtime_metrics(), card="h20", limit=0.10, out_dir=self.tmp / "out-partial-warps",
+            render_overview_png=False,
+        )
+        self.assertEqual(rep["status"], "FAIL", rep)
+        self.assertFalse(rep["fidelity_gates"]["warps"]["ok"])
+        self.assertEqual(rep["fidelity_gates"]["warps"]["code"], "WARP_COVERAGE_INCOMPLETE")
+        self.assertTrue(any("WARP_COVERAGE_INCOMPLETE" in b for b in rep["structural_blockers"]), rep)
+
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})
         self.assertEqual(rep["status"], "FAIL", rep)

@@ -1624,6 +1624,58 @@ def verify_stage_granularity(
     }
 
 
+def verify_warp_completeness(
+    summary: Mapping[str, Any],
+    trace: Mapping[str, Any],
+    *,
+    expected_warps: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Fail closed when warp-granularity profiling silently drops warps inside a CTA.
+
+    When `gran == 0` and `warps_per_cta > 1` (e.g. 12-warp Hopper FA3 / FlashMLA or
+    4/8-warp Triton kernels), EVERY warp `0..wpc-1` must be recorded (`WP_KERNEL_SCOPE`,
+    never filtering to one representative warp per warpgroup like `warp % 4 == 0`).
+    """
+    gran = int(summary.get("gran") or 0)
+    wpc = int(expected_warps or summary.get("wpc") or 1)
+    warps_seen: set = set()
+    for ev in (trace.get("traceEvents") or []):
+        ph = ev.get("ph")
+        if ph == "X" and ev.get("cat") not in ("nsys_kernel", "info"):
+            args = ev.get("args") or {}
+            if "warp" in args:
+                warps_seen.add(int(args["warp"]))
+        elif ph == "M" and ev.get("name") == "thread_name":
+            tname = str((ev.get("args") or {}).get("name") or "")
+            m = re.search(r"\b(?:w|warp\s*)(\d+)\b", tname, re.I)
+            if m:
+                warps_seen.add(int(m.group(1)))
+    if gran == 0 and wpc > 1:
+        expected = set(range(wpc))
+        missing = sorted(expected - warps_seen)
+        ok = len(missing) == 0
+        return {
+            "ok": ok,
+            "code": None if ok else "WARP_COVERAGE_INCOMPLETE",
+            "expected_warps": wpc,
+            "observed_warps": sorted(warps_seen),
+            "missing_warps": missing,
+            "message": (
+                "" if ok else
+                f"Only {len(warps_seen)}/{wpc} warps/CTA recorded (observed={sorted(warps_seen)}, "
+                f"missing={missing}); record ALL warps 0..{wpc - 1} (do not filter to 1 warp per warpgroup)."
+            ),
+        }
+    return {
+        "ok": True,
+        "code": None,
+        "expected_warps": wpc,
+        "observed_warps": sorted(warps_seen),
+        "missing_warps": [],
+        "message": "",
+    }
+
+
 def verify_sw_hw_coverage(
     sw_span_us: float,
     hw_kernel_us: float,

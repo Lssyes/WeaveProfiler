@@ -129,10 +129,28 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
     sw_spans: List[Dict[str, Any]] = []
     sm_set: set[int] = set()
     stages_seen: Dict[str, float] = defaultdict(float)
+    meta_warps_by_sm: Dict[int, Dict[int, str]] = defaultdict(dict)
 
+    import re as _re
     for ev in events:
         ph = ev.get("ph")
-        if ph == "C":
+        if ph == "M" and ev.get("name") == "thread_name":
+            pid = ev.get("pid")
+            tname = str((ev.get("args") or {}).get("name") or "")
+            if isinstance(pid, int) and pid != 1:
+                sm = pid - 100 if pid >= 100 else pid
+                m = _re.search(r"\bw(\d+)\b", tname)
+                if m:
+                    w_id = int(m.group(1))
+                    role_part = tname.split("·")[-1].strip() if "·" in tname else (
+                        tname.split("/")[-1].strip() if "/" in tname else f"w{w_id:02d}"
+                    )
+                    # Strip leading `w00` prefix if role_part is just `w00` or `cta0 w00`
+                    if _re.fullmatch(r"w\d+", role_part):
+                        role_part = f"w{w_id:02d}"
+                    meta_warps_by_sm[sm].setdefault(w_id, role_part)
+                    sm_set.add(sm)
+        elif ph == "C":
             cname = str(ev.get("name") or "")
             key = _classify_hw_metric(cname)
             if key is None:
@@ -195,6 +213,7 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         "nsys_kernel": nsys_kernel,
         "sw_spans": sw_spans,
         "sms": sorted(sm_set),
+        "meta_warps_by_sm": {k: dict(v) for k, v in meta_warps_by_sm.items()},
         "stages_seen": dict(stages_seen),
         "t_max": t_max,
         "k_dur": k_dur,
@@ -244,19 +263,31 @@ def render_swhw_overview_png(
     nsys_meta = (parsed["other"].get("nsys_hw") or {})
 
     # Pick representative SM for Panel (C): focus_sm if present, else SM 0 if present, else first SM with most roles
-    sm_roles: Dict[int, set[Tuple[int, str]]] = defaultdict(set)
+    sm_warp_role: Dict[int, Dict[int, str]] = defaultdict(dict)
+    for sm_id, wmap in (parsed.get("meta_warps_by_sm") or {}).items():
+        for w_id, r_lbl in wmap.items():
+            sm_warp_role[int(sm_id)][int(w_id)] = str(r_lbl)
     for sp in sw_spans:
-        sm_roles[sp["sm"]].add((sp["warp"], sp["role"]))
+        sm_warp_role[sp["sm"]][sp["warp"]] = sp["role"]
+    # Ensure every warp 0..wpc-1 exists on observed SMs if wpc > 1 (even if idle/unspanned)
+    wpc_meta = int((parsed["other"].get("meta") or {}).get("wpc") or (parsed["other"].get("summary") or {}).get("wpc") or 0)
+    if wpc_meta > 1:
+        for sm_id in list(sm_warp_role.keys()):
+            for w_id in range(wpc_meta):
+                sm_warp_role[sm_id].setdefault(w_id, "idle")
+    sm_roles: Dict[int, List[Tuple[int, str]]] = {
+        sm_id: sorted(wmap.items()) for sm_id, wmap in sm_warp_role.items()
+    }
     if focus_sm is not None and focus_sm in sm_roles:
         rep_sm = int(focus_sm)
     elif 0 in sm_roles:
         rep_sm = 0
     elif sms:
-        rep_sm = max(sms, key=lambda s: (len(sm_roles[s]), -s))
+        rep_sm = max(sms, key=lambda s: (len(sm_roles.get(s, ())), -s))
     else:
         rep_sm = 0
 
-    rep_warps = sorted(sm_roles.get(rep_sm, ()))
+    rep_warps = list(sm_roles.get(rep_sm, ()))
     rep_spans_raw = [sp for sp in sw_spans if sp["sm"] == rep_sm]
     use_cta_slots = False
     rep_cta_slot: Dict[int, int] = {}
@@ -270,7 +301,7 @@ def render_swhw_overview_png(
     n_rep_rows = rep_slot_count if use_cta_slots else max(1, len(rep_warps))
 
     has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw"))
-    panel_c_h = max(2.0, min(4.2, 0.42 * n_rep_rows + 0.95))
+    panel_c_h = max(2.1, min(4.8, (0.25 if n_rep_rows >= 8 else 0.40) * n_rep_rows + 0.95))
     panel_b_h = max(3.0, min(4.3, 0.036 * n_sms + 1.5))
     panel_a_h = 2.15 if has_hw else 0.0
     fig_h = 2.15 + panel_a_h + panel_b_h + panel_c_h
@@ -407,7 +438,7 @@ def render_swhw_overview_png(
     ax_sm.set_facecolor("#FFFFFF")
     img_w = 2400
     sm_to_row = {sm: idx for idx, sm in enumerate(sms)}
-    all_warps = sorted({sp["warp"] for sp in sw_spans})
+    all_warps = sorted({w for wmap in sm_warp_role.values() for w in wmap} | {sp["warp"] for sp in sw_spans})
     warp_to_sub = {w: idx for idx, w in enumerate(all_warps)}
     sm_cta_slots: Dict[Tuple[int, int], int] = {}
     if len(all_warps) == 1 and use_cta_slots:
@@ -455,7 +486,7 @@ def render_swhw_overview_png(
     # ---- Panel (C): Representative SM warp-role (or concurrent resident CTA) breakdown ----
     ax_wp.set_facecolor("#FFFFFF")
     ax_wp.grid(True, axis="x", linestyle="-", linewidth=0.4, color="#ECEFF1", zorder=0)
-    warp_to_y = {wr: idx for idx, wr in enumerate(rep_warps)}
+    warp_to_y = {w: idx for idx, (w, _r) in enumerate(rep_warps)}
     verts_by_color: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
     bar_h = 0.72
     rep_spans = [sp for sp in sorted_spans if sp["sm"] == rep_sm]
@@ -463,7 +494,7 @@ def render_swhw_overview_png(
         if use_cta_slots:
             y = rep_cta_slot.get(sp["cta"])
         else:
-            y = warp_to_y.get((sp["warp"], sp["role"]))
+            y = warp_to_y.get(sp["warp"])
         if y is None:
             continue
         x0, x1 = sp["ts"], sp["end"]
@@ -478,19 +509,20 @@ def render_swhw_overview_png(
     ax_wp.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=5)
     ax_wp.set_ylim(n_rep_rows - 0.45, -0.55)
     ax_wp.set_yticks(range(n_rep_rows))
+    yt_fs = 7.8 if n_rep_rows >= 12 else 8.4
     if use_cta_slots:
         role_lbl = rep_warps[0][1] if rep_warps else "cta"
-        ax_wp.set_yticklabels([f"Slot {i} · {role_lbl}" for i in range(n_rep_rows)], fontsize=8.4)
+        ax_wp.set_yticklabels([f"Slot {i} · {role_lbl}" for i in range(n_rep_rows)], fontsize=yt_fs)
         ax_wp.set_ylabel(f"SM {rep_sm} CTA slots", fontsize=9.5, color="#263238")
         ax_wp.set_title(
             f"(C) SM {rep_sm} — {n_rep_rows} concurrent CTA slots ({len(rep_cta_slot)} CTAs total on SM {rep_sm})",
             fontsize=10.5, fontweight="bold", color="#111111", pad=6,
         )
     else:
-        ax_wp.set_yticklabels([f"W{w:02d} · {r}" for w, r in rep_warps] if rep_warps else ["W00"], fontsize=8.4)
-        ax_wp.set_ylabel(f"SM {rep_sm} warp roles", fontsize=9.5, color="#263238")
+        ax_wp.set_yticklabels([f"W{w:02d} · {r}" for w, r in rep_warps] if rep_warps else ["W00"], fontsize=yt_fs)
+        ax_wp.set_ylabel(f"SM {rep_sm} warp", fontsize=9.5, color="#263238")
         role_names = ", ".join(dict.fromkeys(r for _, r in rep_warps))
-        ax_wp.set_title(f"(C) SM {rep_sm} — recorded warp roles ({role_names}) showing per-tile execution",
+        ax_wp.set_title(f"(C) SM {rep_sm} — all {len(rep_warps)} warps ({role_names})",
                         fontsize=10.5, fontweight="bold", color="#111111", pad=6)
     ax_wp.set_xlim(*x_lim)
     ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=9.5, color="#263238")
