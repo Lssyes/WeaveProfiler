@@ -1077,7 +1077,7 @@ def _offline_probe_spec(text, lang):
         statements = [n for n in ast.walk(fn) if isinstance(n, (ast.Assign, ast.AnnAssign, ast.Expr, ast.AugAssign))]
         bounds = [(n.lineno, n.end_lineno) for n in sorted(statements, key=lambda n: n.lineno)]
     else:
-        match = re.search(r"\b__global__\b[^;{]+?\b(\w+)\s*\([^;{}]*\)\s*\{", text, re.S)
+        match = re.search(r"\b(?:__global__|CUTLASS_GLOBAL|CUTE_GLOBAL)\b[^;{]+?\b(\w+)\s*\([^;{}]*\)\s*\{", text, re.S)
         if not match:
             raise ValueError("No __global__ GPU kernel in this C++ source")
         name = match.group(1)
@@ -1109,7 +1109,8 @@ def _offline_probe_spec(text, lang):
 
 
 def identify_source(source_path, *, model="qwen4-max", card="auto", offline_heuristic=False,
-                    previous=None, feedback=None, llm_caller=None, prefer_llm_on_feedback=False):
+                    previous=None, feedback=None, llm_caller=None, prefer_llm_on_feedback=False,
+                    reasoning_effort=None):
     """Identify or revise a placement. Cache policy is owned by the public API."""
     source_path = Path(source_path).expanduser().resolve()
     raw = source_path.read_bytes()
@@ -1131,8 +1132,10 @@ def identify_source(source_path, *, model="qwen4-max", card="auto", offline_heur
             raise ValueError("No deterministic loop refinement for this feedback")
         spec = _offline_probe_spec(text, language)
     else:
+        eff = reasoning_effort or ("max" if feedback is not None else "low")
         data = place_probes(source_path, card=route["card"], language=language, model=model,
-                            prev_spec=previous, diagnostics=feedback, llm_caller=llm_caller)
+                            reasoning_effort=eff, prev_spec=previous, diagnostics=feedback,
+                            llm_caller=llm_caller)
         spec = compact_probe_spec(data["probe_spec"])
         if not spec.get("kernel_name"):
             # Infer the containing decorated function from actual endpoints;

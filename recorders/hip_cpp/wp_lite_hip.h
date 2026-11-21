@@ -68,10 +68,10 @@ static_assert(sizeof(WpRec) == 16, "WeaveProfiler records must be 16 bytes");
 
 #if FI_LEVEL >= 1
 __device__ __forceinline__ void wp_sync_cursor_out_ctx(const FiCtx& c) {
-    if (c.p != nullptr && fi_g.cur != nullptr) fi_g.cur[c.slot] = c.n;
+    if (c.p != nullptr && fi_g.cur != nullptr && c.slot < fi_g.n_slots) fi_g.cur[c.slot] = c.n;
 }
 __device__ __forceinline__ void wp_sync_cursor_in_ctx(FiCtx& c) {
-    if (c.p != nullptr && fi_g.cur != nullptr) c.n = fi_g.cur[c.slot];
+    if (c.p != nullptr && fi_g.cur != nullptr && c.slot < fi_g.n_slots) c.n = fi_g.cur[c.slot];
 }
 #define WP_SYNC_CURSOR_OUT() do { wp_sync_cursor_out_ctx(fi_ctx_); } while (0)
 #define WP_SYNC_CURSOR_IN() do { wp_sync_cursor_in_ctx(fi_ctx_); } while (0)
@@ -100,3 +100,29 @@ static inline hipError_t wp_host_init(WpBuf* buf, uint32_t ctas, uint32_t warps_
 static inline int wp_host_dump(const WpBuf* buf, const char* path, const char* meta = "{}") {
     return fi_dump(buf, path, meta);
 }
+
+// Optional zero-boilerplate C ABI host exports (`-DWP_DEFINE_HOST_API` or `-DFI_DEFINE_HOST_API`)
+// for multi-file PyTorch / ctypes `.so` HIP megakernels (zero __global__ / host call-stack changes).
+#if defined(WP_DEFINE_HOST_API) || defined(FI_DEFINE_HOST_API)
+static WpBuf g_wp_hip_host_buf_{};
+extern "C" int wp_init(uint32_t n_ctas, uint32_t warps_per_cta, uint32_t cap) {
+    if (g_wp_hip_host_buf_.rec != nullptr) fi_free(&g_wp_hip_host_buf_);
+    hipError_t e = fi_alloc(&g_wp_hip_host_buf_, n_ctas, warps_per_cta, cap);
+    if (e != hipSuccess) return (int)e;
+    return (int)fi_attach(&g_wp_hip_host_buf_);
+}
+extern "C" int wp_reset(uint64_t stream_ptr) {
+    if (g_wp_hip_host_buf_.rec == nullptr) return -1;
+    return (int)fi_reset(&g_wp_hip_host_buf_, reinterpret_cast<hipStream_t>(stream_ptr));
+}
+extern "C" int wp_dump(const char* path, const char* meta_json) {
+    if (g_wp_hip_host_buf_.rec == nullptr) return -1;
+    return fi_dump(&g_wp_hip_host_buf_, path, meta_json);
+}
+extern "C" void wp_free() {
+    if (g_wp_hip_host_buf_.rec != nullptr) {
+        (void)fi_attach(nullptr);
+        fi_free(&g_wp_hip_host_buf_);
+    }
+}
+#endif

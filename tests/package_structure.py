@@ -22,10 +22,10 @@ HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 TEXT_EXT = {".py", ".md", ".json", ".cu", ".cuh", ".h", ".hpp", ".cpp", ".cc", ".sh", ".txt", ".jsonl"}
 ALLOWED_TOP = {
-    "README.md", "SKILL.md", "plugin.json", "pyproject.toml", "run.py",
+    "README.md", "README_EN.md", "SKILL.md", "plugin.json", "pyproject.toml", "run.py",
     "recorders", "weaveprof", "configs", "docs", "examples", "tests",
 }
-REQUIRED_TOP = ALLOWED_TOP - {"README.md", "plugin.json"}
+REQUIRED_TOP = ALLOWED_TOP - {"README.md", "README_EN.md", "plugin.json"}
 REQUIRED_FILES = [
     "weaveprof/__init__.py", "weaveprof/__main__.py", "weaveprof/replay.py",
     "run.py", "weaveprof/pipeline/core/registry.py", "weaveprof/pipeline/core/semantics.py", "weaveprof/pipeline/core/fast_path.py", "weaveprof/pipeline/core/run_measurement.py",

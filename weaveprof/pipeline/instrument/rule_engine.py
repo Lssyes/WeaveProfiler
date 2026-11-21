@@ -330,7 +330,8 @@ def validate_probe_spec_static(
 # ---------------------------------------------------------------------------
 
 _CPP_FUNC_RE = re.compile(
-    r"((?:__global__|__device__)(?:\s+__forceinline__|\s+inline|\s+static|\s+__launch_bounds__\s*\([^)]*\))*)\s+"
+    r"((?:__global__|CUTLASS_GLOBAL|CUTE_GLOBAL|__device__|CUTLASS_DEVICE|CUTE_DEVICE|CUTLASS_HOST_DEVICE|CUTE_HOST_DEVICE|DG_DEVICE)"
+    r"(?:\s+__forceinline__|\s+inline|\s+static|\s+__launch_bounds__\s*\([^)]*\)|\s+__cluster_dims__\s*\([^)]*\))*)\s+"
     r"(?:[\w:<>,\s*&]+?)\s+([A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -458,7 +459,7 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
         close_ln = source_text.count("\n", 0, b_close) + 1
         funcs.append({
             "name": fname,
-            "is_global": "__global__" in qual,
+            "is_global": any(tok in qual for tok in ("__global__", "CUTLASS_GLOBAL", "CUTE_GLOBAL")),
             "start_ln": start_ln,
             "open_ln": open_ln,
             "close_ln": close_ln,
