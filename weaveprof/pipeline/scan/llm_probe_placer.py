@@ -729,19 +729,22 @@ def _build_readonly_probe_prompt(
 ) -> List[Dict[str, str]]:
     route = kb_ctx["route"]
     system = (
-        "You are WeaveProfiler's Stage Locator (§3.1). Read the numbered kernel source; never "
+        "You are WeaveProfiler's Stage Locator. Read the numbered kernel source; never "
         "change it. Emit a single JSON object (probe.json) with roles and probes. Each probe "
-        "needs a unique string id ('load', 'mma', 'store', 'dma_issue', 'wait', 'communication'), "
-        "and begin and end objects containing a declared role and a 1-based source line. "
+        "needs a unique string id using a canonical stage name or canonical prefix "
+        "('load', 'load_q', 'load_kv', 'mma', 'compute', 'store', 'epilogue', 'barrier', "
+        "'dma_issue', 'wait', 'communication'), and begin and end objects containing a declared "
+        "role and a 1-based source line. "
         "Optionally include slot, a pipeline buffer-index expression valid at both endpoints. "
         "Roles may use 'warp 4', 'warps 0-3', 'all' or a source predicate. Level 1 supplies "
         "asynchronous load, tile math, store and cross-GPU communication primitive rules for "
         "CUDA C++, HIP C++, Triton and CuTeDSL. Level 2 composes these into CTA warp-role "
         "pipelines. CRITICAL STAGE GRANULARITY RULES:\n"
-        "1) In Round 1, ALWAYS locate fine-grained per-tile 'load', 'mma', and 'store' stages "
-        "inside the main K-tile loop (and epilogue) so the timeline exposes actual tile-by-tile "
-        "load and mma execution — NEVER collapse the entire K-loop into a single coarse 'compute' "
-        "probe in Round 1.\n"
+        "1) In Round 1, ALWAYS locate ALL distinct execution phases across the kernel — including "
+        "prologue shared-memory loads (e.g. 'load_q'), CTA synchronization barriers ('barrier'), "
+        "per-outer-tile 'load' (or 'load_kv') and 'mma'/'compute' stages inside the main tile loop, "
+        "and 'epilogue'/'store' — NEVER collapse the whole kernel or main loop into a single probe "
+        "in Round 1.\n"
         "2) For warp-specialized producer-consumer pipelines (e.g. DMA warps + Math warps with "
         "mbarrier), emit: (a) a cross-warp paired 'load' probe whose begin is on the producer "
         "DMA role right before issuing the tile's async copies (OUTSIDE any inner unrolled "
@@ -753,7 +756,13 @@ def _build_readonly_probe_prompt(
         "block; and (d) a 'store' probe on the epilogue.\n"
         "3) Respect lexical scope and trip counts: begin and end of any probe MUST execute the "
         "exact same number of times per tile. Hoist/coarsen ONLY when feedback.json reports "
-        "overhead > limit or assembly failure."
+        "overhead > limit or assembly failure.\n"
+        "4) Avoid inner micro-loops and trivial stub spans: NEVER place probes inside a short "
+        "nested inner sub-loop (such as an inner head/fragment/warp-reduction loop nested inside "
+        "an outer tile loop) — instead bracket the ENTIRE inner sub-loop at the outer tile-loop "
+        "level as one 'mma'/'compute' probe. NEVER wrap a single trivial scalar assignment or "
+        "single-line store (e.g. `if (lane == 0) out[...] = sum;`, < 128 ns) as a standalone "
+        "probe — include it inside the enclosing tile compute/epilogue probe."
     )
     example = {"roles": {"dma": "warp 4", "math": "warps 0-3"},
                "probes": [{"id": "load", "begin": {"role": "dma", "line": 42},
@@ -762,8 +771,8 @@ def _build_readonly_probe_prompt(
         "Example of the output schema (choose actual roles and lines from the input): "
         + json.dumps(example),
         f"Target: {route['language']}, {route['card']}, {route['arch']}",
-        "Level 1 ? primitive rules: " + json.dumps(kb_ctx["level_1"], ensure_ascii=False),
-        "Level 2 ? CTA warp-role pipeline templates: " + json.dumps(kb_ctx["level_2"], ensure_ascii=False),
+        "Level 1 - primitive rules: " + json.dumps(kb_ctx["level_1"], ensure_ascii=False),
+        "Level 2 - CTA warp-role pipeline templates: " + json.dumps(kb_ctx["level_2"], ensure_ascii=False),
         "Primitive boundaries: " + json.dumps(kb_ctx["language_patterns"], ensure_ascii=False),
         "Read-only kernel:\n" + format_numbered_source(source_text),
     ]

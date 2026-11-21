@@ -508,11 +508,49 @@ class MegakernelAuditTest(_TmpCase):
         self.assertIsNotNone(seal["artifacts"]["dump"])
         verify = json.loads((out / "verify.json").read_text(encoding="utf-8"))
         self.assertEqual(verify["status"], "PASS")
+        # Verify Rendering Contract R6: nsys hardware utilization pinned at top (pid=1, sort_index=-1000)
+        import gzip as _gzip
+        tr = json.loads(_gzip.decompress((out / "trace.perfetto.json.gz").read_bytes()).decode("utf-8"))
+        tevs = tr["traceEvents"]
+        self.assertEqual(tevs[0]["pid"], 1)
+        self.assertEqual(tevs[0]["name"], "process_name")
+        self.assertEqual(tevs[1]["pid"], 1)
+        self.assertEqual(tevs[1]["name"], "process_sort_index")
+        self.assertEqual(tevs[1]["args"]["sort_index"], -1000)
+        hw_counters = [e for e in tevs if e.get("ph") == "C"]
+        self.assertGreater(len(hw_counters), 50)
+        self.assertTrue(all(e["pid"] == 1 and float(e["ts"]) >= 0.0 for e in hw_counters))
+        hw_kernels = [e for e in tevs if e.get("cat") == "nsys_kernel"]
+        self.assertEqual(len(hw_kernels), 1)
+        self.assertEqual((hw_kernels[0]["pid"], hw_kernels[0]["ts"], hw_kernels[0]["dur"]), (1, 0.0, 374.0))
+        sw_pids = {e["pid"] for e in tevs if isinstance(e.get("pid"), int) and e["pid"] != 1}
+        self.assertTrue(sw_pids and all(p >= 100 for p in sw_pids), sw_pids)
         # Round-to-round diff against the sealed causal report.
         rep2 = self._audit("pass-r2", prev_causal_report=fb)
         self.assertEqual(rep2["status"], "PASS")
         self.assertIsNotNone(rep2["round_diff"])
         self.assertTrue(rep2["causal_opportunities"])
+
+    def test_revise_probe_spec_preserves_dominant_semantic_stage(self):
+        from weaveprof.contract import revise_probe_spec
+        src = (
+            "__global__ void k(float* a, float* b) {\n"
+            "  for (int i = 0; i < 64; ++i) {\n"
+            "    float v = a[i];\n"
+            "    b[i] = v * v;\n"
+            "  }\n"
+            "}\n"
+        )
+        doc = {
+            "roles": {"w": "all"},
+            "probes": [
+                {"id": "load", "begin": {"role": "w", "line": 3}, "end": {"role": "w", "line": 3}},
+                {"id": "mma", "begin": {"role": "w", "line": 2}, "end": {"role": "w", "line": 5}},
+            ],
+        }
+        fb = {"status": "FAIL", "fires": {"load": 64, "mma": 1}, "enclosing_loop": [2, 5]}
+        revised = revise_probe_spec(doc, fb, src)
+        self.assertEqual([p["id"] for p in revised["probes"]], ["mma"])
 
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})

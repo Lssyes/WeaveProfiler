@@ -1051,6 +1051,7 @@ def _run_shadow_workflow(
         "shadow": str(shadow),
         "l0_dir": l0,
         "inst_dir": inst,
+        "l0_cache_dir": l0_cache_dir,
         "applied_inst_files": applied,
         "dump_path": _find(DUMP_CANDIDATES, ("*.wp02.bin", "*.fi02.bin")),
         "runtime_path": _find(("runtime.json",)),
@@ -1103,14 +1104,172 @@ def _count_role_switches(d: Mapping[str, Any]) -> int:
     return n
 
 
+_HW_PID = 1
+_SW_PID_SHIFT = 100
+_HW_METRIC_ORDER = ("sm_active", "warp_issue", "tensor_active", "dram_read", "dram_write")
+
+
 def _hw_counter_events(hw: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    pid = 1 << 21
-    tev: List[Dict[str, Any]] = [{"ph": "M", "pid": pid, "name": "process_name", "args": {"name": "GPU metrics (nsys)"}}]
-    for key, curve in (hw.get("hw_series") or {}).items():
+    """Build topmost Rendering Contract R6 hardware timeline events (pid=1, sort_index=-1000)."""
+    pid = _HW_PID
+    series = hw.get("hw_series") or {}
+    kernel = hw.get("kernel") or {}
+    proc_title = (
+        "00 · GPU Hardware Utilization [0–100%] (nsys)"
+        if series else
+        "00 · GPU Hardware Kernel Window (nsys)"
+    )
+    tev: List[Dict[str, Any]] = [
+        {"ph": "M", "pid": pid, "name": "process_name", "args": {"name": proc_title}},
+        {"ph": "M", "pid": pid, "name": "process_sort_index", "args": {"sort_index": -1000}},
+    ]
+    if kernel and kernel.get("duration_us") is not None:
+        tev.append({"ph": "M", "pid": pid, "tid": 1, "name": "thread_name", "args": {"name": "nsys Kernel Window"}})
+        tev.append({"ph": "M", "pid": pid, "tid": 1, "name": "thread_sort_index", "args": {"sort_index": 1}})
+        k_args = {k: v for k, v in kernel.items()}
+        if hw.get("sample_freq_hz") is not None:
+            k_args["sample_freq_hz"] = hw["sample_freq_hz"]
+        if hw.get("in_window_samples") is not None:
+            k_args["in_window_samples"] = hw["in_window_samples"]
+        tev.append({
+            "ph": "X", "pid": pid, "tid": 1, "ts": 0.0, "dur": float(kernel["duration_us"]),
+            "name": str(kernel.get("name") or "kernel")[:120], "cat": "nsys_kernel", "args": k_args,
+        })
+    ordered_keys = [k for k in _HW_METRIC_ORDER if k in series] + [k for k in series if k not in _HW_METRIC_ORDER]
+    for key in ordered_keys:
+        curve = series[key]
         label = str(curve.get("metric_name") or key)
         for t, v in zip(curve.get("t_us") or [], curve.get("val") or []):
-            tev.append({"ph": "C", "pid": pid, "tid": 0, "name": label, "ts": t, "args": {"pct": v}})
+            tf = float(t)
+            if tf < 0.0:
+                continue  # Perfetto rejects negative timestamps
+            tev.append({"ph": "C", "pid": pid, "ts": tf, "name": label, "args": {"pct": float(v)}})
     return tev
+
+
+def _merge_hw_trace(trace: Mapping[str, Any], hw: Mapping[str, Any]) -> Dict[str, Any]:
+    """Shift software PIDs by +100 and prepend topmost nsys hardware timeline events."""
+    trace_doc = dict(trace)
+    if not (hw and (hw.get("hw_series") or hw.get("kernel"))):
+        return trace_doc
+    sw_events: List[Dict[str, Any]] = []
+    for raw_ev in (trace.get("traceEvents") or []):
+        ev = dict(raw_ev)
+        if isinstance(ev.get("pid"), int):
+            ev["pid"] = int(ev["pid"]) + _SW_PID_SHIFT
+            if ev.get("ph") == "M" and ev.get("name") == "process_sort_index":
+                args_m = dict(ev.get("args") or {})
+                if isinstance(args_m.get("sort_index"), (int, float)):
+                    args_m["sort_index"] = int(args_m["sort_index"]) + _SW_PID_SHIFT
+                ev["args"] = args_m
+        sw_events.append(ev)
+    trace_doc["traceEvents"] = _hw_counter_events(hw) + sw_events
+    other = dict(trace_doc.get("otherData") or {})
+    other["nsys_hw"] = {k: v for k, v in hw.items() if k != "hw_series"}
+    trace_doc["otherData"] = other
+    return trace_doc
+
+
+def _capture_nsys_sqlite(
+    *,
+    l0: Path,
+    inst: Path,
+    out: Path,
+    l0_cache_dir: Optional[Path],
+    cmd: Sequence[str] | str,
+    gpu_id: str,
+    nsys_gpu_device: Optional[str],
+    nsys_freq_hz: int,
+    nsys_capture_range: str,
+    policy: HarnessPolicy,
+    timeout_s: float,
+) -> Dict[str, Any]:
+    """Run nsys profile + export to SQLite in a clean post-ABBA capture pass."""
+    nsys_bin = shutil.which("nsys") or ("/usr/local/bin/nsys" if Path("/usr/local/bin/nsys").is_file() else None)
+    if not nsys_bin:
+        raise RuntimeError("nsys binary not found on PATH or /usr/local/bin/nsys")
+    nsys_out = out / "nsys_run"
+    nsys_out.mkdir(parents=True, exist_ok=True)
+    rep_base = out / "nsys_cap"
+    sqlite_path = out / "nsys_cap.sqlite"
+    dev = nsys_gpu_device
+    if not dev:
+        if gpu_id not in ("", "auto"):
+            dev = str(gpu_id)
+        else:
+            cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+            dev = cvd if (cvd and "," not in cvd) else "cuda-visible"
+    env_nsys = _shadow_env(l0, inst, nsys_out, l0_cache_dir)
+    env_nsys["WEAVEPROF_NSYS_CAPTURE"] = "1"
+    subs = {"l0": str(l0), "inst": str(inst), "out": str(nsys_out), "tree": str(inst)}
+    child_argv = _argv(cmd, subs)
+    prof_argv = [
+        nsys_bin, "profile", "--force-overwrite=true", "--stats=false", "--trace=cuda",
+    ]
+    if nsys_capture_range and nsys_capture_range.lower() != "none":
+        prof_argv += [f"--capture-range={nsys_capture_range}", "--capture-range-end=stop"]
+    prof_argv += [
+        f"--gpu-metrics-devices={dev}",
+        f"--gpu-metrics-frequency={int(nsys_freq_hz)}",
+        "-o", str(rep_base),
+        *child_argv,
+    ]
+
+    def _run_prof(argv_run: List[str], env_run: Dict[str, str], log_path: Path) -> int:
+        with open(log_path, "wb") as log:
+            try:
+                proc = subprocess.run(argv_run, cwd=str(inst), env=env_run, stdout=log, stderr=subprocess.STDOUT,
+                                      timeout=timeout_s)
+                return proc.returncode
+            except subprocess.TimeoutExpired:
+                return -9
+
+    used_sudo = False
+    log_path = out / "nsys_profile.log"
+    with gpu_critical_region(gpu_id, timeout_s=policy.region_lock_timeout_s, label="megakernel_nsys"):
+        rc = _run_prof(prof_argv, env_nsys, log_path)
+        rep_file = Path(str(rep_base) + ".nsys-rep")
+        log_txt = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        need_sudo = (rc != 0 or not rep_file.is_file()
+                     or "ERR_NVGPUCTRPERM" in log_txt or "Insufficient Privilege" in log_txt)
+        if need_sudo and os.name == "posix" and shutil.which("sudo"):
+            chk = subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if chk.returncode == 0:
+                pass_keys = (
+                    "CUDA_VISIBLE_DEVICES", "PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "CPATH",
+                    "WEAVEPROF_ROOT", "WEAVEPROF_L0_DIR", "WEAVEPROF_INST_DIR", "WEAVEPROF_OUT_DIR",
+                    "WEAVEPROF_L0_CACHE_DIR", "WEAVEPROF_NSYS_CAPTURE", "PYTHONDONTWRITEBYTECODE",
+                )
+                env_pairs = [f"{k}={env_nsys[k]}" for k in pass_keys if k in env_nsys]
+                sudo_argv = ["sudo", "-n", "env", *env_pairs, *prof_argv]
+                rc = _run_prof(sudo_argv, env_nsys, log_path)
+                used_sudo = True
+                subprocess.run(["sudo", "-n", "chmod", "-R", "a+rX", str(out)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rep_file = Path(str(rep_base) + ".nsys-rep")
+    if rc != 0 or not rep_file.is_file():
+        raise RuntimeError(f"nsys profile exited {rc} (see {log_path})")
+    exp_log = out / "nsys_export.log"
+    with open(exp_log, "wb") as log:
+        exp = subprocess.run(
+            [nsys_bin, "export", "--type=sqlite", "--force-overwrite=true", "--output", str(sqlite_path), str(rep_file)],
+            cwd=str(out), stdout=log, stderr=subprocess.STDOUT, timeout=timeout_s,
+        )
+    if exp.returncode != 0 or not sqlite_path.is_file():
+        raise RuntimeError(f"nsys export exited {exp.returncode} (see {exp_log})")
+    same_run_dump: Optional[Path] = None
+    for cand in DUMP_CANDIDATES:
+        if (nsys_out / cand).is_file():
+            same_run_dump = nsys_out / cand
+            break
+    return {
+        "sqlite_path": sqlite_path,
+        "rep_path": rep_file,
+        "same_run_dump": same_run_dump,
+        "gpu_device": dev,
+        "freq_hz": int(nsys_freq_hz),
+        "used_sudo": used_sudo,
+    }
 
 
 def _compact_opportunities(causal: Mapping[str, Any], n: int = 3) -> List[Dict[str, Any]]:
@@ -1174,6 +1333,11 @@ def run_megakernel_audit(
     names: Mapping[str, Any] | str | Path | None = None,
     runtime_metrics: Mapping[str, Any] | str | Path | None = None,
     nsys_sqlite: str | Path | None = None,
+    capture_nsys: bool = False,
+    nsys_cmd: Sequence[str] | str | None = None,
+    nsys_freq_hz: int = 200000,
+    nsys_gpu_device: str | None = None,
+    nsys_capture_range: str = "cudaProfilerApi",
     card: str = "auto",
     arch: str | None = None,
     total_sms: int | None = None,
@@ -1316,6 +1480,52 @@ def run_megakernel_audit(
         blockers.append(f"DECODE_FAILED: {type(exc).__name__}: {exc}"[:200])
         hard_fail = True
 
+    # Fidelity gates (evaluated on clean non-nsys ABBA run first).
+    g_compiler = _gate_compiler(rm)
+    g_output = _gate_output(rm, rm_base)
+    g_events = _gate_events(summary, trace, rm) if summary else {
+        "ok": False, "stub_gate": {"ok": False, "stubs": [], "valid_stages": [], "stub_count": 0},
+        "overflow": None, "pairing_errors": None, "spans": 0, "decoder_errors": {}}
+    g_overhead = _gate_overhead(guard, rm, float(limit))
+    checks = {"assembly": bool(g_compiler["ok"]), "output": bool(g_output["ok"]),
+              "events": bool(g_events["ok"]), "overhead": bool(g_overhead["ok"])}
+
+    # Auto-capture nsys hardware timeline on passing shadow runs (keeps ABBA overhead unbiased
+    # and avoids wasting nsys capture time on failed retry rounds).
+    if (mode == "shadow_build_run" and capture_nsys and nsys_sqlite is None
+            and all(checks.values()) and not hard_fail):
+        try:
+            nsys_cap = _capture_nsys_sqlite(
+                l0=shadow_info["l0_dir"],
+                inst=shadow_info["inst_dir"],
+                out=out,
+                l0_cache_dir=shadow_info.get("l0_cache_dir"),
+                cmd=nsys_cmd or bench_cmd,
+                gpu_id=gpu_id,
+                nsys_gpu_device=nsys_gpu_device,
+                nsys_freq_hz=int(nsys_freq_hz),
+                nsys_capture_range=str(nsys_capture_range or "cudaProfilerApi"),
+                policy=pol,
+                timeout_s=pol.command_timeout_s,
+            )
+            nsys_sqlite = nsys_cap["sqlite_path"]
+            shadow_info["nsys_capture"] = {
+                k: (str(v) if isinstance(v, Path) else v) for k, v in nsys_cap.items()
+            }
+            if nsys_cap.get("same_run_dump") is not None:
+                try:
+                    d_sr = wp.read_dump(str(nsys_cap["same_run_dump"]))
+                    tr_sr, sm_sr = wp.decode(d_sr, names_doc)
+                    if int(sm_sr.get("overflow") or 0) == 0 and not sm_sr.get("errors") and int(sm_sr.get("spans") or 0) > 0:
+                        sm_sr["role_switches"] = _count_role_switches(d_sr)
+                        sm_sr["source_dump_sha256"] = digest(nsys_cap["same_run_dump"])
+                        trace, summary = tr_sr, sm_sr
+                        dump = Path(nsys_cap["same_run_dump"]).resolve()
+                except Exception as exc:
+                    blockers.append(f"NSYS_SAME_RUN_DUMP_FALLBACK: {exc}"[:160])
+        except (RuntimeError, OSError, TimeoutError, ValueError, PolicyViolation) as exc:
+            blockers.append(f"NSYS_CAPTURE_FAILED: {exc}"[:200])
+
     # Optional hardware curves.
     hw: Dict[str, Any] = {}
     hw_path: Optional[Path] = None
@@ -1327,15 +1537,6 @@ def run_megakernel_audit(
         except (OSError, ValueError, sqlite3.Error) as exc:
             blockers.append(f"NSYS_SQLITE_UNREADABLE: {exc}"[:200])
 
-    # Fidelity gates.
-    g_compiler = _gate_compiler(rm)
-    g_output = _gate_output(rm, rm_base)
-    g_events = _gate_events(summary, trace, rm) if summary else {
-        "ok": False, "stub_gate": {"ok": False, "stubs": [], "valid_stages": [], "stub_count": 0},
-        "overflow": None, "pairing_errors": None, "spans": 0, "decoder_errors": {}}
-    g_overhead = _gate_overhead(guard, rm, float(limit))
-    checks = {"assembly": bool(g_compiler["ok"]), "output": bool(g_output["ok"]),
-              "events": bool(g_events["ok"]), "overhead": bool(g_overhead["ok"])}
     coverage = None
     if hw and summary:
         coverage = verify_sw_hw_coverage(float(summary.get("span_us") or 0.0), float(hw["kernel"]["duration_us"]),
@@ -1423,9 +1624,7 @@ def run_megakernel_audit(
         "overhead_ratio": g_overhead.get("overhead_ratio"), "source_sha256": source_sha,
         "fidelity_gates": gates, "region_lock": region_lock,
     })
-    trace_doc = dict(trace)
-    if hw.get("hw_series"):
-        trace_doc["traceEvents"] = list(trace.get("traceEvents") or []) + _hw_counter_events(hw)
+    trace_doc = _merge_hw_trace(trace, hw)
     wp.write_json(trace_doc, str(trace_path))
 
     result = {"status": status, "checks": checks, "failed": failed + (["structural"] if hard_fail else []),

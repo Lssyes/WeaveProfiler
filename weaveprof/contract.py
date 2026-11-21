@@ -256,6 +256,13 @@ def hot_loop(doc, fires, source_text):
     return None, None
 
 
+_STAGE_MERGE_RANK = {
+    "mma": 100, "gemm": 95, "attention": 90, "moe": 90, "compute": 85,
+    "softmax": 80, "reduction": 75, "epilogue": 70, "communication": 65,
+    "store": 50, "load": 40, "dispatch": 30, "wait": 20, "barrier": 15, "dma_issue": 10,
+}
+
+
 def revise_probe_spec(doc, feedback, source_text):
     """Move a measured hot synchronous probe to its enclosing loop boundaries."""
     result = compact_probe_spec(doc)
@@ -269,8 +276,23 @@ def revise_probe_spec(doc, feedback, source_text):
     p.pop("slot", None)
     if "in_inner_loop" in p:
         p["in_inner_loop"] = False
-    result["probes"] = [
+    colliding = [
         q for q in result["probes"]
-        if q["id"] == pid or (q["begin"], q["end"]) != (p["begin"], p["end"])
+        if q["id"] != pid and (q["begin"], q["end"]) == (p["begin"], p["end"])
     ]
+    if colliding:
+        winner = max(
+            [p, *colliding],
+            key=lambda x: _STAGE_MERGE_RANK.get(
+                x.get("semantic_id") or next((s for s in STAGES if x["id"] == s or x["id"].startswith(s + "_")), ""),
+                0,
+            ),
+        )
+        drop_ids = {q["id"] for q in [p, *colliding] if q["id"] != winner["id"]}
+        result["probes"] = [q for q in result["probes"] if q["id"] not in drop_ids]
+    else:
+        result["probes"] = [
+            q for q in result["probes"]
+            if q["id"] == pid or (q["begin"], q["end"]) != (p["begin"], p["end"])
+        ]
     return result

@@ -138,6 +138,11 @@ TOOL_DEFS: List[Dict[str, Any]] = [
                 "names": {"oneOf": [_S, {"type": "object"}]},
                 "runtime_metrics": {"oneOf": [_S, {"type": "object"}]},
                 "nsys_sqlite": _S,
+                "capture_nsys": {"type": "boolean"},
+                "nsys_cmd": {"oneOf": [_S, {"type": "array", "items": _S}]},
+                "nsys_freq_hz": {"type": "integer", "minimum": 1000, "maximum": 500000},
+                "nsys_gpu_device": _S,
+                "nsys_capture_range": _S,
                 "card": _S,
                 "arch": _S,
                 "total_sms": {"type": "integer", "minimum": 1},
@@ -382,6 +387,7 @@ class WeaveProfServer:
         self._validate_out_path(args.get("out_dir"), "out_dir")
         self._validate_cmd(args.get("bench_cmd"), "bench_cmd")
         self._validate_cmd(args.get("build_cmd"), "build_cmd")
+        self._validate_cmd(args.get("nsys_cmd"), "nsys_cmd")
         try:
             params = inspect.signature(run_megakernel_audit).parameters
             accepts_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
