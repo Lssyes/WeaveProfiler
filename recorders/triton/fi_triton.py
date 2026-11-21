@@ -834,16 +834,28 @@ class _FiTritonProxy:
         self._buf_getter = buf_getter
         self.__name__ = getattr(l0_fn, "__name__", "triton_kernel")
 
+    def _find_autotuner(self, fn):
+        cur = fn
+        for _ in range(4):
+            if hasattr(cur, "configs"):
+                return cur
+            nxt = getattr(cur, "fn", None)
+            if nxt is None or nxt is cur:
+                break
+            cur = nxt
+        return None
+
     def _autotune_kwargs(self, existing_kwargs: dict) -> dict:
-        if not hasattr(self._l0_fn, "configs") or hasattr(self._inst_fn, "configs"):
+        l0_at = self._find_autotuner(self._l0_fn)
+        if l0_at is None or self._find_autotuner(self._inst_fn) is not None:
             return existing_kwargs
-        best = getattr(self._l0_fn, "best_config", None)
+        best = getattr(l0_at, "best_config", None)
         if best is None:
-            cache = getattr(self._l0_fn, "cache", None) or {}
+            cache = getattr(l0_at, "cache", None) or {}
             if cache:
                 best = next(reversed(cache.values()))
-            elif getattr(self._l0_fn, "configs", None):
-                best = self._l0_fn.configs[0]
+            elif getattr(l0_at, "configs", None):
+                best = l0_at.configs[0]
         if best is None:
             return existing_kwargs
         merged = dict(best.all_kwargs()) if hasattr(best, "all_kwargs") else dict(getattr(best, "kwargs", {}))
