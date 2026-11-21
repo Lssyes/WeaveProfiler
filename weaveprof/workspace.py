@@ -57,6 +57,9 @@ def cache_root(source):
     configured = os.environ.get("WEAVEPROF_CACHE")
     if configured:
         return Path(configured).resolve()
+    if os.name != "nt":
+        uid = os.getuid() if hasattr(os, "getuid") else 0
+        return (Path(tempfile.gettempdir()) / f"weaveprof-cache-{uid}" / "probes").resolve()
     cwd = Path.cwd().resolve()
     if cwd.is_relative_to(project_root(source)):
         cwd = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "weaveprof"
@@ -95,7 +98,8 @@ class ShadowWorkspace:
         ignore = shutil.ignore_patterns(
             ".git", ".weaveprof_cache", "__pycache__", ".venv", ".pytest_cache", "*.pyc",
             "*.perfetto-trace", "*.perfetto*", "*.gz", "*.sqlite", "*.nsys-rep",
-            "*.fi02.bin", "*.out.bin", "*.cubin", "*.fatbin",
+            "*.fi02.bin", "*.wp02.bin", "*.out.bin", "*.cubin", "*.fatbin",
+            "build", "dist", "third_party", "node_modules", ".claude", ".codex", ".agents",
         )
         shutil.copytree(self.project, original, ignore=ignore)
         relative = self.source.relative_to(self.project)

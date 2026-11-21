@@ -64,7 +64,9 @@ REPORT_MAX_BYTES = 2048
 
 SHADOW_IGNORE: Tuple[str, ...] = (
     ".git", "__pycache__", "*.pyc", "*.bin", "*.sqlite", "*.nsys-rep", "*.so",
-    ".weaveprof_cache", ".pytest_cache", ".venv",
+    "*.perfetto*", "*.tar*", "*.whl",
+    ".weaveprof_cache", ".pytest_cache", ".mypy_cache", ".cache", ".venv", "venv",
+    ".claude", ".codex", ".agents", "node_modules", "third_party",
 )
 DUMP_CANDIDATES: Tuple[str, ...] = ("capture.wp02.bin", "capture.fi02.bin")
 _WAIT_RE = re.compile(r"(?:wait|barrier|grid_sync|sync_wait|stall|idle|spin|poll)", re.I)
@@ -951,8 +953,16 @@ def _shadow_env(l0: Path, inst: Path, out: Path, l0_cache: Optional[Path]) -> Di
         WEAVEPROF_ROOT=str(ROOT), WEAVEPROF_L0_DIR=str(l0), WEAVEPROF_INST_DIR=str(inst),
         WEAVEPROF_OUT_DIR=str(out), PYTHONDONTWRITEBYTECODE="1",
     )
+    if os.name != "nt":
+        jit_tmp = str(_cache_base() / "jit")
+        env.setdefault("TRITON_CACHE_DIR", jit_tmp + "/triton")
+        env.setdefault("TORCH_EXTENSIONS_DIR", jit_tmp + "/torch_ext")
     if l0_cache is not None:
         env["WEAVEPROF_L0_CACHE_DIR"] = str(l0_cache)
+    if os.name != "nt":
+        jit_tmp = _cache_base() / "jit"
+        env.setdefault("TRITON_CACHE_DIR", str(jit_tmp / "triton"))
+        env.setdefault("TORCH_EXTENSIONS_DIR", str(jit_tmp / "torch_ext"))
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT), str(libs / "triton"), str(libs / "cutedsl"),
                                          *filter(None, env.get("PYTHONPATH", "").split(os.pathsep))])
     env["CPATH"] = os.pathsep.join([str(libs / "cuda_cpp"), str(libs / "hip_cpp"),
@@ -1593,6 +1603,42 @@ def run_megakernel_audit(
                     blockers.append(f"NSYS_SAME_RUN_DUMP_FALLBACK: {exc}"[:160])
         except (RuntimeError, OSError, TimeoutError, ValueError, PolicyViolation) as exc:
             blockers.append(f"NSYS_CAPTURE_FAILED: {exc}"[:200])
+
+    # Reclaim shadow workspace inodes immediately (keep only the single instrumented entry file + dump for seal).
+    shadow_root_str = shadow_info.get("shadow")
+    if shadow_root_str and os.environ.get("WEAVEPROF_KEEP_SHADOW") != "1":
+        shadow_root = Path(shadow_root_str).resolve()
+        try:
+            if instrumented_path is not None and instrumented_path.is_file() and instrumented_path.resolve().is_relative_to(shadow_root):
+                kept_inst = out / f"instrumented_{instrumented_path.name}"
+                shutil.copy2(instrumented_path, kept_inst)
+                instrumented_path = kept_inst
+            if dump is not None and dump.is_file() and dump.resolve().is_relative_to(shadow_root):
+                kept_dump = out / dump.name
+                shutil.copy2(dump, kept_dump)
+                dump = kept_dump
+            shutil.rmtree(shadow_root, ignore_errors=True)
+        except OSError:
+            pass
+
+    # Release duplicated shadow workspace trees immediately after bench/nsys (prevents inode bloat).
+    if shadow_info.get("shadow") and os.environ.get("WEAVEPROF_KEEP_SHADOW") != "1":
+        shadow_root = Path(shadow_info["shadow"]).resolve()
+        if instrumented_path is not None and instrumented_path.is_file() and instrumented_path.resolve().is_relative_to(shadow_root):
+            preserved = out / f"instrumented_{instrumented_path.name}"
+            shutil.copy2(instrumented_path, preserved)
+            instrumented_path = preserved
+        if dump.is_file() and dump.resolve().is_relative_to(shadow_root):
+            preserved_dump = out / dump.name
+            shutil.copy2(dump, preserved_dump)
+            dump = preserved_dump
+        if rm_path is not None and rm_path.is_file() and rm_path.resolve().is_relative_to(shadow_root):
+            preserved_rm = out / rm_path.name
+            shutil.copy2(rm_path, preserved_rm)
+            rm_path = preserved_rm
+        if names_src is not None and names_src.is_file() and names_src.resolve().is_relative_to(shadow_root):
+            names_src = names_path
+        shutil.rmtree(shadow_root, ignore_errors=True)
 
     # Optional hardware curves.
     hw: Dict[str, Any] = {}

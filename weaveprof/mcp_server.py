@@ -28,6 +28,7 @@ import math
 import os
 from pathlib import Path
 import shlex
+import tempfile
 import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -337,7 +338,11 @@ class WeaveProfServer:
             args["limit"] = float(ceiling)
 
     def _runs_dir(self) -> Path:
-        base = self.session_dir.parent.parent / "agent_runs" / self.session_dir.name
+        if os.name != "nt":
+            uid = os.getuid() if hasattr(os, "getuid") else 0
+            base = Path(tempfile.gettempdir()) / f"weaveprof-cache-{uid}" / "agent_runs" / self.session_dir.name
+        else:
+            base = self.session_dir.parent.parent / "agent_runs" / self.session_dir.name
         d = base / time.strftime("%Y%m%d-%H%M%S") / os.urandom(3).hex()
         d.mkdir(parents=True, exist_ok=True)
         return d
