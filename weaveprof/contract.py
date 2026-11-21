@@ -157,7 +157,17 @@ def normalize_probe_spec(doc, source_text=None, *, language=None):
                 p["aux_expr"] = _expression(str(raw_slot) if type(raw_slot) is int else raw_slot, "slot", language=language)
         else:
             p.setdefault("aux_expr", "")
-        sem = p.get("semantic_id") or next((s for s in STAGES if pid == s or pid.startswith(s + "_")), "compute")
+        sem = p.get("semantic_id") or next((s for s in STAGES if pid == s or pid.startswith(s + "_")), None)
+        if sem is None:
+            low_pid = pid.lower()
+            if low_pid.startswith(("dma", "tma", "prefetch", "copy", "cp_async")):
+                sem = "load"
+            elif low_pid.startswith(("wgmma", "hmma", "tcgen")):
+                sem = "mma"
+            elif low_pid.startswith(("sync", "mbar")):
+                sem = "barrier"
+            else:
+                sem = "compute"
         eid = p.get("event_id")
         if eid is None:
             preferred = STAGES.get(sem)

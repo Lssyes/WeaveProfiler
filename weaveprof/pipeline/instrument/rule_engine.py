@@ -633,7 +633,18 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
         if pl < b_ln:
             b_off = max(loffs[pl], owner_open)
         raw_e_off = loffs[e_ln] + len(lines[e_ln - 1])
-        e_off = min(owner_close, _snap_cpp_end_offset(source_text, clean, raw_e_off, owner_close))
+        # If a same-role synchronous probe begins inside a block/loop and end_line
+        # points at that enclosing block's closing '}', insert WP_E BEFORE the '}'
+        # so begin and end remain in the same lexical scope (variables & trip count).
+        if (
+            int(pr.get("begin_role_id", 0)) == int(pr.get("end_role_id", 0))
+            and e_ln > b_ln
+            and lines[e_ln - 1].strip().startswith("}")
+            and clean[b_off:raw_e_off].count("{") < clean[b_off:raw_e_off].count("}")
+        ):
+            e_off = min(owner_close, loffs[e_ln])
+        else:
+            e_off = min(owner_close, _snap_cpp_end_offset(source_text, clean, raw_e_off, owner_close))
 
         indent_m = re.match(r"[ \t]*", lines[b_ln - 1])
         indent = indent_m.group(0) if indent_m else "    "

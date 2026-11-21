@@ -552,6 +552,36 @@ class MegakernelAuditTest(_TmpCase):
         revised = revise_probe_spec(doc, fb, src)
         self.assertEqual([p["id"] for p in revised["probes"]], ["mma"])
 
+    def test_single_stage_loop_collapse_fails_gate(self):
+        # 99.5% of active time collapsed into 1 single compute slab/lane MUST fail the event gate.
+        e_comp = KB["compute"]
+        slots = {
+            c: [
+                (BASE_NS, OPEN | 0, _sm_of(c)),
+                (BASE_NS + 1_000, E_LOAD, c), (BASE_NS + 3_000, END | E_LOAD, c),
+                (BASE_NS + 3_000, e_comp, c), (BASE_NS + 650_000, END | e_comp, c),
+                (BASE_NS + 651_000, CLOSE, 0),
+            ]
+            for c in range(N_SMS)
+        }
+        dump = self.tmp / "collapsed.wp02.bin"
+        dump.write_bytes(WPD.build_dump_bytes(slots, n_slots=N_SMS, cap=16, wpc=1,
+                                              meta={"arch": "sm_90", "gran": 1, "kernel": "collapsed"}))
+        names_c = {
+            "events": {str(E_LOAD): "load", str(e_comp): "compute"},
+            "semantics": {str(E_LOAD): "load", str(e_comp): "compute"},
+            "roles": {"0": "persistent_cta"},
+        }
+        ws = self._workspace()
+        rep = mk.run_megakernel_audit(
+            ws, entry_source="sparse_mla.cu", dump_path=dump, names=names_c,
+            runtime_metrics=runtime_metrics(), card="h20", limit=0.10, out_dir=self.tmp / "out-collapse",
+        )
+        self.assertEqual(rep["status"], "FAIL", rep)
+        self.assertFalse(rep["fidelity_gates"]["granularity"]["ok"])
+        self.assertEqual(rep["fidelity_gates"]["granularity"]["code"], "SINGLE_STAGE_LOOP_COLLAPSE")
+        self.assertTrue(any("SINGLE_STAGE_LOOP_COLLAPSE" in b for b in rep["structural_blockers"]), rep)
+
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})
         self.assertEqual(rep["status"], "FAIL", rep)

@@ -50,6 +50,7 @@ from .harness import (
     verify_compiler_spill_gate,
     verify_seal,
     verify_semantic_body_and_stubs,
+    verify_stage_granularity,
     verify_sw_hw_coverage,
 )
 from .workspace import ROOT, digest, read_json, write_json
@@ -840,12 +841,18 @@ def _gate_events(summary: Mapping[str, Any], trace: Mapping[str, Any], rm: Mappi
         key = str(args.get("original_label") or name)
         stage_ns[key].append(float(ev.get("dur") or 0.0) * 1000.0)
     stub = verify_semantic_body_and_stubs(stage_ns, sass_body_insns=sass_body)
+    gran_gate = (
+        {"ok": True, "code": None, "skipped": True}
+        if rm.get("allow_single_stage_collapse") is True
+        else verify_stage_granularity(trace)
+    )
     overflow = int(summary.get("overflow") or 0)
     pairing = int(sum(int(v) for v in (summary.get("errors") or {}).values()))
     spans = int(summary.get("spans") or 0)
     return {
-        "ok": bool(stub["ok"]) and overflow == 0 and pairing == 0 and spans > 0,
+        "ok": bool(stub["ok"]) and bool(gran_gate["ok"]) and overflow == 0 and pairing == 0 and spans > 0,
         "stub_gate": stub,
+        "granularity_gate": gran_gate,
         "overflow": overflow,
         "pairing_errors": pairing,
         "spans": spans,
@@ -1655,12 +1662,17 @@ def run_megakernel_audit(
     neg_pert = any("NEGATIVE_OVERHEAD_PERTURBATION" in str(e) for e in (g_overhead.get("errors") or []))
     if neg_pert:
         blockers.append("NEGATIVE_OVERHEAD_PERTURBATION")
+    gran_gate = g_events.get("granularity_gate") or {"ok": True}
+    if not gran_gate.get("ok", True):
+        blockers.append(f"SINGLE_STAGE_LOOP_COLLAPSE: {gran_gate.get('dominant_stage')} ({gran_gate.get('dominant_share_pct')}%)")
     gate_view = {
         "compiler_spill": {"ok": checks["assembly"], "codes": [v.get("code") for v in g_compiler.get("violations") or []][:4],
                            "reg_blind_spot": bool(g_compiler.get("register_count_blind_spot"))},
         "output": {"ok": checks["output"], **({"code": g_output["code"]} if g_output.get("code") else {})},
         "stub": {"ok": bool(g_events["stub_gate"]["ok"]),
                  "stubs": [s["stage"] for s in g_events["stub_gate"].get("stubs") or []][:4]},
+        "granularity": {"ok": bool(gran_gate.get("ok", True)),
+                        **({"code": gran_gate.get("code")} if gran_gate.get("code") else {})},
         "overflow": g_events.get("overflow"),
         "pairing_errors": g_events.get("pairing_errors"),
         "overhead": {"ok": checks["overhead"], "ratio": _r(g_overhead.get("overhead_ratio"), 5),

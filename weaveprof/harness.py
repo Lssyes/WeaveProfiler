@@ -1554,6 +1554,76 @@ def verify_semantic_body_and_stubs(
     }
 
 
+_COLLAPSE_WAIT_RE = re.compile(r"(?:wait|barrier|grid_sync|sync_wait|stall|idle|spin|poll)", re.I)
+
+
+def verify_stage_granularity(
+    trace: Mapping[str, Any],
+    *,
+    max_single_stage_share: float = 0.95,
+    min_active_us: float = 20.0,
+    max_collapsed_spans_per_lane: float = 1.05,
+) -> Dict[str, Any]:
+    """Fail closed when the entire main loop collapses into a single un-decomposed stage bar.
+
+    A trace where one non-wait stage accounts for >= 95% of active time and executes at most
+    once per lane (e.g. hoisting every per-tile load/mma/softmax probe out to the enclosing
+    loop boundary) hides all intra-loop structure and must NOT pass verification.
+    """
+    stage_us: Dict[str, float] = {}
+    stage_n: Dict[str, int] = {}
+    stage_lanes: Dict[str, set] = {}
+    for ev in (trace.get("traceEvents") or []):
+        if ev.get("ph") != "X" or ev.get("cat") in ("nsys_kernel", "info"):
+            continue
+        dur = float(ev.get("dur") or 0.0)
+        if dur <= 0.0 or not math.isfinite(dur):
+            continue
+        args = ev.get("args") or {}
+        name = str(ev.get("name") or "stage")
+        sem = str(args.get("semantic_id") or name)
+        if _COLLAPSE_WAIT_RE.search(name) or _COLLAPSE_WAIT_RE.search(sem):
+            continue
+        key = str(args.get("original_label") or name)
+        lane = args.get("wave_slot") if args.get("wave_slot") is not None else (ev.get("pid"), ev.get("tid"))
+        stage_us[key] = stage_us.get(key, 0.0) + dur
+        stage_n[key] = stage_n.get(key, 0) + 1
+        stage_lanes.setdefault(key, set()).add(lane)
+
+    total_us = sum(stage_us.values())
+    if total_us <= 0.0 or not stage_us:
+        return {
+            "ok": True, "code": None, "distinct_active_stages": 0,
+            "dominant_stage": None, "dominant_share_pct": 0.0, "spans_per_lane": 0.0,
+        }
+    dom_stage = max(stage_us, key=lambda k: stage_us[k])
+    dom_us = stage_us[dom_stage]
+    dom_share = dom_us / total_us
+    dom_lanes = max(1, len(stage_lanes.get(dom_stage) or ()))
+    spans_per_lane = stage_n[dom_stage] / float(dom_lanes)
+    per_lane_us = dom_us / float(dom_lanes)
+    collapsed = bool(
+        per_lane_us >= float(min_active_us)
+        and dom_share >= float(max_single_stage_share)
+        and spans_per_lane <= float(max_collapsed_spans_per_lane)
+    )
+    return {
+        "ok": not collapsed,
+        "code": "SINGLE_STAGE_LOOP_COLLAPSE" if collapsed else None,
+        "distinct_active_stages": len(stage_us),
+        "dominant_stage": dom_stage,
+        "dominant_share_pct": round(100.0 * dom_share, 2),
+        "spans_per_lane": round(spans_per_lane, 3),
+        "per_lane_us": round(per_lane_us, 3),
+        "message": (
+            f"Stage '{dom_stage}' absorbs {100.0 * dom_share:.1f}% of active time in {spans_per_lane:.2f} "
+            f"spans/lane ({per_lane_us:.1f} us/lane): main loop collapsed into a single coarse bar; "
+            "preserve per-tile stages (load/mma/softmax) inside the loop."
+            if collapsed else ""
+        ),
+    }
+
+
 def verify_sw_hw_coverage(
     sw_span_us: float,
     hw_kernel_us: float,
