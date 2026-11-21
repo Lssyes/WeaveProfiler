@@ -968,7 +968,10 @@ def _lower_triton_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) ->
     if paper:
         nv = platform != "amd"
         module = "fi_triton" if nv else "fi_triton_amd"
-        import_block += f"from {module} import WP_B, WP_E, _WpTritonProxy, wp_attach\n"
+        if nv:
+            import_block += f"from {module} import WP_B, WP_E, WP_TRANS, _WpTritonProxy, wp_attach\n"
+        else:
+            import_block += f"from {module} import WP_B, WP_E, _WpTritonProxy, wp_attach\n"
         # The paper records the requested stages; L0 and L_inst share the caller's launch signature.
         open_block = open_block.splitlines(keepends=True)[0]
         if specialized:
@@ -1034,6 +1037,32 @@ def _lower_triton_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) ->
             e_call = f"{ind}_fi_n = _fi_e_16b(_fi_rec_ptr, _fi_ovf_ptr, _fi_base, _fi_sel, _fi_n, EVENT={ev_id}, aux=_fi_cta, CAP=_FI_CAP, THREADS=_FI_THREADS, TIMER=_FI_TIMER)\n"
         insert_before.setdefault(sb, []).append(b_call)
         insert_after.setdefault(se, []).append(e_call)
+
+    # Fuse contiguous same-indent NVIDIA Triton WP_E(prev) + WP_B(next) into 1 single WP_TRANS barrier!
+    if paper and platform != "amd" and not specialized:
+        e_pat = re.compile(r"^([ \t]*)_fi_n = WP_E\(_fi_rec_ptr, _fi_ovf_ptr, _fi_cta, _fi_n, _FI_CFG, (\d+), ([^)]+)\)\n$")
+        b_pat = re.compile(r"^([ \t]*)_fi_n = WP_B\(_fi_rec_ptr, _fi_ovf_ptr, _fi_cta, _fi_n, _FI_CFG, (\d+), ([^)]+)\)\n$")
+        for ln_after in sorted(list(insert_after.keys())):
+            aft_list = insert_after.get(ln_after) or []
+            if not aft_list:
+                continue
+            m_e = e_pat.match(aft_list[-1])
+            if not m_e:
+                continue
+            # Walk forward over blank/comment lines to find next executable source line
+            nxt = ln_after + 1
+            while nxt <= fn_end and (not all_lines[nxt - 1].strip() or all_lines[nxt - 1].lstrip().startswith("#")):
+                nxt += 1
+            bef_list = insert_before.get(nxt) or []
+            if not bef_list:
+                continue
+            m_b = b_pat.match(bef_list[0])
+            if not m_b or m_e.group(1) != m_b.group(1) or m_e.group(3) != m_b.group(3):
+                continue
+            ind_t, prev_ev, aux_t = m_e.group(1), m_e.group(2), m_e.group(3)
+            next_ev = m_b.group(2)
+            aft_list[-1] = f"{ind_t}_fi_n = WP_TRANS(_fi_rec_ptr, _fi_ovf_ptr, _fi_cta, _fi_n, _FI_CFG, {prev_ev}, {next_ev}, {aux_t})\n"
+            bef_list.pop(0)
 
     # Close before early `return` statements if any, or at end of body
     last_stmt = fn.body[-1]

@@ -293,6 +293,18 @@ class FiCfg:
     def event_nr(self) -> int:
         return self._get(("event",), "event")[2]
 
+    @property
+    def trans_asm(self) -> str:
+        return self._get(("trans",), "trans")[0]
+
+    @property
+    def trans_cons(self) -> str:
+        return self._get(("trans",), "trans")[1]
+
+    @property
+    def trans_nr(self) -> int:
+        return self._get(("trans",), "trans")[2]
+
     def open_asm(self, role: int) -> str:
         return self._get(("open", role), "open", FI_TAG_OPEN | (role & FI_TAG_ROLEMASK))[0]
 
@@ -391,6 +403,10 @@ def _emit_asm(cfg, kind: str, tag_imm: Optional[int] = None, user_pred: bool = F
         # 这里再 mask 一次，防止调用方把普通 int/异常常量直接塞进 tag。
         tag_txt, aux_txt = "tagv", "$7"
         recs = [("local" if cfg.timer == 1 else "global", tag_txt, aux_txt, 0)]
+    elif kind == "trans":
+        # Fused stage transition: 1 timer read + 2 back-to-back 16B stores (END|prev_ev, next_ev) in 1 asm barrier.
+        w = "local" if cfg.timer == 1 else "global"
+        recs = [(w, "tagv", "$8", 0), ("reuse", "tagv2", "$8", 16)]
     elif kind == "open":
         tag_txt, aux_txt = str(int(tag_imm)), "sm"
         recs = [("global", tag_txt, aux_txt, 0)]
@@ -409,6 +425,9 @@ def _emit_asm(cfg, kind: str, tag_imm: Optional[int] = None, user_pred: bool = F
     if kind == "event":
         constraints = "=r,r,l,l,r,r,r,r" + (",r" if user_pred else "")   # out, scratch, rec, ovf, pid, n, tag, aux[, pred]
         pred_op = "$8"
+    elif kind == "trans":
+        constraints = "=r,r,l,l,r,r,r,r,r"   # out, scratch, rec, ovf, pid, n, prev_tag, next_tag, aux
+        pred_op = "$9"
     else:
         constraints = "=r,r,l,l,r,r" + (",r" if user_pred else "")       # out, scratch, rec, ovf, pid, n[, pred]
         pred_op = "$6"
@@ -422,7 +441,7 @@ def _emit_asm(cfg, kind: str, tag_imm: Optional[int] = None, user_pred: bool = F
                     if cfg.gran == 1 else f"setp.ne.u32 p_rec, {pred_op}, 0;")
 
     names64 = ["addr", "off", "soff"] + [f"t{i}" for i in range(len(recs))]
-    names32 = (["lane", "warp", "sm", "tid", "slot", "pid", "n", "ovfold", "tagv"]
+    names32 = (["lane", "warp", "sm", "tid", "slot", "pid", "n", "ovfold", "tagv", "tagv2"]
                + [x for i in range(len(recs)) for x in (f"tlo{i}", f"thi{i}")])
     lines = ["{"]
     if bk.reg64:
@@ -455,19 +474,26 @@ def _emit_asm(cfg, kind: str, tag_imm: Optional[int] = None, user_pred: bool = F
     ]
     if kind == "event":
         lines.append(f"    and.b32 tagv, $6, 0x{FI_TAG_WIREMASK:08X};")
+    elif kind == "trans":
+        lines.append(f"    and.b32 tagv, $6, 0x{FI_TAG_WIREMASK:08X};")
+        lines.append(f"    and.b32 tagv2, $7, 0x{FI_TAG_WIREMASK:08X};")
     gate_plan = _record_gate_plan(cfg.cap, len(recs))
     for i, (which, tag_txt, aux_txt, off) in enumerate(recs):
-        src = bk.timer_local if which == "local" else bk.timer_global
         addr = "addr" if off == 0 else f"addr+{off}"
         # 每条物理记录单独检查自己的下标。FI_TIMER=1 时 OPEN/CLOSE 会写两条，
         # 不能只检查开头那条：n=cap-1 时第二条仍会越过 cap。
         cap_limit = gate_plan.record_cap_limits[i]
         lines.append(f"    setp.lt.u32 p_cap, n, {cap_limit};")
         lines.append("    and.pred p_store, p_rec, p_cap;")
-        lines.append("    @p_store " + src.replace("{T}", f"t{i}"))
-        lines.append(f"    @p_store mov.b64 {{tlo{i}, thi{i}}}, t{i};")
+        if which == "reuse":
+            tlo_nm, thi_nm = "tlo0", "thi0"
+        else:
+            src = bk.timer_local if which == "local" else bk.timer_global
+            lines.append("    @p_store " + src.replace("{T}", f"t{i}"))
+            lines.append(f"    @p_store mov.b64 {{tlo{i}, thi{i}}}, t{i};")
+            tlo_nm, thi_nm = f"tlo{i}", f"thi{i}"
         # store16 里 PTX 的向量花括号用 .format() 的双花括号写，避免和占位符混淆
-        st = bk.store16.format(ADDR=addr, TLO=f"tlo{i}", THI=f"thi{i}", TAG=tag_txt, AUX=aux_txt)
+        st = bk.store16.format(ADDR=addr, TLO=tlo_nm, THI=thi_nm, TAG=tag_txt, AUX=aux_txt)
         lines.append("    @p_store " + st)
     full_at = gate_plan.lane_full_at
     lines += [f"    setp.ge.u32 p_ovf, n, {full_at};",
@@ -618,6 +644,21 @@ def fi_e(rec_ptr, ovf_ptr, pid, n, FI: tl.constexpr, ev: tl.constexpr, aux):
     if FI.level >= 2:
         event_id: tl.constexpr = ev & FI_TAG_IDMASK_C
         return _fi_event(rec_ptr, ovf_ptr, pid, n, FI, event_id | FI_TAG_END_C, aux)
+    return n
+
+
+@triton.jit
+def fi_trans(rec_ptr, ovf_ptr, pid, n, FI: tl.constexpr, prev_ev: tl.constexpr, next_ev: tl.constexpr, aux):
+    """Fused stage transition: closes `prev_ev` and opens `next_ev` with 1 timer read in 1 asm barrier."""
+    if FI.level >= 2:
+        th: tl.constexpr = FI.threads
+        scratch = tl.zeros((th,), dtype=tl.int32)
+        prev_tag: tl.constexpr = (prev_ev & FI_TAG_IDMASK_C) | FI_TAG_END_C
+        next_tag: tl.constexpr = next_ev & FI_TAG_IDMASK_C
+        _ = tl.inline_asm_elementwise(asm=FI.trans_asm, constraints=FI.trans_cons,
+                                      args=[scratch, rec_ptr, ovf_ptr, pid, n, prev_tag, next_tag, aux],
+                                      dtype=tl.int32, is_pure=False, pack=1)
+        return n + FI.trans_nr
     return n
 
 
@@ -900,4 +941,6 @@ _WpTritonProxy = _FiTritonProxy
 wp_wrap = _WpTritonProxy
 WP_B = wp_b
 WP_E = wp_e
+wp_trans = fi_trans
+WP_TRANS = fi_trans
 
