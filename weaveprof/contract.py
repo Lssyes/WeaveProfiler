@@ -191,6 +191,42 @@ def normalize_probe_spec(doc, source_text=None, *, language=None):
             raise ValueError(f"Duplicate paper event ID {eid}")
         event_ids.add(eid)
         p.update(semantic_id=sem, event_id=eid)
+    # Weak-LLM half-open boundary repair: if two same-role probes touch at an exact 1-line boundary
+    # (a.begin < a.end == b.begin < b.end), trim a.end by 1 so inclusive intervals stay disjoint.
+    same_role = [
+        p for p in result["probes"]
+        if p.get("begin_role_id") == p.get("end_role_id")
+    ]
+    by_role = {}
+    for p in same_role:
+        by_role.setdefault(p["begin_role_id"], []).append(p)
+    for plist in by_role.values():
+        plist.sort(key=lambda x: (int(x["begin_line"]), int(x["end_line"])))
+        for idx in range(len(plist) - 1):
+            a, b = plist[idx], plist[idx + 1]
+            ab, ae = int(a["begin_line"]), int(a["end_line"])
+            bb, be = int(b["begin_line"]), int(b["end_line"])
+            if ab < ae == bb and ae < be:
+                a["end_line"] = bb - 1
+                if isinstance(a.get("end"), dict):
+                    a["end"]["line"] = bb - 1
+    # Also trim a probe whose end_line lands exactly on the start line of a following loop header.
+    if source_text is not None:
+        try:
+            l_starts = {s for s, _e in loop_spans(source_text, language or "cuda_cpp")}
+        except Exception:
+            l_starts = set()
+        if l_starts:
+            src_lines = source_text.splitlines()
+            for p in same_role:
+                pb, pe = int(p["begin_line"]), int(p["end_line"])
+                if pb < pe and pe in l_starts:
+                    ne = pe - 1
+                    while ne > pb and (ne - 1) < len(src_lines) and not src_lines[ne - 1].strip():
+                        ne -= 1
+                    p["end_line"] = ne
+                    if isinstance(p.get("end"), dict):
+                        p["end"]["line"] = ne
     result.setdefault("schema", "weaveprofiler.probe-spec/v1")
     return result
 
