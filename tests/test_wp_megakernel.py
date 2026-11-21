@@ -470,6 +470,7 @@ class MegakernelAuditTest(_TmpCase):
     def _audit(self, name, *, dump_kw=None, rm=None, nsys=False, **kw):
         ws = self._workspace()
         dump = write_dump(self.tmp / f"{name}.wp02.bin", **(dump_kw or {}))
+        kw.setdefault("render_overview_png", False)
         return mk.run_megakernel_audit(
             ws, entry_source="sparse_mla.cu", dump_path=dump, names=NAMES,
             runtime_metrics=rm if rm is not None else runtime_metrics(),
@@ -495,8 +496,9 @@ class MegakernelAuditTest(_TmpCase):
         self.assertEqual((rep["fidelity_gates"]["overflow"], rep["fidelity_gates"]["pairing_errors"]), (0, 0))
         self.assertFalse(any("FAILED" in b for b in rep["structural_blockers"]), rep["structural_blockers"])
         out = self.tmp / "out-pass"
-        for f in ("feedback.json", "verify.json", "trace.perfetto.json.gz", "seal.json"):
+        for f in ("feedback.json", "verify.json", "seal.json"):
             self.assertTrue((out / f).is_file(), f)
+        self.assertFalse((out / "trace.perfetto.json.gz").exists())
         fb = json.loads((out / "feedback.json").read_text(encoding="utf-8"))
         self.assertEqual(fb["causal"]["schema"], "weaveprof.causal-report/v1")
         self.assertEqual(fb["causal"]["observed_sms"], 78)
@@ -508,9 +510,12 @@ class MegakernelAuditTest(_TmpCase):
         self.assertIsNotNone(seal["artifacts"]["dump"])
         verify = json.loads((out / "verify.json").read_text(encoding="utf-8"))
         self.assertEqual(verify["status"], "PASS")
-        # Verify Rendering Contract R6: nsys hardware utilization pinned at top (pid=1, sort_index=-1000)
+        # Verify default PNG-first delivery (no .gz by default) + opt-in R6 nsys top-pinned trace.gz
+        rep_png = self._audit("pass-png", nsys=True, render_overview_png=True, write_perfetto_gz=True)
+        self.assertEqual(rep_png["status"], "PASS", rep_png)
+        out_png = self.tmp / "out-pass-png"
         import gzip as _gzip
-        tr = json.loads(_gzip.decompress((out / "trace.perfetto.json.gz").read_bytes()).decode("utf-8"))
+        tr = json.loads(_gzip.decompress((out_png / "trace.perfetto.json.gz").read_bytes()).decode("utf-8"))
         tevs = tr["traceEvents"]
         self.assertEqual(tevs[0]["pid"], 1)
         self.assertEqual(tevs[0]["name"], "process_name")
@@ -527,11 +532,12 @@ class MegakernelAuditTest(_TmpCase):
         self.assertTrue(sw_pids and all(p >= 100 for p in sw_pids), sw_pids)
         try:
             import matplotlib  # noqa: F401
-            from weaveprof.viz import render_swhw_overview_png
-            png = render_swhw_overview_png(out / "trace.perfetto.json.gz", out / "overview.png", dpi=110)
+            png = out_png / "overview.png"
+            self.assertTrue(png.is_file(), rep_png)
             raw_png = png.read_bytes()
             self.assertTrue(raw_png.startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertGreater(len(raw_png), 20_000)
+            self.assertIn("overview.png", rep_png["artifacts"]["files"])
         except ImportError:
             pass
         # Round-to-round diff against the sealed causal report.
@@ -694,7 +700,7 @@ class HygieneTest(unittest.TestCase):
         "recorders/hip_cpp/wp_lite_hip.h", "recorders/cutedsl/wp_cute.py",
         "recorders/triton/wp_triton.py", "recorders/triton/wp_triton_amd.py",
         "weaveprof/pipeline/validate/tools/wp_decode.py", "weaveprof/pipeline/validate/tools/fi_lite_decode.py", "weaveprof/megakernel.py",
-        "tests/test_wp_megakernel.py",
+        "weaveprof/viz.py", "tests/test_wp_megakernel.py",
     )
 
     def test_lf_only_and_bytecode_guard(self):

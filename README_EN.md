@@ -85,11 +85,14 @@ For memory access and timing: 16-byte streaming store instructions `st.global.cs
 - **Symmetric ABBA hot-state overhead gate**: requires alternating hot-state timing (ABBA) with `|overhead| <= 10%`, blocking both positive slowdown and negative distortion caused by instrumentation disrupting the compiler's loop unrolling or scheduling (`NEGATIVE_OVERHEAD_PERTURBATION`).
 - **HMAC seal**: `seal.json` is issued using `~/.cache/weaveprof/sessions/<id>/.supervisor.key` outside the workspace, binding source, configuration, verification results and trace summary.
 
-### Timeline diagnostics and optimization comparison
+### Timeline visualization and optimization comparison
 
-- **Cross-SM load imbalance**: each SM's actual busy duration is recorded, distinguishing slow-tail SMs from SMs that finished early and wait at a sync barrier.
-- **Software markers aligned with hardware utilization**: from `nsys` / `rocprof` databases, extract the target kernel's time window with SM active ratio, Tensor Core utilization and memory read/write bandwidth curves, and merge them with in-kernel stage markers on a single Perfetto timeline.
-- **Before/after comparison**: using the current card's measured compute throughput and bandwidth ceiling (H20 / B300 / MI308X), compare pre-change and post-change duration and stage-share changes, and decide whether the change is effective or should be reverted.
+- **Remote 3-panel SW+HW overview PNG (`overview.png`)**: `run_megakernel_audit` and `weaveprof_megakernel_audit` automatically render a single-run 3-panel overview PNG directly on the GPU host via `weaveprof/viz.py` (~1.4 s, ~250–350 KB) on one locked microsecond axis, and do not emit `.perfetto.json.gz` by default (opt in with `write_perfetto_gz=True`):
+  - **Panel (A)**: Same-run 200 kHz `nsys` hardware utilization curves (`Tensor Active`, `DRAM BW`, `SM Issue`, `Active SMs`) with boxed peak/mean KPI chips.
+  - **Panel (B)**: All physical SMs (`SM0..SM{N-1}`) dense per-tile stage waterfall showing cross-SM tail skew.
+  - **Panel (C)**: Representative SM (`SM 0`) per-warp-role (or concurrent CTA slot) timeline.
+- **Compact `<2 KB` causal JSON & cross-SM imbalance**: Alongside `overview.png`, the audit returns `<2 KB` JSON (`stage_summary`, quartile hardware trajectories `hw_quartiles`, `megakernel_skew`, and ranked `causal_opportunities`) readable by both multimodal and text-only coding agents.
+- **Before/after comparison**: Using the current card's measured compute throughput and bandwidth ceiling (H20 / B300 / MI308X), compare pre-change and post-change duration and stage-share changes, and decide whether the change is effective or should be reverted.
 
 ## MCP Server Reference
 

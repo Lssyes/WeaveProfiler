@@ -122,9 +122,10 @@ TOOL_DEFS: List[Dict[str, Any]] = [
     {
         "name": "weaveprof_megakernel_audit",
         "description": ("Fast (~3-12s) shadow-copy, L0-cached megakernel profiler + 4-gate verifier for single- or "
-                        "multi-file CUDA C++ / CuTeDSL / Triton megakernels (sparse attention, GDN, MoE). Never "
-                        "mutates the real workspace. Returns compact causal diagnosis, cross-SM straggler skew and an "
-                        "HMAC seal.json, which is registered in the session (unlocks edits / final Stop gate)."),
+                        "multi-file CUDA C++ / CuTeDSL / Triton megakernels (FlashAttention, FlashMLA, FlashKDA, GDN, MoE). "
+                        "Never mutates the real workspace. Auto-renders a 3-panel SW+HW overview.png directly on the GPU "
+                        "host (no .perfetto.json.gz needed by default) alongside a compact <2 KB causal JSON report and "
+                        "an HMAC seal.json registered in the session (unlocks edits / final Stop gate)."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -143,6 +144,11 @@ TOOL_DEFS: List[Dict[str, Any]] = [
                 "nsys_freq_hz": {"type": "integer", "minimum": 1000, "maximum": 500000},
                 "nsys_gpu_device": _S,
                 "nsys_capture_range": _S,
+                "render_overview_png": {"type": "boolean", "description": "Auto-render 3-panel SW+HW overview.png on the GPU host (default: true)."},
+                "write_perfetto_gz": {"type": "boolean", "description": "Opt-in: also write trace.perfetto.json.gz (default: false)."},
+                "overview_title": _S,
+                "overview_subtitle": _S,
+                "overview_sm": {"type": "integer", "minimum": 0},
                 "card": _S,
                 "arch": _S,
                 "total_sms": {"type": "integer", "minimum": 1},

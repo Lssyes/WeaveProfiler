@@ -141,10 +141,13 @@ python3 -B WeaveProfiler/run.py guard-exec \
 
 通过后签发 HMAC 封签：密钥位于工作区之外的 `~/.cache/weaveprof/sessions/<id>/.supervisor.key`，据此生成 `seal.json`，绑定源码、配置、验证结果与 trace 摘要。
 
-### 3.5 时间线诊断与优化对比
+### 3.5 时间线可视化与优化对比
 
-- **查跨 SM 负载不均**：统计每个 SM 实际干活的时长，区分“算得慢的尾部 SM”和“提前算完、在同步屏障处干等的 SM”，从而判断问题是任务划分不均还是同步等待。
-- **软件打点与硬件利用率对齐**：从 `nsys` / `rocprof` 数据库中截取目标 kernel 时间窗口内的 SM 活跃度、Tensor Core 利用率、显存读写带宽曲线，与核内各阶段的打点合并到同一条 Perfetto 时间线上，可以直接看出某个阶段对应的是算力受限还是访存受限。
+- **远端自动渲染三面板总览图（`overview.png`）**：`run_megakernel_audit` 与 `weaveprof_megakernel_audit` 默认在 GPU 宿主机上直接用 `weaveprof/viz.py` 渲染单次运行的三面板软硬同轴总览 PNG（约 1.4 s、250–350 KB），默认不再产出体积庞大的 `.perfetto.json.gz`（仅在显式传 `write_perfetto_gz=True` 时导出）：
+  - **Panel (A)**：同一次运行的 `nsys` 200 kHz 硬件利用率曲线（`Tensor Active`、`DRAM BW`、`SM Issue`、`Active SMs`）与峰值/均值指标框；
+  - **Panel (B)**：全部物理 SM（`SM0..SM{N-1}`）的逐 tile 多阶段执行瀑布图，一眼看清跨 SM 尾部负载不均；
+  - **Panel (C)**：代表 SM（如 `SM 0`）按 warp 角色（或并发 CTA 槽位）展开的同轴时间线。
+- **查跨 SM 负载不均与文本报告**：除 `overview.png` 外，返回 `<2 KB` 结构化 JSON（含 `stage_summary`、四分位硬件轨迹 `hw_quartiles`、`megakernel_skew` 与按收益排序的 `causal_opportunities`），支持纯文本与多模态 Agent 直接诊断。
 - **优化前后对比**：结合当前卡型（H20 / B300 / MI308X）的实测算力与带宽上限，对比修改前后的总耗时与各阶段占比变化，判断改动是否有效，或是否需要回退。
 
 ---

@@ -471,23 +471,32 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
                             tp_report.get("errors") or [tp_report.get("reason", "trace_processor check failed")]
                         )
                     if all(gates.values()):
-                        # Audit #20: Auxiliary json.gz / preview PNG errors must not invalidate a verified trace.
+                        # Audit #20: Auxiliary PNG / optional json.gz errors must not invalidate a verified trace.
                         aux_warnings = []
-                        try:
-                            json_gz = out_path.with_suffix(".sw_hw.perfetto.json.gz")
-                            exporter.export(aligned, json_gz)
-                            metrics["perfetto_json_gz"] = str(json_gz)
-                        except Exception as aux_exc:
-                            aux_warnings.append(f"json_gz export warning: {aux_exc}")
+                        if rt.get("write_perfetto_gz"):
+                            try:
+                                json_gz = out_path.with_suffix(".sw_hw.perfetto.json.gz")
+                                exporter.export(aligned, json_gz)
+                                metrics["perfetto_json_gz"] = str(json_gz)
+                            except Exception as aux_exc:
+                                aux_warnings.append(f"json_gz export warning: {aux_exc}")
                         try:
                             png_target = Path(preview_png) if preview_png else out_path.with_suffix(".png")
-                            from .preview import render_timeline_png
-                            render_timeline_png(
-                                aligned,
-                                {"metrics": metrics},
-                                png_target,
-                                title_override=rt.get("plot_title"),
-                            )
+                            try:
+                                from .viz import render_swhw_overview_png
+                                render_swhw_overview_png(
+                                    aligned,
+                                    png_target,
+                                    title=rt.get("plot_title"),
+                                )
+                            except Exception:
+                                from .preview import render_timeline_png
+                                render_timeline_png(
+                                    aligned,
+                                    {"metrics": metrics},
+                                    png_target,
+                                    title_override=rt.get("plot_title"),
+                                )
                             metrics["preview_png"] = str(png_target)
                         except Exception as aux_exc:
                             aux_warnings.append(f"preview_png warning: {aux_exc}")

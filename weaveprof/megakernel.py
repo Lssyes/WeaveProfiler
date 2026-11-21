@@ -1385,7 +1385,11 @@ def run_megakernel_audit(
     nsys_freq_hz: int = 200000,
     nsys_gpu_device: str | None = None,
     nsys_capture_range: str = "cudaProfilerApi",
-    render_overview_png: bool = False,
+    render_overview_png: bool = True,
+    write_perfetto_gz: bool = False,
+    overview_title: str | None = None,
+    overview_subtitle: str | None = None,
+    overview_sm: int | None = None,
     card: str = "auto",
     arch: str | None = None,
     total_sms: int | None = None,
@@ -1673,29 +1677,41 @@ def run_megakernel_audit(
         "fidelity_gates": gates, "region_lock": region_lock,
     })
     trace_doc = _merge_hw_trace(trace, hw)
-    wp.write_json(trace_doc, str(trace_path))
+    wrote_gz = False
+    if write_perfetto_gz:
+        wp.write_json(trace_doc, str(trace_path))
+        wrote_gz = trace_path.is_file()
     overview_png_path: Optional[Path] = None
     if render_overview_png:
         try:
             from .viz import render_swhw_overview_png
-            overview_png_path = render_swhw_overview_png(trace_doc, out / "overview.png")
+            overview_png_path = render_swhw_overview_png(
+                trace_doc, out / "overview.png",
+                title=overview_title, subtitle=overview_subtitle, focus_sm=overview_sm,
+            )
+        except ImportError:
+            overview_png_path = None
         except Exception as exc:
             blockers.append(f"OVERVIEW_PNG_FAILED: {type(exc).__name__}: {exc}"[:160])
 
     result = {"status": status, "checks": checks, "failed": failed + (["structural"] if hard_fail else []),
               "metrics": {"overhead_ratio": g_overhead.get("overhead_ratio"), "region_lock": region_lock}}
+    primary_visual = (
+        trace_path if wrote_gz
+        else (overview_png_path if overview_png_path and overview_png_path.is_file() else dump)
+    )
     seal_path, seal_sha, seal_verified, seal_errors = None, None, False, []
     try:
         seal_path, seal_doc = EpisodeSealer.seal_round(
             round_dir=out, round_number=int(round_number or 1), source_path=entry, source_sha256=source_sha,
             probe_path=None, instrumented_path=instrumented_path, names_path=names_path,
             feedback_path=feedback_path, verify_path=verify_path,
-            trace_path=trace_path if status == "PASS" else None,
-            failed_trace_path=None if status == "PASS" else trace_path,
+            trace_path=primary_visual if status == "PASS" else None,
+            failed_trace_path=None if status == "PASS" else primary_visual,
             result=result, policy=pol, limit=float(limit), bench_cmd=bench_list,
             fsm_state="VERIFY_AND_SEAL", region_lock=region_lock,
             extra_artifacts={"dump": dump, "runtime_metrics": rm_path, "nsys_hw": hw_path,
-                             "names_source": names_src},
+                             "names_source": names_src, "overview_png": overview_png_path},
         )
         seal_sha = seal_doc.get("seal_sha256")
         ver = verify_seal(seal_path, require_pass=(status == "PASS"), expected_source_sha=source_sha,
@@ -1744,7 +1760,12 @@ def run_megakernel_audit(
         "structural_blockers": [str(b)[:140] for b in blockers][:6],
         "round_diff": round_diff,
         "fidelity_gates": gate_view,
-        "artifacts": {"out_dir": str(out), "files": ["feedback.json", "verify.json", "trace.perfetto.json.gz"]},
+        "artifacts": {
+            "out_dir": str(out),
+            "files": ["feedback.json", "verify.json"]
+            + (["overview.png"] if overview_png_path and overview_png_path.is_file() else [])
+            + (["trace.perfetto.json.gz"] if wrote_gz else []),
+        },
     }
     if status != "PASS" and seal_verified:
         report["seal_integrity_only"] = True

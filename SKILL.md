@@ -29,8 +29,10 @@ WeaveProfiler couples two modules in an iterative verification loop without modi
         - Every `begin` timestamp closes with a matching `end` timestamp (`t_end >= t_begin`, zero unclosed re-entry, zero cross-nesting, zero orphan ends), `overflow == 0`, and `fires[id] > 0` for every declared probe (supporting multi-warp producer$\to$consumer `slot` FIFO handoffs).
         - **Product-Level Hard Gate (`validate_trace_product`)**: Rejects single-CTA truncation (`ctas_observed == grid_ctas` across physical SMs/CUs), out-of-range warp IDs (`0 <= warp < warps_per_cta`, never raw linear lane IDs), collapsed single-blob stages missing `load` or `mma` (`max_tile_fires >= min_tile_fires`), missing cross-warp `slot` handoffs on async `mbarrier` pipelines, or missing hardware `Compute Util (%)`, `Memory Util (%)`, and `Active SM/CU (%)` curves.
      4. *Overhead Check (`overhead`)*: Warm-launch median runtime slowdown over repeated interleaved launches stays within `limit` (default `0.10`, i.e., $\le 10\%$).
-   - **Structured Handoff & Artifacts (`<run>/probe.json`, `<run>/feedback.json`, `<run>/verify.json`, `<out>.png`)**:
-     - Emits `<run>/probe.json` (Stage Identifier output), `<run>/feedback.json` (per-criterion diagnostics, `fires`, and `enclosing_loop` for automatic hoisting), `<run>/verify.json`, `.perfetto-trace`, `.sw_hw.perfetto.json.gz`, and a 4-panel co-axial SW+HW timeline preview PNG (`weaveprof/preview.py`).
+   - **Structured Handoff & PNG-First Visual Delivery (`<run>/overview.png`, `<run>/feedback.json`, `<run>/verify.json`, `<run>/seal.json`)**:
+     - By default, `run_megakernel_audit` (`render_overview_png=True`, `write_perfetto_gz=False`) and `wp.profile` auto-render a single-run **3-panel SW+HW overview PNG (`overview.png`, ~250–350 KB, ~1.4 s directly on the GPU host)** via `weaveprof/viz.py` on one locked microsecond axis: **(A)** same-run `nsys` hardware utilization curves (`Tensor Active`, `DRAM BW`, `SM Issue`, `Active SMs`) with boxed peak/mean KPI chips, **(B)** all physical SMs (`SM0..SM{N-1}`) dense multi-stage waterfall, and **(C)** representative SM per-warp-role (or concurrent resident CTA slot) timeline.
+     - No `.perfetto.json.gz` is written by default (pass `write_perfetto_gz=True` only when explicitly requesting raw Perfetto JSON export, or render offline via `python3 -B run.py render <trace> -o overview.png`).
+     - Alongside `overview.png`, `run_megakernel_audit` returns a `<2 KB` structured causal JSON report containing `hw_quartiles` (`[Q1..Q4]`), `stage_summary`, `megakernel_skew`, `causal_opportunities`, and `fidelity_gates` so both multimodal and text-only agents (`qwen4-max`, `ds1017`) can diagnose bottlenecks directly.
 
 ```python
 import weaveprof as wp
@@ -296,6 +298,7 @@ CLI entry points (`weaveprof` / `python -m weaveprof`):
 - `weaveprof identify --source <source> -o <out_probe> [--card h20|b300|mi308x] [--feedback <in_feedback>]`
 - `weaveprof verify --probe <in_probe> --feedback <out_feedback> -o out.perfetto-trace -- <bench_cmd...>`
 - `weaveprof profile --source <source> --card <h20|b300|mi308x> --limit 0.10 -o out.perfetto-trace -- <bench_cmd...>`
+- `python3 -B run.py render <trace.perfetto.json[.gz]> -o overview.png [--title T] [--sm 0] [--dpi 220]`
  *(Positional `<source>` / `<in_probe>` and `locate` / `validate` aliases are also accepted; `run.py` maintains backward-compatible CLI routing for automated test harnesses.)*
 
 ## LLM vs Deterministic Boundary (Agent-Callable Entry Points)
