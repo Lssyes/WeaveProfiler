@@ -543,7 +543,10 @@ def render_swhw_overview_png(
     ax_wp.set_xlim(*x_lim)
     ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=9.5, color="#263238")
 
-    fig.subplots_adjust(left=0.095, right=0.985, top=0.805 if has_hw else 0.875, bottom=0.065)
+    yt_labels = [t.get_text() for t in ax_wp.get_yticklabels()]
+    max_lbl = max((len(s) for s in yt_labels), default=10)
+    left_m = max(0.098, min(0.155, 0.050 + 0.0042 * max_lbl))
+    fig.subplots_adjust(left=left_m, right=0.985, top=0.805 if has_hw else 0.875, bottom=0.065)
 
     out_path = Path(out_png)
     out_path.parent.mkdir(parents=True, exist_ok=True)
