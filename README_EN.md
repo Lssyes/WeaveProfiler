@@ -1,7 +1,7 @@
 # WeaveProfiler (`wp`)
 [简体中文](README.md) | English
 
-WeaveProfiler is a low-overhead intra-kernel GPU profiler and software–hardware timeline aligner built for both human engineers and AI coding agents (Claude Code, Codex CLI, etc.). It reveals what every physical SM and every physical warp is doing microsecond by microsecond, aligned directly with same-run `nsys` / `rocprof` hardware utilization curves.
+WeaveProfiler is a low-overhead intra-kernel GPU profiler and software–hardware timeline aligner built for both human engineers and AI coding agents (Claude Code, Codex CLI, Qwen Code, Antigravity, etc.). It reveals what every physical SM and every physical warp is doing microsecond by microsecond, aligned directly with same-run `nsys` / `rocprof` hardware utilization curves.
 
 It runs directly on your local GPU machine **without modifying your original kernel source, function signatures, or caller code**.
 
@@ -15,7 +15,7 @@ It runs directly on your local GPU machine **without modifying your original ker
 | --- | --- |
 | Hardware | NVIDIA H20 (`sm_90a`), NVIDIA B300 (`sm_100a` / `sm_103a`), AMD Instinct MI308X (`gfx942`) |
 | Languages | CUDA C++, HIP C++, CuTeDSL, Triton (NVIDIA and AMD) |
-| Agents | Native Claude Code and OpenAI Codex CLI; any CLI agent via `guard-exec` |
+| Agents | Native Claude Code, OpenAI Codex CLI, Qwen Code (`qwen`), and Antigravity (`agy`); any CLI agent via `guard-exec` |
 
 ### 2-Step Local Setup
 
@@ -27,7 +27,13 @@ python3 -B WeaveProfiler/run.py install-agent \
   --card h20
 ```
 
-This configures MCP, Hooks, and the Skill inside your operator repository. Then simply open the directory and run `claude` or `codex`.
+This wires MCP, lifecycle Hooks, and the Skill for all 4 agents in one command (or pass `--agent claude|codex|qwen|agy`):
+- **Claude Code**: `.mcp.json` + `.claude/settings*.json` + `CLAUDE.md`
+- **Codex CLI**: `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md`
+- **Qwen Code (`qwen`)**: `.qwen/settings.json` (MCP + native JSON-protocol `PreToolUse / PostToolUse / Stop / SubagentStop` hooks) + `.qwen/skills/weaveprofiler/SKILL.md` + `QWEN.md` (approve project hooks on first launch or trust the workspace so `/hooks` shows `active`)
+- **Antigravity (`agy`)**: native workspace plugin at `.agents/plugins/weaveprofiler/` (`plugin.json`, `mcp_config.json`, `hooks.json` with `PreToolUse / PostToolUse / PostInvocation / Stop`, `rules/AGENTS.md`, `skills/weaveprofiler/SKILL.md`) + `GEMINI.md`
+
+Then simply enter the directory and run `claude`, `codex`, `qwen`, or `agy`.
 
 For non-interactive CLI runs:
 
@@ -119,7 +125,7 @@ WeaveProfiler is built around **two core design pillars** and **one engineering 
 
 ### MCP Tools (`weaveprof/mcp_server.py`)
 
-`install-agent` registers 7 MCP tools for Claude Code and Codex CLI:
+`install-agent` registers 7 MCP tools for Claude Code, Codex CLI, Qwen Code, and Antigravity:
 
 | Tool | Purpose |
 | --- | --- |

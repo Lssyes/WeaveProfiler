@@ -1,7 +1,7 @@
 # WeaveProfiler (`wp`)
 简体中文 | [English](README_EN.md)
 
-WeaveProfiler 是一套面向 GPU 核内（intra-kernel）低开销自动插桩与软硬时间线对齐工具，帮助开发者和 AI Coding Agent（Claude Code、Codex CLI 等）看清复杂 GPU kernel 内部每个 SM、每个 Warp 在每一微秒都在干什么，并直接与 `nsys` / `rocprof` 硬件利用率曲线对齐。
+WeaveProfiler 是一套面向 GPU 核内（intra-kernel）低开销自动插桩与软硬时间线对齐工具，帮助开发者和 AI Coding Agent（Claude Code、Codex CLI、Qwen Code、Antigravity 等）看清复杂 GPU kernel 内部每个 SM、每个 Warp 在每一微秒都在干什么，并直接与 `nsys` / `rocprof` 硬件利用率曲线对齐。
 
 全程**不改动你的原始源码、不改动函数签名和上层调用代码**，本地开箱即用。
 
@@ -15,7 +15,7 @@ WeaveProfiler 是一套面向 GPU 核内（intra-kernel）低开销自动插桩�
 | --- | --- |
 | 硬件 | NVIDIA H20（`sm_90a`）、NVIDIA B300（`sm_100a` / `sm_103a`）、AMD Instinct MI308X（`gfx942`） |
 | 语言 | CUDA C++、HIP C++、CuTeDSL、Triton（NVIDIA 与 AMD） |
-| Agent | 原生支持 Claude Code 与 OpenAI Codex CLI；其他命令行 Agent 可用 `guard-exec` 包装 |
+| Agent | 原生支持 Claude Code、OpenAI Codex CLI、Qwen Code（`qwen`）与 Antigravity（`agy`）；其他命令行 Agent 可用 `guard-exec` 包装 |
 
 ### 两步安装
 
@@ -27,7 +27,13 @@ python3 -B WeaveProfiler/run.py install-agent \
   --card h20
 ```
 
-执行完上面这条命令后，工具会自动在你的算子目录里配好 MCP、Hook 和 Skill 说明。之后直接进入目录运行 `claude` 或 `codex` 即可。
+执行完上面这条命令后，工具会自动在你的算子目录里一键配好 4 个 Agent 的 MCP、Hook 和 Skill 说明（也可用 `--agent claude|codex|qwen|agy` 单独指定）：
+- **Claude Code**：`.mcp.json` + `.claude/settings*.json` + `CLAUDE.md`
+- **Codex CLI**：`.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md`
+- **Qwen Code（`qwen`）**：`.qwen/settings.json`（含 `mcpServers` 与 `PreToolUse / PostToolUse / Stop / SubagentStop` 原生 JSON 协议 Hook）+ `.qwen/skills/weaveprofiler/SKILL.md` + `QWEN.md`（首次启动请确认批准项目 Hook 或 `/trust`，可在 `/hooks` 中看到 `active`）
+- **Antigravity（`agy`）**：`.agents/plugins/weaveprofiler/` 原生工作区插件（`plugin.json`、`mcp_config.json`、`hooks.json` 含 `PreToolUse / PostToolUse / PostInvocation / Stop`、`rules/AGENTS.md`、`skills/weaveprofiler/SKILL.md`）+ `GEMINI.md`
+
+之后直接进入目录运行 `claude`、`codex`、`qwen` 或 `agy` 即可。
 
 如果你需要无交互批处理运行，可以用包装命令：
 
@@ -119,7 +125,7 @@ WeaveProfiler 围绕**两个核心设计点**和**一层工程实现**构建：
 
 ### MCP 工具（`weaveprof/mcp_server.py`）
 
-安装后会自动向 Claude Code 和 Codex CLI 注册 7 个 MCP 工具：
+安装后会自动向 Claude Code、Codex CLI、Qwen Code 和 Antigravity 注册 7 个 MCP 工具：
 
 | 工具 | 作用 |
 | --- | --- |

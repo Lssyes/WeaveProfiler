@@ -181,15 +181,47 @@ class InstallerTests(_WorkspaceCase):
                 cmds = [h["command"] for g in doc["hooks"][ev] for h in g["hooks"]]
                 self.assertEqual(sum("guard_hook.py" in c for c in cmds), 1, ev)
                 self.assertTrue(any(f"--event {ev}" in c for c in cmds))
-        for rel in ("CLAUDE.md", "AGENTS.md"):
+        for rel in ("CLAUDE.md", "AGENTS.md", "QWEN.md", "GEMINI.md"):
             text = (ws / rel).read_text(encoding="utf-8")
             self.assertEqual(text.count("<!-- WEAVEPROFILER:BEGIN -->"), 1)
             self.assertIn("weaveprof_megakernel_audit", text)
             self.assertIn("`kernel.cu`", text)
-        for rel in (".claude/skills/weaveprofiler/SKILL.md", ".agents/skills/weaveprofiler/SKILL.md"):
+        for rel in (
+            ".claude/skills/weaveprofiler/SKILL.md",
+            ".agents/skills/weaveprofiler/SKILL.md",
+            ".qwen/skills/weaveprofiler/SKILL.md",
+            ".agents/plugins/weaveprofiler/skills/weaveprofiler/SKILL.md",
+        ):
             text = (ws / rel).read_text(encoding="utf-8")
             self.assertTrue(text.startswith("---\n"))
             self.assertIn("Installed WeaveProfiler (`wp`) skill copy", text)
+        # Qwen Code settings
+        qwen_settings = json.loads((ws / ".qwen/settings.json").read_text(encoding="utf-8"))
+        self.assertIs(qwen_settings["disableAllHooks"], False)
+        self.assertTrue(any(a.endswith("mcp_server.py") for a in qwen_settings["mcpServers"]["weaveprofiler"]["args"]))
+        for ev in ("PreToolUse", "PostToolUse", "Stop", "SubagentStop"):
+            cmds = [h["command"] for g in qwen_settings["hooks"][ev] for h in g["hooks"]]
+            self.assertEqual(sum("guard_hook.py" in c for c in cmds), 1, ev)
+            self.assertTrue(any(f"--event {ev}" in c and "--protocol qwen" in c for c in cmds), ev)
+        # Antigravity workspace plugin bundle
+        agy_plugin = json.loads((ws / ".agents/plugins/weaveprofiler/plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(agy_plugin["name"], "weaveprofiler")
+        agy_mcp = json.loads((ws / ".agents/plugins/weaveprofiler/mcp_config.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(a.endswith("mcp_server.py") for a in agy_mcp["mcpServers"]["weaveprofiler"]["args"]))
+        agy_hooks = json.loads((ws / ".agents/plugins/weaveprofiler/hooks.json").read_text(encoding="utf-8"))
+        self.assertIn("weaveprofiler", agy_hooks)
+        for ev in ("PreToolUse", "PostToolUse"):
+            groups = agy_hooks["weaveprofiler"][ev]
+            self.assertEqual(groups[0]["matcher"], "*")
+            self.assertIn(f"--event {ev}", groups[0]["hooks"][0]["command"])
+            self.assertIn("--protocol agy", groups[0]["hooks"][0]["command"])
+        for ev in ("PostInvocation", "Stop"):
+            flat = agy_hooks["weaveprofiler"][ev]
+            self.assertIsInstance(flat, list)
+            self.assertIn("command", flat[0])
+            self.assertNotIn("hooks", flat[0])
+            self.assertIn(f"--event {ev}", flat[0]["command"])
+            self.assertIn("--protocol agy", flat[0]["command"])
         toml_text = (ws / ".codex/config.toml").read_text(encoding="utf-8")
         self.assertIn("[mcp_servers.weaveprofiler]", toml_text)
         if tomllib is not None:
@@ -202,6 +234,8 @@ class InstallerTests(_WorkspaceCase):
         launch = self.summary["launch"]
         self.assertIn("claude", launch["claude"])
         self.assertIn("codex", launch["codex"])
+        self.assertIn("qwen", launch["qwen"])
+        self.assertIn("agy", launch["agy"])
         self.assertIn("guard-exec", launch["guard_exec"])
 
     def test_install_is_idempotent_and_preserves_user_config(self) -> None:
@@ -283,6 +317,29 @@ class InstallerTests(_WorkspaceCase):
         empty.mkdir()
         with self.assertRaises(ValueError):
             install_agent_workspace(empty, sessions_root=self.sessions)
+
+    def test_single_agent_qwen_and_agy_isolation(self) -> None:
+        ws_q = self.tmp / "ws_qwen"
+        ws_q.mkdir()
+        (ws_q / "k.cu").write_bytes(KERNEL.encode("utf-8"))
+        install_agent_workspace(ws_q, ["k.cu"], agent="qwen", sessions_root=self.sessions)
+        self.assertTrue((ws_q / ".qwen/settings.json").is_file())
+        self.assertTrue((ws_q / "QWEN.md").is_file())
+        self.assertFalse((ws_q / ".claude").exists())
+        self.assertFalse((ws_q / ".codex").exists())
+        self.assertFalse((ws_q / ".agents").exists())
+
+        ws_a = self.tmp / "ws_agy"
+        ws_a.mkdir()
+        (ws_a / "k.cu").write_bytes(KERNEL.encode("utf-8"))
+        install_agent_workspace(ws_a, ["k.cu"], agent="antigravity", sessions_root=self.sessions)
+        self.assertTrue((ws_a / ".agents/plugins/weaveprofiler/hooks.json").is_file())
+        self.assertTrue((ws_a / ".agents/plugins/weaveprofiler/mcp_config.json").is_file())
+        self.assertTrue((ws_a / "GEMINI.md").is_file())
+        self.assertTrue((ws_a / "AGENTS.md").is_file())
+        self.assertFalse((ws_a / ".claude").exists())
+        self.assertFalse((ws_a / ".codex").exists())
+        self.assertFalse((ws_a / ".qwen").exists())
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +581,203 @@ class GuardHookTests(_WorkspaceCase):
             srv._validate_cmd("python run.py install-agent --reset", "bench_cmd")
         srv._validate_out_path(str(self.tmp / "clean_run"), "out_dir")
         srv._validate_cmd(["python", "bench.py"], "bench_cmd")
+        with self.assertRaises(ValueError):
+            srv._validate_out_path(str(self.ws / ".qwen" / "settings.json"), "out_dir")
+        with self.assertRaises(ValueError):
+            srv._validate_out_path(str(self.ws / ".agents" / "plugins" / "weaveprofiler" / "hooks.json"), "out_dir")
+
+
+class QwenAndAgyProtocolTests(_WorkspaceCase):
+    def _run_proto(self, event: str, payload: dict, *, protocol: str = "auto", extra_env: dict | None = None) -> tuple[int, dict, str]:
+        env = dict(self.env)
+        if extra_env:
+            env.update(extra_env)
+        cmd = [sys.executable, "-B", str(GUARD), "--event", event, "--workspace", str(self.ws),
+               "--session-dir", str(self.sd)]
+        if protocol != "auto":
+            cmd.extend(["--protocol", protocol])
+        proc = subprocess.run(
+            cmd, input=json.dumps(payload).encode("utf-8"),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=120,
+        )
+        out_text = proc.stdout.decode("utf-8", "replace").strip()
+        err_text = proc.stderr.decode("utf-8", "replace")
+        return proc.returncode, (json.loads(out_text) if out_text else {}), err_text
+
+    def test_qwen_protocol_pre_post_stop_and_subagent_stop(self) -> None:
+        # PreToolUse blocks edit on protected file before baseline seal with native JSON decision.
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hook_event_name": "PreToolUse", "cwd": str(self.ws),
+            "tool_name": "edit",
+            "tool_input": {"file_path": str(self.kernel), "old_string": "a[i] + b[i]", "new_string": "a[i] * b[i]"},
+        }, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "block")
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("SEAL_BEFORE_OPTIMIZE", out["reason"])
+
+        # Auto-detection via QWEN_PROJECT_DIR also speaks Qwen JSON and blocks tampering with .qwen/settings.json.
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hook_event_name": "PreToolUse", "cwd": str(self.ws),
+            "tool_name": "run_shell_command",
+            "tool_input": {"command": "rm -f .qwen/settings.json"},
+        }, protocol="auto", extra_env={"QWEN_PROJECT_DIR": str(self.ws)})
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("SUPERVISOR_CONFIG_TAMPER", out["reason"])
+
+        # Read-only Qwen tool allowed cleanly.
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hook_event_name": "PreToolUse", "cwd": str(self.ws),
+            "tool_name": "read_file", "tool_input": {"file_path": str(self.kernel)},
+        }, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "allow")
+
+        # PostToolUse reverts unauthorized mutation and returns block + additionalContext.
+        self.kernel.write_bytes(b"// sneaky edit\n")
+        rc, out, _ = self._run_proto("PostToolUse", {
+            "hook_event_name": "PostToolUse", "cwd": str(self.ws),
+            "tool_name": "exec", "tool_input": {"command": "python evil.py"},
+        }, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("restored", out["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(self.kernel.read_bytes(), KERNEL.encode("utf-8"))
+
+        # Stop and SubagentStop block with decision=block AND stopReason before seal, respecting 3-block cap.
+        rc, out, _ = self._run_proto("SubagentStop", {"stop_hook_active": False, "cwd": str(self.ws)}, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("NO_VERIFIED_PASS_SEAL", out["stopReason"])
+        decisions = [
+            self._run_proto("Stop", {"stop_hook_active": i > 0, "cwd": str(self.ws)}, protocol="qwen")[1]["decision"]
+            for i in range(4)
+        ]
+        self.assertEqual(decisions, ["block", "block", "block", "allow"])
+
+        # After registering a valid PASS seal, edit & Stop unlock, while probe pollution remains blocked.
+        self.assertTrue(register_seal(self.sd, self.make_seal(), kernel_us=11.2)["registered"])
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "tool_name": "edit",
+            "tool_input": {"file_path": str(self.kernel), "old_string": "+", "new_string": "*"},
+            "cwd": str(self.ws),
+        }, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "allow")
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "tool_name": "edit",
+            "tool_input": {"file_path": str(self.kernel), "old_string": "+", "new_string": "WP_OPEN(0); +"},
+            "cwd": str(self.ws),
+        }, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("PROBE_POLLUTION", out["reason"])
+        rc, out, _ = self._run_proto("Stop", {"stop_hook_active": False, "cwd": str(self.ws)}, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "allow")
+
+    def test_agy_protocol_pre_post_post_invocation_and_stop(self) -> None:
+        # Auto-detect Antigravity camelCase toolCall payload on edit_file before seal.
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse",
+            "cwd": str(self.ws),
+            "workspacePaths": [str(self.ws)],
+            "toolCall": {
+                "id": "call_1",
+                "name": "edit_file",
+                "args": {"Path": str(self.kernel), "Target": "a[i] + b[i]", "Replacement": "a[i] * b[i]"},
+            },
+        }, protocol="auto")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "deny")
+        self.assertIn("SEAL_BEFORE_OPTIMIZE", out["reason"])
+
+        # Antigravity run_command with PascalCase CommandLine editing kernel or plugin config is denied.
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "call_2", "name": "run_command", "args": {"CommandLine": "sed -i 's/+/*/' kernel.cu"}},
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "deny")
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "call_3", "name": "write_file", "args": {
+                "Path": str(self.ws / ".agents/plugins/weaveprofiler/hooks.json"), "Content": "{}"}},
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "deny")
+        self.assertIn("SUPERVISOR_CONFIG_TAMPER", out["reason"])
+
+        # Antigravity read_file allowed cleanly.
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "call_4", "name": "read_file", "args": {"Path": str(self.kernel)}},
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, {"decision": "allow"})
+
+        # Antigravity PostToolUse reverts unauthorized mutation, returns `{}`, and PostInvocation delivers the alert.
+        self.kernel.write_bytes(b"// sneaky agy run_command\n")
+        rc, out, _ = self._run_proto("PostToolUse", {
+            "hookEventName": "PostToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "call_5", "name": "run_command", "args": {"CommandLine": "python evil.py"}},
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, {})
+        self.assertEqual(self.kernel.read_bytes(), KERNEL.encode("utf-8"))
+        rc, out, _ = self._run_proto("PostInvocation", {
+            "hookEventName": "PostInvocation", "cwd": str(self.ws), "invocationNum": 1,
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["terminationBehavior"], "force_continue")
+        self.assertIn("restored", out["injectSteps"][0]["systemMessage"]["systemMessage"])
+        # Delivered once and cleared.
+        rc, out, _ = self._run_proto("PostInvocation", {
+            "hookEventName": "PostInvocation", "cwd": str(self.ws), "invocationNum": 2,
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, {})
+
+        # Antigravity Stop returns decision=continue before seal, respects USER_CANCELED, and caps at 3 blocks.
+        rc, out, _ = self._run_proto("Stop", {
+            "hookEventName": "Stop", "cwd": str(self.ws),
+            "terminationReason": "USER_CANCELED", "continuationActive": False,
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, {"decision": "allow"})
+        decisions = [
+            self._run_proto("Stop", {
+                "hookEventName": "Stop", "cwd": str(self.ws),
+                "terminationReason": "NO_TOOL_CALL", "continuationActive": i > 0,
+            }, protocol="agy")[1]["decision"]
+            for i in range(4)
+        ]
+        self.assertEqual(decisions, ["continue", "continue", "continue", "allow"])
+
+        # After PASS seal, edit_file & Stop allow cleanly, while probe macros remain denied.
+        self.assertTrue(register_seal(self.sd, self.make_seal(), kernel_us=9.8)["registered"])
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "call_6", "name": "edit_file", "args": {
+                "Path": str(self.kernel), "Target": "a[i] + b[i]", "Replacement": "__fadd_rn(a[i], b[i])"}},
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, {"decision": "allow"})
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "call_7", "name": "edit_file", "args": {
+                "Path": str(self.kernel), "Target": "a[i] + b[i]", "Replacement": "WP_B(0, 0); a[i] + b[i]"}},
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["decision"], "deny")
+        self.assertIn("PROBE_POLLUTION", out["reason"])
+        rc, out, _ = self._run_proto("Stop", {
+            "hookEventName": "Stop", "cwd": str(self.ws),
+            "terminationReason": "NO_TOOL_CALL", "continuationActive": False,
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, {"decision": "allow"})
 
 
 if __name__ == "__main__":

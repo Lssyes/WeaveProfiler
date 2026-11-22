@@ -294,8 +294,10 @@ class WeaveProfServer:
             os.path.normcase(str(SKILL_ROOT.resolve())).replace("\\", "/").rstrip("/"),
             os.path.normcase(str(self.session_dir.resolve())).replace("\\", "/").rstrip("/"),
             os.path.normcase(str(self.session_dir.parent.resolve())).replace("\\", "/").rstrip("/"),
-            ws + "/.claude", ws + "/.codex", ws + "/.agents/skills/weaveprofiler", ws + "/.mcp.json",
-            home + "/.claude", home + "/.codex",
+            ws + "/.claude", ws + "/.codex", ws + "/.qwen",
+            ws + "/.agents/hooks.json", ws + "/.agents/plugins/weaveprofiler",
+            ws + "/.agents/skills/weaveprofiler", ws + "/.mcp.json",
+            home + "/.claude", home + "/.codex", home + "/.qwen",
         ]
         for r in roots:
             if np == r or np.startswith(r + "/"):

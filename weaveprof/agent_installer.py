@@ -6,8 +6,11 @@
     python -B <skill_root>/weaveprof/agent_installer.py status --workspace <ws>
 
 `install` creates the out-of-workspace session (supervisor key, byte-exact backups,
-session.json) and wires Claude Code (.mcp.json, .claude/settings*.json, skill, CLAUDE.md)
-and OpenAI Codex CLI (.codex/config.toml, .codex/hooks.json, skill, AGENTS.md).
+session.json) and wires:
+  * Claude Code:  .mcp.json, .claude/settings*.json, .claude/skills/weaveprofiler/SKILL.md, CLAUDE.md
+  * Codex CLI:    .codex/config.toml, .codex/hooks.json, .agents/skills/weaveprofiler/SKILL.md, AGENTS.md
+  * Qwen Code:    .qwen/settings.json, .qwen/skills/weaveprofiler/SKILL.md, QWEN.md
+  * Antigravity:  .agents/plugins/weaveprofiler/{plugin.json,mcp_config.json,hooks.json,rules/AGENTS.md,skills/weaveprofiler/SKILL.md}, GEMINI.md, AGENTS.md
 """
 from __future__ import annotations
 
@@ -60,10 +63,14 @@ BEGIN_MARK = "<!-- WEAVEPROFILER:BEGIN -->"
 END_MARK = "<!-- WEAVEPROFILER:END -->"
 KERNEL_SUFFIXES = (".cu", ".cuh", ".hip")
 PY_KERNEL_MARKERS = ("@triton.jit", "@triton.autotune", "@cute.kernel", "@cute.jit", "cutlass.cute")
-SKIP_DIRS = {".git", ".hg", ".svn", ".claude", ".codex", ".agents", "node_modules", "build", "dist", "__pycache__",
-             ".venv", "venv", "env", ".weaveprof", ".weaveprof_cache", ".mypy_cache", ".pytest_cache", "third_party"}
+SKIP_DIRS = {".git", ".hg", ".svn", ".claude", ".codex", ".qwen", ".agents", "node_modules", "build", "dist",
+             "__pycache__", ".venv", "venv", "env", ".weaveprof", ".weaveprof_cache", ".mypy_cache",
+             ".pytest_cache", "third_party"}
 MAX_AUTODISCOVER = 64
 HOOK_EVENTS = ("PreToolUse", "PostToolUse", "Stop")
+QWEN_HOOK_EVENTS = ("PreToolUse", "PostToolUse", "Stop", "SubagentStop")
+AGY_GROUPED_EVENTS = ("PreToolUse", "PostToolUse")
+AGY_FLAT_EVENTS = ("PostInvocation", "Stop")
 
 
 # ---------------------------------------------------------------------------
@@ -245,15 +252,25 @@ def _provision_session(workspace: Path, files: List[Path], *, sd: Path, bench: O
 # Agent wiring
 # ---------------------------------------------------------------------------
 
-def _hook_command(py: str, event: str, workspace: Path, sd: Path) -> str:
-    parts = [_posix(py), "-B", _posix(GUARD_HOOK), "--event", event, "--workspace", _posix(workspace),
-             "--session-dir", _posix(sd)]
-    return " ".join(_shell_quote(x) for x in parts)
+def _hook_command(py: str, event: str, workspace: Path, sd: Path, *,
+                  protocol: Optional[str] = None, ps_safe: bool = False) -> str:
+    parts = [_posix(py), "-B", _posix(GUARD_HOOK), "--workspace", _posix(workspace), "--session-dir", _posix(sd)]
+    if protocol:
+        parts.extend(["--protocol", protocol])
+    parts.extend(["--event", event])
+    quoted = [_shell_quote(x) for x in parts]
+    # On Windows, Qwen Code executes hooks via PowerShell, where a quoted executable path
+    # requires the `&` call operator to avoid being parsed as a string literal.
+    if ps_safe and os.name == "nt" and quoted[0].startswith('"'):
+        return "& " + " ".join(quoted)
+    return " ".join(quoted)
 
 
-def _merge_hooks(doc: Dict[str, Any], py: str, workspace: Path, sd: Path, matcher: str) -> Dict[str, Any]:
+def _merge_hooks(doc: Dict[str, Any], py: str, workspace: Path, sd: Path, matcher: str, *,
+                 events: Sequence[str] = HOOK_EVENTS, protocol: Optional[str] = None,
+                 named: bool = False, ps_safe: bool = False) -> Dict[str, Any]:
     hooks = doc.get("hooks") if isinstance(doc.get("hooks"), dict) else {}
-    for event in HOOK_EVENTS:
+    for event in events:
         groups = hooks.get(event) if isinstance(hooks.get(event), list) else []
         cleaned = []
         for g in groups:
@@ -265,14 +282,43 @@ def _merge_hooks(doc: Dict[str, Any], py: str, workspace: Path, sd: Path, matche
                 g = dict(g)
                 g["hooks"] = inner
                 cleaned.append(g)
-        entry: Dict[str, Any] = {"hooks": [{"type": "command", "command": _hook_command(py, event, workspace, sd),
-                                            "timeout": 120}]}
-        if event != "Stop":
+        handler: Dict[str, Any] = {
+            "type": "command",
+            "command": _hook_command(py, event, workspace, sd, protocol=protocol, ps_safe=ps_safe),
+            "timeout": 120,
+        }
+        if named:
+            handler["name"] = f"weaveprofiler-{event.lower()}"
+        entry: Dict[str, Any] = {"hooks": [handler]}
+        if event not in ("Stop", "SubagentStop"):
             entry = {"matcher": matcher, **entry}
         cleaned.append(entry)
         hooks[event] = cleaned
     doc["hooks"] = hooks
     return doc
+
+
+def _merge_agy_hooks(doc: Dict[str, Any], py: str, workspace: Path, sd: Path) -> Dict[str, Any]:
+    """Build/merge an Antigravity (`agy`) hooks.json entry under top-level key `weaveprofiler`."""
+    out = dict(doc) if isinstance(doc, dict) else {}
+    spec: Dict[str, Any] = {}
+    for event in AGY_GROUPED_EVENTS:
+        spec[event] = [{
+            "matcher": "*",
+            "hooks": [{
+                "type": "command",
+                "command": _hook_command(py, event, workspace, sd, protocol="agy"),
+                "timeout": 120,
+            }],
+        }]
+    for event in AGY_FLAT_EVENTS:
+        spec[event] = [{
+            "type": "command",
+            "command": _hook_command(py, event, workspace, sd, protocol="agy"),
+            "timeout": 120,
+        }]
+    out["weaveprofiler"] = spec
+    return out
 
 
 def _mcp_args(workspace: Path, sd: Path) -> List[str]:
@@ -329,7 +375,8 @@ def _workflow_block(session: Dict[str, Any]) -> str:
         "refuses to finish until the final kernel bytes match a verified PASS seal (or you revert to a sealed "
         "incumbent).\n"
         "6. Off-limits: the supervisor key, the session store, seal/verify/ledger JSON, hook & MCP scripts, "
-        "`.claude/`, `.codex/`, `.mcp.json`; never set `WP_SAMPLE` above 1.\n"
+        "`.claude/`, `.codex/`, `.qwen/`, `.agents/plugins/weaveprofiler/`, `.agents/hooks.json`, `.mcp.json`; "
+        "never set `WP_SAMPLE` above 1.\n"
         f"{END_MARK}\n"
     )
 
@@ -413,13 +460,15 @@ def install_agent_workspace(
     sessions_root: Optional[Union[str, Path]] = None,
     reset: bool = False,
 ) -> Dict[str, Any]:
-    """Provision the session + Claude Code / Codex CLI wiring for a workspace (idempotent)."""
+    """Provision the session + Claude Code / Codex CLI / Qwen Code / Antigravity wiring (idempotent)."""
     ws = Path(workspace).expanduser().resolve()
     if not ws.is_dir():
         raise NotADirectoryError(f"Workspace not found: {ws}")
     agent = (agent or "all").lower()
-    if agent not in ("all", "both", "claude", "codex"):
-        raise ValueError("agent must be one of: all, claude, codex")
+    if agent == "antigravity":
+        agent = "agy"
+    if agent not in ("all", "both", "claude", "codex", "qwen", "agy"):
+        raise ValueError("agent must be one of: all, both, claude, codex, qwen, agy")
     if not (0.0 <= float(max_overhead) <= 0.5):
         raise ValueError("max_overhead must be within [0, 0.5]")
     files = _resolve_protect(ws, protect_files)
@@ -430,6 +479,8 @@ def install_agent_workspace(
     written: List[str] = []
     want_claude = agent in ("all", "both", "claude")
     want_codex = agent in ("all", "both", "codex")
+    want_qwen = agent in ("all", "qwen")
+    want_agy = agent in ("all", "agy")
     skill = _skill_text(ws)
     block = _workflow_block(session)
     mcp_args = _mcp_args(ws, sd)
@@ -467,6 +518,48 @@ def install_agent_workspace(
         _upsert_block(ws / "AGENTS.md", block)
         written += [str(cfg_path), str(hooks_path), str(skill_path), str(ws / "AGENTS.md")]
 
+    if want_qwen:
+        qwen_settings = ws / ".qwen" / "settings.json"
+        qdoc = _load_json(qwen_settings)
+        qdoc["disableAllHooks"] = False
+        qservers = qdoc.get("mcpServers") if isinstance(qdoc.get("mcpServers"), dict) else {}
+        qservers["weaveprofiler"] = {"command": _posix(py), "args": mcp_args, "env": {}}
+        qdoc["mcpServers"] = qservers
+        qdoc = _merge_hooks(
+            qdoc, py, ws, sd, ".*",
+            events=QWEN_HOOK_EVENTS, protocol="qwen", named=True, ps_safe=True,
+        )
+        _dump_json(qwen_settings, qdoc)
+        qskill = ws / ".qwen" / "skills" / "weaveprofiler" / "SKILL.md"
+        _write_text(qskill, skill)
+        _upsert_block(ws / "QWEN.md", block)
+        written += [str(qwen_settings), str(qskill), str(ws / "QWEN.md")]
+
+    if want_agy:
+        plugin_dir = ws / ".agents" / "plugins" / "weaveprofiler"
+        plugin_json = plugin_dir / "plugin.json"
+        pdoc = _load_json(plugin_json)
+        pdoc["name"] = "weaveprofiler"
+        _dump_json(plugin_json, pdoc)
+        agy_mcp = plugin_dir / "mcp_config.json"
+        mdoc = _load_json(agy_mcp)
+        mservers = mdoc.get("mcpServers") if isinstance(mdoc.get("mcpServers"), dict) else {}
+        mservers["weaveprofiler"] = {"command": _posix(py), "args": mcp_args, "env": {}}
+        mdoc["mcpServers"] = mservers
+        _dump_json(agy_mcp, mdoc)
+        agy_hooks = plugin_dir / "hooks.json"
+        _dump_json(agy_hooks, _merge_agy_hooks(_load_json(agy_hooks), py, ws, sd))
+        agy_rules = plugin_dir / "rules" / "AGENTS.md"
+        _upsert_block(agy_rules, block)
+        agy_skill = plugin_dir / "skills" / "weaveprofiler" / "SKILL.md"
+        _write_text(agy_skill, skill)
+        _upsert_block(ws / "GEMINI.md", block)
+        written += [str(plugin_json), str(agy_mcp), str(agy_hooks), str(agy_rules), str(agy_skill),
+                    str(ws / "GEMINI.md")]
+        if not want_codex:
+            _upsert_block(ws / "AGENTS.md", block)
+            written.append(str(ws / "AGENTS.md"))
+
     q = _shell_quote
     run_py = _posix(SKILL_ROOT / "run.py")
     return {
@@ -480,12 +573,19 @@ def install_agent_workspace(
         "launch": {
             "claude": f"cd {q(_posix(ws))} && claude",
             "codex": f"cd {q(_posix(ws))} && codex",
+            "qwen": f"cd {q(_posix(ws))} && qwen",
+            "agy": f"cd {q(_posix(ws))} && agy",
             "guard_exec": (f"{q(_posix(py))} -B {q(run_py)} guard-exec --workspace {q(_posix(ws))} -- "
                            "codex exec \"optimize the protected kernel with WeaveProfiler\""),
         },
         "notes": [
             "Claude Code: project MCP servers are pre-approved via .claude/settings.local.json.",
             "Codex CLI: trust the project so .codex/config.toml and .codex/hooks.json are loaded.",
+            "Qwen Code: MCP + PreToolUse/PostToolUse/Stop/SubagentStop hooks are wired in .qwen/settings.json; "
+            "approve project hooks on first launch (check `/hooks` shows active; for non-interactive runs, trust the "
+            "workspace folder via `security.folderTrust.enabled` and `~/.qwen/trustedFolders.json`).",
+            "Antigravity (`agy`): native workspace plugin installed in `.agents/plugins/weaveprofiler/` "
+            "(MCP server, PreToolUse/PostToolUse/PostInvocation/Stop hooks, rules, and skill).",
         ],
     }
 
@@ -575,7 +675,10 @@ def guard_exec(
         root = str(SKILL_ROOT)
         argv = cmd if isinstance(cmd, list) else shlex.split(cmd)
         ro_mounts = ["--ro-bind", root, root]
-        for target in (ws / ".claude", ws / ".codex", ws / ".agents" / "skills" / "weaveprofiler",
+        for target in (ws / ".claude", ws / ".codex", ws / ".qwen",
+                       ws / ".agents" / "hooks.json",
+                       ws / ".agents" / "plugins" / "weaveprofiler",
+                       ws / ".agents" / "skills" / "weaveprofiler",
                        ws / ".mcp.json", sd / KEY_FILE):
             if target.exists():
                 t = str(target)
@@ -614,7 +717,7 @@ def guard_exec(
 def _add_install_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--workspace", default=".")
     p.add_argument("--protect", action="append", default=None, help="Protected kernel file (repeatable)")
-    p.add_argument("--agent", default="all", choices=("all", "both", "claude", "codex"))
+    p.add_argument("--agent", default="all", choices=("all", "both", "claude", "codex", "qwen", "agy", "antigravity"))
     p.add_argument("--bench", default=None, help="Default benchmark command (string)")
     p.add_argument("--card", default="auto")
     p.add_argument("--arch", default=None)
@@ -628,7 +731,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args_in = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(prog="weaveprof-agent", description="WeaveProfiler (wp) agent installer/supervisor")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p_inst = sub.add_parser("install", help="Provision Claude Code / Codex CLI wiring + session")
+    p_inst = sub.add_parser("install", help="Provision Claude Code / Codex CLI / Qwen Code / Antigravity wiring + session")
     _add_install_args(p_inst)
     p_inst.add_argument("--reset", action="store_true", help="Regenerate key, baseline and seals")
     p_ge = sub.add_parser("guard-exec", help="Run an agent command under the wp supervisor")

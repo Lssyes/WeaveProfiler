@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
-"""WeaveProfiler (`wp`) unified hard-enforcement hook for Claude Code and OpenAI Codex CLI.
+"""WeaveProfiler (`wp`) unified hard-enforcement hook for Claude Code, Codex CLI, Qwen Code, and Antigravity.
 
-Wired by `agent_installer.py` into `.claude/settings.json` and `.codex/hooks.json` as:
+Wired by `agent_installer.py` into:
+  * Claude Code:  `.claude/settings.json`
+  * Codex CLI:    `.codex/hooks.json`
+  * Qwen Code:    `.qwen/settings.json` (`--protocol qwen`)
+  * Antigravity:  `.agents/plugins/weaveprofiler/hooks.json` (`--protocol agy`)
 
-    python -B <skill_root>/weaveprof/guard_hook.py --event PreToolUse|PostToolUse|Stop \
-        --workspace <ws> --session-dir <session_dir>
+Invocation:
 
-The hook reads one JSON event from stdin (`hook_event_name`, `tool_name`, `tool_input`,
-`tool_response`, `cwd`, `stop_hook_active`).  Blocking writes an actionable reason to
-stderr and exits 2; allowing exits 0.
+    python -B <skill_root>/weaveprof/guard_hook.py --event PreToolUse|PostToolUse|PostInvocation|Stop|SubagentStop \
+        --protocol auto|claude|codex|qwen|agy --workspace <ws> --session-dir <session_dir>
+
+The hook reads one JSON event from stdin (supporting both snake_case Claude/Codex/Qwen
+payloads and camelCase Antigravity `toolCall` / `continuationActive` payloads) and emits
+the target agent's native allow/block response:
+  * Claude Code / Codex CLI: exit 0 to allow; stderr reason + exit 2 to block.
+  * Qwen Code: JSON decision on stdout + exit 0 (`permissionDecision: "deny"` for
+    `PreToolUse`; `decision: "block"` + `stopReason` for `Stop` / `SubagentStop`).
+  * Antigravity (`agy`): JSON decision on stdout + exit 0 (`decision: "allow"|"deny"` for
+    `PreToolUse`; `{}` for `PostToolUse` + `PostInvocation` alert injection;
+    `decision: "allow"|"continue"` for `Stop`).
 
 This module also hosts the shared session primitives (session location, HMAC seal
 verification, seal registration, byte-exact backup restore, completion verdict) used by
@@ -65,14 +77,23 @@ SECRET_NEEDLES: Tuple[str, ...] = (
 )
 
 EDIT_TOOLS = {
-    "edit", "write", "multiedit", "notebookedit", "str_replace_based_edit_tool", "str_replace_editor",
-    "create_file", "write_file", "edit_file", "replace", "apply_patch", "applypatch", "patch",
+    "edit", "write", "multiedit", "notebookedit", "notebook_edit", "str_replace_based_edit_tool", "str_replace_editor",
+    "create_file", "write_file", "write_to_file", "edit_file", "replace", "replace_file_content",
+    "multi_replace_file_content", "apply_patch", "applypatch", "patch",
 }
 SHELL_TOOLS = {
-    "bash", "shell", "local_shell", "exec_command", "container.exec", "run_shell_command",
-    "terminal", "powershell", "unified_exec", "run_terminal_cmd",
+    "bash", "shell", "local_shell", "exec", "exec_command", "container.exec", "run_shell_command",
+    "run_command", "terminal", "powershell", "unified_exec", "run_terminal_cmd",
 }
-READ_ONLY_TOOLS = {"read", "grep", "glob", "ls", "websearch", "webfetch", "todowrite", "todoread", "view"}
+READ_ONLY_TOOLS = {
+    "read", "read_file", "grep", "grep_search", "glob", "ls", "list_directory", "list_dir", "find_by_name",
+    "websearch", "web_search", "webfetch", "web_fetch", "todowrite", "todo_write", "todoread",
+    "view", "view_file", "view_file_outline", "view_code_item",
+}
+
+_AGY_TERMINAL_STOP_REASONS = {
+    "USER_CANCELED", "ERROR", "MAX_INVOCATIONS", "MAX_FORCED_INVOCATIONS", "MAX_TOKEN_BUDGET_EXCEEDED",
+}
 
 _SAMPLING_RE = re.compile(
     r"(?:\b(?:FI_SAMPLE|WP_SAMPLE|WEAVEPROF_SAMPLE|--fi-sample|--wp-sample|--sample-stride)\s*(?:=|:|\s)\s*['\"]?[+]?(?:0x[0-9a-f]+|[2-9]|\d{2,})"
@@ -102,7 +123,10 @@ def _shell_write_re(target: str) -> "re.Pattern[str]":
 
 
 _EVIDENCE_WRITE_RE = _shell_write_re(r"seal\.json|verify\.json|episode_ledger\.json")
-_CONFIG_WRITE_RE = _shell_write_re(r"\.claude[/\\]settings[\w.]*\.json|\.codex[/\\][\w.]+|\.mcp\.json")
+_CONFIG_WRITE_RE = _shell_write_re(
+    r"\.claude[/\\]settings[\w.]*\.json|\.codex[/\\][\w.]+|\.qwen[/\\][\w./\\-]+|"
+    r"\.agents[/\\](?:hooks\.json|plugins[/\\]weaveprofiler\b|skills[/\\]weaveprofiler\b)|\.mcp\.json"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -566,13 +590,36 @@ def _tool_kind(tool_name: str) -> Tuple[str, bool]:
     if low.startswith("mcp__"):
         own = "weaveprofiler" in low or "weaveprof_" in low
         return low.rsplit("__", 1)[-1], own
+    if low.startswith("mcp_weaveprofiler_"):
+        return low[len("mcp_weaveprofiler_"):], True
+    if low.startswith("weaveprof_"):
+        return low, True
     return low, False
+
+
+def _extract_tool(payload: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """Extract (tool_name, tool_input_dict) from Claude/Codex/Qwen or Antigravity camelCase payloads."""
+    tool_call = payload.get("toolCall") if isinstance(payload.get("toolCall"), dict) else None
+    tool_name = str(payload.get("tool_name") or (tool_call.get("name") if tool_call else "") or "")
+    tool_input = payload.get("tool_input")
+    if tool_input is None and tool_call is not None:
+        tool_input = tool_call.get("args")
+    if isinstance(tool_input, str):
+        tool_input = {"command": tool_input}
+    return tool_name, (tool_input if isinstance(tool_input, dict) else {})
+
+
+def _iter_ci_values(mapping: Dict[str, Any], keys: Sequence[str]) -> Iterator[Any]:
+    wanted = {k.lower() for k in keys}
+    for k, v in mapping.items():
+        if str(k).lower() in wanted:
+            yield v
 
 
 def _shell_command(tool_input: Dict[str, Any]) -> str:
     parts: List[str] = []
-    for k in ("command", "cmd", "bench", "bench_cmd", "build_cmd"):
-        v = tool_input.get(k)
+    for v in _iter_ci_values(tool_input, ("command", "cmd", "commandline", "command_line",
+                                          "bench", "bench_cmd", "build_cmd")):
         if isinstance(v, (list, tuple)):
             parts.append(" ".join(str(c) for c in v))
         elif isinstance(v, str) and v.strip():
@@ -582,8 +629,7 @@ def _shell_command(tool_input: Dict[str, Any]) -> str:
 
 def _own_output_targets(tool_input: Dict[str, Any], cwd: Path) -> List[Path]:
     out: List[Path] = []
-    for k in ("out_dir", "out", "run_dir"):
-        v = tool_input.get(k)
+    for v in _iter_ci_values(tool_input, ("out_dir", "out", "run_dir")):
         if isinstance(v, str) and v.strip() and "\n" not in v:
             out.append(_resolve(v, cwd))
     return out
@@ -641,17 +687,22 @@ def edit_targets(tool_name: str, tool_input: Any, cwd: Path) -> List[Tuple[Path,
     targets: List[Tuple[Path, str, str]] = []
     if short in EDIT_TOOLS:
         added_parts = []
-        for k in ("content", "new_string", "new_source", "file_text", "new_str", "contents", "text", "code"):
-            v = tool_input.get(k)
+        for v in _iter_ci_values(tool_input, ("content", "new_string", "new_source", "file_text", "new_str",
+                                              "contents", "text", "code", "replacement", "replacementcontent",
+                                              "codecontent")):
             if isinstance(v, str):
                 added_parts.append(v)
-        for ed in tool_input.get("edits") or []:
-            if isinstance(ed, dict):
-                for k in ("new_string", "new_str", "content"):
-                    if isinstance(ed.get(k), str):
-                        added_parts.append(ed[k])
-        for k in ("file_path", "path", "notebook_path", "filename", "target_file", "file"):
-            v = tool_input.get(k)
+        for lst in _iter_ci_values(tool_input, ("edits", "replacementchunks", "replacement_chunks")):
+            if not isinstance(lst, list):
+                continue
+            for ed in lst:
+                if isinstance(ed, dict):
+                    for v in _iter_ci_values(ed, ("new_string", "new_str", "content", "replacement",
+                                                  "replacementcontent")):
+                        if isinstance(v, str):
+                            added_parts.append(v)
+        for v in _iter_ci_values(tool_input, ("file_path", "path", "notebook_path", "filename",
+                                              "target_file", "targetfile", "file")):
             if isinstance(v, str) and v.strip() and "\n" not in v:
                 targets.append((_resolve(v, cwd), "\n".join(added_parts), "write"))
                 break
@@ -708,11 +759,7 @@ class Context:
 
 def handle_pre(ctx: Context) -> None:
     payload = ctx.payload
-    tool_name = str(payload.get("tool_name") or "")
-    tool_input = payload.get("tool_input")
-    if isinstance(tool_input, str):
-        tool_input = {"command": tool_input}
-    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    tool_name, tool_input = _extract_tool(payload)
     short, own = _tool_kind(tool_name)
     blob = _norm("\n".join(_strings(tool_input)))
 
@@ -746,11 +793,16 @@ def handle_pre(ctx: Context) -> None:
         np = os.path.normcase(str(path)).replace("\\", "/")
         cfg = (np == ws_norm + "/.claude" or np.startswith(ws_norm + "/.claude/")
                or np == ws_norm + "/.codex" or np.startswith(ws_norm + "/.codex/")
+               or np == ws_norm + "/.qwen" or np.startswith(ws_norm + "/.qwen/")
                or np == ws_norm + "/.mcp.json"
+               or np == ws_norm + "/.agents/hooks.json"
+               or np == ws_norm + "/.agents/plugins/weaveprofiler"
+               or np.startswith(ws_norm + "/.agents/plugins/weaveprofiler/")
                or np == ws_norm + "/.agents/skills/weaveprofiler"
                or np.startswith(ws_norm + "/.agents/skills/weaveprofiler/")
                or np == home_norm + "/.claude" or np.startswith(home_norm + "/.claude/")
-               or np == home_norm + "/.codex" or np.startswith(home_norm + "/.codex/"))
+               or np == home_norm + "/.codex" or np.startswith(home_norm + "/.codex/")
+               or np == home_norm + "/.qwen" or np.startswith(home_norm + "/.qwen/"))
         if cfg or _under(path, SKILL_ROOT) or _under(path, ctx.session_dir.parent):
             raise HookBlock("SUPERVISOR_CONFIG_TAMPER",
                             f"`{path}` is WeaveProfiler supervisor/agent configuration and is read-only for the agent.")
@@ -759,7 +811,8 @@ def handle_pre(ctx: Context) -> None:
                         "command writes/moves/deletes seal.json / verify.json / episode_ledger.json evidence.")
     if cmd and _CONFIG_WRITE_RE.search(cmd):
         raise HookBlock("SUPERVISOR_CONFIG_TAMPER",
-                        "command modifies `.claude/settings*.json`, `.codex/*` or `.mcp.json` (hook/MCP wiring).")
+                        "command modifies `.claude/settings*.json`, `.codex/*`, `.qwen/*`, `.agents/plugins/weaveprofiler/*`, "
+                        "`.agents/hooks.json`, or `.mcp.json` (hook/MCP wiring).")
 
     if ctx.session is None:
         if short in READ_ONLY_TOOLS or own:
@@ -803,31 +856,97 @@ def handle_pre(ctx: Context) -> None:
                             "unlock automatically once the seal is registered (check with `weaveprof_status`).")
 
 
-def handle_post(ctx: Context) -> None:
+def _is_stop_active(payload: Dict[str, Any]) -> bool:
+    return bool(payload.get("stop_hook_active") or payload.get("continuationActive"))
+
+
+def _detect_protocol(requested: Optional[str], payload: Dict[str, Any]) -> str:
+    req = (requested or "auto").strip().lower()
+    if req in ("claude", "codex", "qwen", "agy"):
+        return req
+    if req == "antigravity":
+        return "agy"
+    if any(k in payload for k in ("hookEventName", "toolCall", "continuationActive", "workspacePaths")):
+        return "agy"
+    if os.environ.get("QWEN_PROJECT_DIR"):
+        return "qwen"
+    return "claude"
+
+
+def _set_pending_post_alert(session_dir: Path, message: Optional[str]) -> None:
+    def _apply(d: Dict[str, Any]) -> None:
+        if message:
+            d["pending_post_alert"] = message
+        else:
+            d.pop("pending_post_alert", None)
+
+    update_session(session_dir, _apply)
+
+
+def _pop_pending_post_alert(session_dir: Path) -> Optional[str]:
+    holder: Dict[str, Optional[str]] = {"msg": None}
+
+    def _apply(d: Dict[str, Any]) -> None:
+        val = d.pop("pending_post_alert", None)
+        if isinstance(val, str) and val.strip():
+            holder["msg"] = val
+
+    update_session(session_dir, _apply)
+    return holder["msg"]
+
+
+def handle_post(ctx: Context, *, protocol: str = "claude") -> None:
     if ctx.session is None:
         return
     mutated = mutated_since_baseline(ctx.session)
     if mutated and not ctx.valid_seals():
         restored = restore_protected(ctx.session, mutated)
-        raise HookBlock("UNAUTHORIZED_PRE_PROFILE_MUTATION",
-                        f"protected kernel file(s) {mutated} changed before any verified PASS seal existed (e.g. via "
-                        f"Bash/python). The exact baseline bytes were restored ({restored}). Call "
-                        + SEALING_TOOLS_HINT + " on the baseline first; edits unlock after the seal.")
+        blk = HookBlock(
+            "UNAUTHORIZED_PRE_PROFILE_MUTATION",
+            f"protected kernel file(s) {mutated} changed before any verified PASS seal existed (e.g. via "
+            f"shell/script). The exact baseline bytes were restored ({restored}). Call "
+            + SEALING_TOOLS_HINT + " on the baseline first; edits unlock after the seal.",
+        )
+        if protocol == "agy":
+            _set_pending_post_alert(ctx.session_dir, str(blk))
+        raise blk
     polluted = {}
     for e in ctx.protected():
         toks = new_probe_tokens(e)
         if toks:
             polluted[str(e.get("rel"))] = toks
     if polluted:
-        raise HookBlock("PROBE_POLLUTION",
-                        f"protected kernel source now contains probe macros {polluted}. Remove them: production "
-                        "kernel source must stay probe-free; profiling instruments a shadow copy via "
-                        + SEALING_TOOLS_HINT + ".")
+        blk = HookBlock(
+            "PROBE_POLLUTION",
+            f"protected kernel source now contains probe macros {polluted}. Remove them: production "
+            "kernel source must stay probe-free; profiling instruments a shadow copy via "
+            + SEALING_TOOLS_HINT + ".",
+        )
+        if protocol == "agy":
+            _set_pending_post_alert(ctx.session_dir, str(blk))
+        raise blk
 
 
-def handle_stop(ctx: Context) -> None:
+def handle_post_invocation(ctx: Context) -> Dict[str, Any]:
     if ctx.session is None:
-        if ctx.payload.get("stop_hook_active"):
+        return {}
+    alert = _pop_pending_post_alert(ctx.session_dir)
+    if not alert:
+        return {}
+    return {
+        "injectSteps": [{"systemMessage": {"systemMessage": alert}}],
+        "terminationBehavior": "force_continue",
+    }
+
+
+def handle_stop(ctx: Context, *, protocol: str = "claude") -> None:
+    if protocol == "agy":
+        term = str(ctx.payload.get("terminationReason") or "").strip().upper()
+        if term in _AGY_TERMINAL_STOP_REASONS:
+            return
+    stop_active = _is_stop_active(ctx.payload)
+    if ctx.session is None:
+        if stop_active:
             sys.stderr.write(f"{TAG} WARNING: no session found; allowing stop to avoid a loop.\n")
             return
         raise HookBlock("SESSION_MISSING", f"no WeaveProfiler session at {ctx.session_dir.name}; cannot verify "
@@ -838,7 +957,7 @@ def handle_stop(ctx: Context) -> None:
     holder: Dict[str, int] = {}
 
     def _inc(d: Dict[str, Any]) -> None:
-        base = int(d.get("stop_blocks") or 0) if ctx.payload.get("stop_hook_active") else 0
+        base = int(d.get("stop_blocks") or 0) if stop_active else 0
         n = base + 1
         holder["n"] = n
         d["stop_blocks"] = 0 if n > STOP_BLOCK_LIMIT else n
@@ -850,6 +969,82 @@ def handle_stop(ctx: Context) -> None:
                          f"infinite loop. Unresolved: {comp['blockers']}\n")
         return
     raise HookBlock("STOP_GATE", f"cannot finish yet (block {n}/{STOP_BLOCK_LIMIT}): " + " | ".join(comp["blockers"]))
+
+
+def _emit_json(doc: Dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(doc, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def _emit_allow(protocol: str, event: str, extra: Optional[Dict[str, Any]] = None) -> int:
+    if protocol == "agy":
+        if event in ("PreToolUse", "Stop", "SubagentStop"):
+            _emit_json({"decision": "allow"})
+        elif event == "PostInvocation":
+            _emit_json(extra or {})
+        else:
+            _emit_json({})
+        return EXIT_ALLOW
+    if protocol == "qwen":
+        _emit_json({"decision": "allow"})
+        return EXIT_ALLOW
+    return EXIT_ALLOW
+
+
+def _emit_block(protocol: str, event: str, message: str) -> int:
+    if protocol == "agy":
+        if event == "PreToolUse":
+            _emit_json({"decision": "deny", "reason": message})
+            return EXIT_ALLOW
+        if event in ("Stop", "SubagentStop"):
+            _emit_json({"decision": "continue", "reason": message})
+            return EXIT_ALLOW
+        if event == "PostInvocation":
+            _emit_json({
+                "injectSteps": [{"systemMessage": {"systemMessage": message}}],
+                "terminationBehavior": "force_continue",
+            })
+            return EXIT_ALLOW
+        # Antigravity PostToolUse contract expects `{}`; mutation was reverted on disk
+        # and queued for PostInvocation system-message injection.
+        sys.stderr.write(message + "\n")
+        _emit_json({})
+        return EXIT_ALLOW
+    if protocol == "qwen":
+        if event == "PreToolUse":
+            _emit_json({
+                "decision": "block",
+                "reason": message,
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": message,
+                },
+            })
+            return EXIT_ALLOW
+        if event == "PostToolUse":
+            _emit_json({
+                "decision": "block",
+                "reason": message,
+                "systemMessage": message,
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": message,
+                },
+            })
+            return EXIT_ALLOW
+        if event in ("Stop", "SubagentStop"):
+            _emit_json({
+                "decision": "block",
+                "reason": message,
+                "stopReason": message,
+                "systemMessage": message,
+            })
+            return EXIT_ALLOW
+        _emit_json({"decision": "block", "reason": message})
+        return EXIT_ALLOW
+    sys.stderr.write(message + "\n")
+    return EXIT_BLOCK
 
 
 def _read_payload() -> Dict[str, Any]:
@@ -867,29 +1062,34 @@ def _read_payload() -> Dict[str, Any]:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="WeaveProfiler (wp) Claude Code / Codex CLI enforcement hook")
-    ap.add_argument("--event", choices=("PreToolUse", "PostToolUse", "Stop", "SubagentStop"))
+    ap = argparse.ArgumentParser(
+        description="WeaveProfiler (wp) Claude Code / Codex CLI / Qwen Code / Antigravity enforcement hook"
+    )
+    ap.add_argument("--event", choices=("PreToolUse", "PostToolUse", "PostInvocation", "Stop", "SubagentStop"))
+    ap.add_argument("--protocol", default="auto", choices=("auto", "claude", "codex", "qwen", "agy", "antigravity"))
     ap.add_argument("--workspace")
     ap.add_argument("--session-dir")
     ap.add_argument("--sessions-root")
     args = ap.parse_args(list(argv) if argv is not None else None)
     payload = _read_payload()
-    event = args.event or str(payload.get("hook_event_name") or "")
+    event = args.event or str(payload.get("hookEventName") or payload.get("hook_event_name") or "")
+    protocol = _detect_protocol(args.protocol, payload)
     try:
         ctx = Context(payload, args)
+        extra: Optional[Dict[str, Any]] = None
         if event == "PreToolUse":
             handle_pre(ctx)
         elif event == "PostToolUse":
-            handle_post(ctx)
+            handle_post(ctx, protocol=protocol)
+        elif event == "PostInvocation":
+            extra = handle_post_invocation(ctx)
         elif event in ("Stop", "SubagentStop"):
-            handle_stop(ctx)
-        return EXIT_ALLOW
+            handle_stop(ctx, protocol=protocol)
+        return _emit_allow(protocol, event, extra)
     except HookBlock as blk:
-        sys.stderr.write(str(blk) + "\n")
-        return EXIT_BLOCK
+        return _emit_block(protocol, event, str(blk))
     except Exception as exc:  # fail closed with a visible reason
-        sys.stderr.write(f"{TAG} BLOCKED (HOOK_ERROR): {type(exc).__name__}: {exc}\n")
-        return EXIT_BLOCK
+        return _emit_block(protocol, event, f"{TAG} BLOCKED (HOOK_ERROR): {type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":
