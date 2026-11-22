@@ -19,8 +19,10 @@ from .harness import (
     summarize_failed_timeline,
     verify_compiler_spill_gate,
     verify_semantic_body_and_stubs,
+    verify_stage_granularity,
     verify_sw_hw_coverage,
     verify_trace_processor_sql,
+    verify_warp_completeness,
 )
 from .workspace import implementation, read_json, write_json
 
@@ -143,8 +145,32 @@ def assess(directory, spec, limit, runtime=None):
         fires = summary["fires"]
         metrics["overflow"] = dump["overflow"]
         metrics["pairing_errors"] = summary["errors"]
-        checks["pairing"] = not any(summary["errors"].values()) and dump["overflow"] == 0 and all(
-            fires.get(p.get("id") or p.get("probe_id"), 0) > 0 for p in spec["probes"])
+        gran_gate = (
+            {"ok": True, "code": None, "skipped": True}
+            if runtime.get("allow_single_stage_collapse") is True
+            else verify_stage_granularity(
+                trace,
+                min_active_us=float(runtime.get("min_collapse_active_us", 100.0)),
+            )
+        )
+        warp_gate = (
+            {"ok": True, "code": None, "skipped": True}
+            if runtime.get("allow_partial_warps") is True
+            else verify_warp_completeness(summary, trace, expected_warps=runtime.get("expected_warps_per_cta"))
+        )
+        metrics["granularity_gate"] = gran_gate
+        metrics["warp_gate"] = warp_gate
+        if not gran_gate["ok"]:
+            errors["granularity"] = gran_gate["message"]
+        if not warp_gate["ok"]:
+            errors["warp_completeness"] = warp_gate["message"]
+        checks["pairing"] = (
+            not any(summary["errors"].values())
+            and dump["overflow"] == 0
+            and bool(gran_gate["ok"])
+            and bool(warp_gate["ok"])
+            and all(fires.get(p.get("id") or p.get("probe_id"), 0) > 0 for p in spec["probes"])
+        )
     except (OSError, ValueError, TypeError, KeyError, SystemExit) as exc:
         errors["pairing"] = str(exc)
     try:
@@ -273,6 +299,18 @@ def validate_trace_product(aligned, summary, spec, source_text, runtime):
     )
     if runtime.get("enforce_stub_gate") and not stub_report["ok"]:
         failures.append(f"Empty/self-latency stub probes detected: {[s['stage'] for s in stub_report['stubs']]}")
+
+    if runtime.get("allow_single_stage_collapse") is not True:
+        gran_rep = verify_stage_granularity(
+            aligned,
+            min_active_us=float(runtime.get("min_collapse_active_us", 100.0)),
+        )
+        if not gran_rep["ok"]:
+            failures.append(gran_rep["message"])
+    if runtime.get("allow_partial_warps") is not True:
+        warp_rep = verify_warp_completeness(summary, aligned, expected_warps=wpc)
+        if not warp_rep["ok"]:
+            failures.append(warp_rep["message"])
 
     coverage_report = None
     hw_kernel_us = al.get("kernel_duration_us") or runtime.get("hw_kernel_us")

@@ -669,6 +669,44 @@ class MegakernelAuditTest(_TmpCase):
         self.assertEqual(rep_ok["status"], "PASS", rep_ok)
         self.assertTrue(rep_ok["fidelity_gates"]["warps"]["ok"])
 
+        # Regression: 9-warp persistent megakernel (~1,200 us) with 3 outer macro-blocks (25% / 5% / 70%)
+        # and a resident hollow producer warp (w8 open 0..1200 us with only 1 tiny 5 us dot) MUST fail closed.
+        wpc9 = 9
+        coarse_names = {
+            "events": {"4": "csa_attn", "5": "norm_router", "6": "moe_fused", "1": "dummy_init"},
+            "semantics": {"4": "attention", "5": "compute", "6": "moe", "1": "load"},
+            "roles": {"0": "compute_wg", "1": "producer_dma"},
+        }
+        slots9 = {}
+        end_ns = BASE_NS + 1_200_000
+        for cta in range(n_ctas):
+            for w in range(8):
+                slots9[cta * wpc9 + w] = [
+                    (BASE_NS, OPEN | 0, cta),
+                    (BASE_NS + 1_000, 4, 0), (BASE_NS + 300_000, END | 4, 0),
+                    (BASE_NS + 300_000, 5, 0), (BASE_NS + 360_000, END | 5, 0),
+                    (BASE_NS + 360_000, 6, 0), (end_ns - 1_000, END | 6, 0),
+                    (end_ns, CLOSE, 0),
+                ]
+            slots9[cta * wpc9 + 8] = [
+                (BASE_NS, OPEN | 1, cta),
+                (BASE_NS + 1_000, 1, 0), (BASE_NS + 6_000, END | 1, 0),
+                (end_ns, CLOSE, 0),
+            ]
+        dump_lazy = self.tmp / "lazy_9w.wp02.bin"
+        dump_lazy.write_bytes(WPD.build_dump_bytes(slots9, n_slots=n_ctas * wpc9, cap=16, wpc=wpc9,
+                                                   meta={"arch": "sm_90", "gran": 0, "kernel": "csa_moe_mk"}))
+        rep_lazy = mk.run_megakernel_audit(
+            ws, entry_source="sparse_mla.cu", dump_path=dump_lazy, names=coarse_names,
+            runtime_metrics=runtime_metrics(), card="h20", limit=0.10, out_dir=self.tmp / "out-lazy-9w",
+            render_overview_png=False,
+        )
+        self.assertEqual(rep_lazy["status"], "FAIL", rep_lazy)
+        self.assertFalse(rep_lazy["fidelity_gates"]["granularity"]["ok"])
+        self.assertEqual(rep_lazy["fidelity_gates"]["granularity"]["code"], "COARSE_PHASE_ONLY_COLLAPSE")
+        self.assertFalse(rep_lazy["fidelity_gates"]["warps"]["ok"])
+        self.assertEqual(rep_lazy["fidelity_gates"]["warps"]["code"], "HOLLOW_WARP_LANE")
+
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})
         self.assertEqual(rep["status"], "FAIL", rep)

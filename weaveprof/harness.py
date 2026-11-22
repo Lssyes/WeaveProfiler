@@ -1555,6 +1555,9 @@ def verify_semantic_body_and_stubs(
 
 
 _COLLAPSE_WAIT_RE = re.compile(r"(?:wait|barrier|grid_sync|sync_wait|stall|idle|spin|poll)", re.I)
+_MEM_SEM_RE = re.compile(r"(?:load|dma|tma|cp_async|copy|prefetch|gather|store|epilogue|scatter|pull|dispatch_pull)", re.I)
+_COMP_SEM_RE = re.compile(r"(?:mma|wgmma|umma|gemm|mfma|compute|softmax|attention|conv|norm|reduce|reduction|moe)", re.I)
+_IDLE_ROLE_RE = re.compile(r"(?:idle|unused|noop|empty|disabled)", re.I)
 
 
 def verify_stage_granularity(
@@ -1564,28 +1567,46 @@ def verify_stage_granularity(
     min_active_us: float = 20.0,
     max_collapsed_spans_per_lane: float = 1.05,
 ) -> Dict[str, Any]:
-    """Fail closed when the entire main loop collapses into a single un-decomposed stage bar.
+    """Fail closed when intra-loop structure is hidden behind 1 or 2-4 coarse outer macro-blocks.
 
-    A trace where one non-wait stage accounts for >= 95% of active time and executes at most
-    once per lane (e.g. hoisting every per-tile load/mma/softmax probe out to the enclosing
-    loop boundary) hides all intra-loop structure and must NOT pass verification.
+    Catches both:
+      1) `SINGLE_STAGE_LOOP_COLLAPSE`: a single non-wait stage absorbs >= 95% of active time in
+         <= 1.05 spans/lane (per_lane_us >= 20 us).
+      2) `COARSE_PHASE_ONLY_COLLAPSE`: a multi-phase kernel is sliced into only a handful of
+         coarse outer blocks (e.g. `CSA Attn 25% + Router 5% + MoE 70%`, <= 1.5 spans/lane each)
+         without decomposing memory (`load`/`store`) vs compute (`mma`/`compute`) stages or
+         leaving >= 250 us macro-blocks un-decomposed at warp granularity (`gran == 0`).
     """
     stage_us: Dict[str, float] = {}
     stage_n: Dict[str, int] = {}
     stage_lanes: Dict[str, set] = {}
+    all_active_lanes: set = set()
+    has_mem_sem = False
+    has_comp_sem = False
+    other = trace.get("otherData") if isinstance(trace.get("otherData"), Mapping) else {}
+    gran = int(other.get("gran") if other.get("gran") is not None else 1)
     for ev in (trace.get("traceEvents") or []):
         if ev.get("ph") != "X" or ev.get("cat") in ("nsys_kernel", "info"):
             continue
+        args = ev.get("args") or {}
+        if args.get("kind") == "residency":
+            continue
+        if "warp" in args and other.get("gran") is None:
+            gran = 0
         dur = float(ev.get("dur") or 0.0)
         if dur <= 0.0 or not math.isfinite(dur):
             continue
-        args = ev.get("args") or {}
         name = str(ev.get("name") or "stage")
-        sem = str(args.get("semantic_id") or name)
+        sem = str(args.get("semantic_id") or ev.get("cat") or name)
         if _COLLAPSE_WAIT_RE.search(name) or _COLLAPSE_WAIT_RE.search(sem):
             continue
+        if _MEM_SEM_RE.search(sem) or _MEM_SEM_RE.search(name):
+            has_mem_sem = True
+        if _COMP_SEM_RE.search(sem) or _COMP_SEM_RE.search(name):
+            has_comp_sem = True
         key = str(args.get("original_label") or name)
         lane = args.get("wave_slot") if args.get("wave_slot") is not None else (ev.get("pid"), ev.get("tid"))
+        all_active_lanes.add(lane)
         stage_us[key] = stage_us.get(key, 0.0) + dur
         stage_n[key] = stage_n.get(key, 0) + 1
         stage_lanes.setdefault(key, set()).add(lane)
@@ -1602,25 +1623,65 @@ def verify_stage_granularity(
     dom_lanes = max(1, len(stage_lanes.get(dom_stage) or ()))
     spans_per_lane = stage_n[dom_stage] / float(dom_lanes)
     per_lane_us = dom_us / float(dom_lanes)
-    collapsed = bool(
+    total_lanes = max(1, len(all_active_lanes))
+    overall_spans_per_lane = sum(stage_n.values()) / float(total_lanes)
+    overall_per_lane_us = total_us / float(total_lanes)
+
+    single_collapsed = bool(
         per_lane_us >= float(min_active_us)
         and dom_share >= float(max_single_stage_share)
         and spans_per_lane <= float(max_collapsed_spans_per_lane)
     )
+    multi_coarse_no_mem = bool(
+        overall_per_lane_us >= 60.0
+        and overall_spans_per_lane <= 8.0
+        and spans_per_lane <= 1.5
+        and per_lane_us >= 50.0
+        and not (has_mem_sem and has_comp_sem)
+    )
+    multi_coarse_long_warp = bool(
+        gran == 0
+        and overall_per_lane_us >= 450.0
+        and dom_share >= 0.40
+        and per_lane_us >= 250.0
+        and spans_per_lane <= 1.5
+        and overall_spans_per_lane <= 6.0
+    )
+    coarse_collapsed = (not single_collapsed) and (multi_coarse_no_mem or multi_coarse_long_warp)
+    ok = not (single_collapsed or coarse_collapsed)
+    code = (
+        "SINGLE_STAGE_LOOP_COLLAPSE" if single_collapsed
+        else ("COARSE_PHASE_ONLY_COLLAPSE" if coarse_collapsed else None)
+    )
+    if single_collapsed:
+        msg = (
+            f"Stage '{dom_stage}' absorbs {100.0 * dom_share:.1f}% of active time in {spans_per_lane:.2f} "
+            f"spans/lane ({per_lane_us:.1f} us/lane): main loop collapsed into a single coarse bar; "
+            "preserve per-tile stages (load/mma/softmax/epilogue) inside the loop."
+        )
+    elif coarse_collapsed:
+        msg = (
+            f"Coarse outer-phase collapse detected: {len(stage_us)} stage(s) average only "
+            f"{overall_spans_per_lane:.2f} total spans/lane ({overall_per_lane_us:.1f} us/lane; "
+            f"dominant '{dom_stage}' = {100.0 * dom_share:.1f}%, {per_lane_us:.1f} us/lane, "
+            f"{spans_per_lane:.2f} spans/lane, has_mem={has_mem_sem}, has_comp={has_comp_sem}). "
+            "Instrument per-tile/per-task load, mma/compute, and epilogue/store stages inside the loop "
+            "instead of 2-4 outer macro-phase blocks."
+        )
+    else:
+        msg = ""
     return {
-        "ok": not collapsed,
-        "code": "SINGLE_STAGE_LOOP_COLLAPSE" if collapsed else None,
+        "ok": ok,
+        "code": code,
         "distinct_active_stages": len(stage_us),
         "dominant_stage": dom_stage,
         "dominant_share_pct": round(100.0 * dom_share, 2),
         "spans_per_lane": round(spans_per_lane, 3),
+        "overall_spans_per_lane": round(overall_spans_per_lane, 3),
         "per_lane_us": round(per_lane_us, 3),
-        "message": (
-            f"Stage '{dom_stage}' absorbs {100.0 * dom_share:.1f}% of active time in {spans_per_lane:.2f} "
-            f"spans/lane ({per_lane_us:.1f} us/lane): main loop collapsed into a single coarse bar; "
-            "preserve per-tile stages (load/mma/softmax) inside the loop."
-            if collapsed else ""
-        ),
+        "has_memory_stage": has_mem_sem,
+        "has_compute_stage": has_comp_sem,
+        "message": msg,
     }
 
 
@@ -1629,58 +1690,127 @@ def verify_warp_completeness(
     trace: Mapping[str, Any],
     *,
     expected_warps: Optional[int] = None,
+    min_hollow_lifetime_us: float = 50.0,
+    min_warp_coverage_ratio: float = 0.05,
 ) -> Dict[str, Any]:
-    """Fail closed when warp-granularity profiling silently drops warps inside a CTA.
+    """Fail closed when warp-granularity profiling drops warps OR leaves active warps hollow.
 
-    When `gran == 0` and `warps_per_cta > 1` (e.g. 12-warp Hopper FA3 / FlashMLA or
-    4/8-warp Triton kernels), EVERY warp `0..wpc-1` must be recorded (`WP_KERNEL_SCOPE`,
-    never filtering to one representative warp per warpgroup like `warp % 4 == 0`).
+    1) `WARP_COVERAGE_INCOMPLETE`: every warp `0..wpc-1` must be recorded at `gran == 0`.
+    2) `HOLLOW_WARP_LANE`: if a warp stays resident for `>= min_hollow_lifetime_us` (i.e. NOT a
+       genuine early-exit warp that returns in `< 50 us`, nor an explicitly named `idle` role)
+       yet logs `<= 1.05` spans/CTA covering `< 5%` of its resident lifetime (e.g. `WP_OPEN` +
+       1 tiny dummy dot + `WP_CLOSE` leaving >95% blank space), fail closed.
     """
     gran = int(summary.get("gran") or 0)
     wpc = int(expected_warps or summary.get("wpc") or 1)
     warps_seen: set = set()
-    # 1) Authoritative opened warp lanes from decoder lane_bounds_ns (includes OPEN/CLOSE-only idle warps)
+    warp_lifetime_us: Dict[int, List[float]] = {}
+    warp_span_us: Dict[int, float] = {}
+    warp_span_count: Dict[int, int] = {}
+    warp_lane_count: Dict[int, int] = {}
+    warp_roles: Dict[int, set] = {}
+
     lb = summary.get("lane_bounds_ns") or {}
     if isinstance(lb, Mapping) and wpc > 0:
-        for slot_k in lb:
+        for slot_k, bounds in lb.items():
             try:
-                warps_seen.add(int(slot_k) % wpc)
+                w = int(slot_k) % wpc
+                warps_seen.add(w)
+                warp_lane_count[w] = warp_lane_count.get(w, 0) + 1
+                if isinstance(bounds, (list, tuple)) and len(bounds) >= 2:
+                    life_us = max(0.0, (float(bounds[1]) - float(bounds[0])) / 1000.0)
+                    warp_lifetime_us.setdefault(w, []).append(life_us)
             except (ValueError, TypeError):
                 pass
-    # 2) Also union with spans / thread_name metadata in case lane_bounds_ns is absent
+
     for ev in (trace.get("traceEvents") or []):
         ph = ev.get("ph")
         if ph == "X" and ev.get("cat") not in ("nsys_kernel", "info"):
             args = ev.get("args") or {}
+            if args.get("kind") == "residency":
+                if "warp" in args:
+                    w = int(args["warp"])
+                    warps_seen.add(w)
+                    dur_u = max(0.0, float(ev.get("dur") or 0.0))
+                    if dur_u > 0.0 and w not in warp_lifetime_us:
+                        warp_lifetime_us.setdefault(w, []).append(dur_u)
+                continue
             if "warp" in args:
-                warps_seen.add(int(args["warp"]))
+                w = int(args["warp"])
+                warps_seen.add(w)
+                dur_u = max(0.0, float(ev.get("dur") or 0.0))
+                warp_span_us[w] = warp_span_us.get(w, 0.0) + dur_u
+                warp_span_count[w] = warp_span_count.get(w, 0) + 1
+                rname = str(args.get("role") or "")
+                if rname:
+                    warp_roles.setdefault(w, set()).add(rname)
         elif ph == "M" and ev.get("name") == "thread_name":
             tname = str((ev.get("args") or {}).get("name") or "")
             m = re.search(r"\b(?:w|warp\s*)(\d+)\b", tname, re.I)
             if m:
-                warps_seen.add(int(m.group(1)))
+                w = int(m.group(1))
+                warps_seen.add(w)
+                warp_roles.setdefault(w, set()).add(tname)
+
     if gran == 0 and wpc > 1:
         expected = set(range(wpc))
         missing = sorted(expected - warps_seen)
-        ok = len(missing) == 0
-        return {
-            "ok": ok,
-            "code": None if ok else "WARP_COVERAGE_INCOMPLETE",
-            "expected_warps": wpc,
-            "observed_warps": sorted(warps_seen),
-            "missing_warps": missing,
-            "message": (
-                "" if ok else
-                f"Only {len(warps_seen)}/{wpc} warps/CTA recorded (observed={sorted(warps_seen)}, "
-                f"missing={missing}); record ALL warps 0..{wpc - 1} (do not filter to 1 warp per warpgroup)."
-            ),
-        }
+        if missing:
+            return {
+                "ok": False,
+                "code": "WARP_COVERAGE_INCOMPLETE",
+                "expected_warps": wpc,
+                "observed_warps": sorted(warps_seen),
+                "missing_warps": missing,
+                "hollow_warps": [],
+                "message": (
+                    f"Only {len(warps_seen)}/{wpc} warps/CTA recorded (observed={sorted(warps_seen)}, "
+                    f"missing={missing}); record ALL warps 0..{wpc - 1} (do not filter to 1 warp per warpgroup)."
+                ),
+            }
+        hollow_warps = []
+        for w in sorted(expected):
+            lives = warp_lifetime_us.get(w) or []
+            if not lives:
+                continue
+            med_life = sorted(lives)[len(lives) // 2]
+            if med_life < float(min_hollow_lifetime_us):
+                continue  # Legitimate early-exit warp (e.g. FA3 W01..W03 exiting in 0.54 us)
+            roles_w = " ".join(sorted(warp_roles.get(w) or ()))
+            if roles_w and _IDLE_ROLE_RE.search(roles_w):
+                continue
+            n_lanes_w = max(1, warp_lane_count.get(w) or len(lives))
+            spans_per_cta = warp_span_count.get(w, 0) / float(n_lanes_w)
+            cov_ratio = (warp_span_us.get(w, 0.0) / float(n_lanes_w)) / max(med_life, 1e-6)
+            if spans_per_cta <= 1.05 and cov_ratio < float(min_warp_coverage_ratio):
+                hollow_warps.append({
+                    "warp": w,
+                    "median_lifetime_us": round(med_life, 2),
+                    "spans_per_cta": round(spans_per_cta, 3),
+                    "coverage_pct": round(100.0 * cov_ratio, 2),
+                })
+        if hollow_warps:
+            hw_ids = [h["warp"] for h in hollow_warps]
+            return {
+                "ok": False,
+                "code": "HOLLOW_WARP_LANE",
+                "expected_warps": wpc,
+                "observed_warps": sorted(warps_seen),
+                "missing_warps": [],
+                "hollow_warps": hollow_warps,
+                "message": (
+                    f"Hollow resident warp lanes detected on warps {hw_ids}: {hollow_warps}. "
+                    "Long-lived warps (>= 50 us) cannot just emit WP_OPEN/WP_CLOSE or a single tiny stub dot "
+                    "leaving >95% blank space; instrument their actual producer/DMA/compute loop or cross-warp slot handoffs."
+                ),
+            }
     return {
         "ok": True,
         "code": None,
         "expected_warps": wpc,
         "observed_warps": sorted(warps_seen),
         "missing_warps": [],
+        "hollow_warps": [],
         "message": "",
     }
 

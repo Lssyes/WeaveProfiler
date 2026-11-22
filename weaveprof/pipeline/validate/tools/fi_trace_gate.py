@@ -173,6 +173,22 @@ def audit_json_trace(
                 f"G1 sparse K-tile coverage in full/sw_hw trace: n_inner_k_slices={n_inner_k_slices} "
                 f"for n_gemm_slices={n_gemm_slices} (appears to be sample1 kt=0 instead of full K-loop)"
             )
+    if require_hw and by_track_x and int(other.get("gran", 0)) == 0:
+        all_durs_us = [
+            (e_ns - s_ns) / 1000.0
+            for ivs in by_track_x.values()
+            for (s_ns, e_ns, nm_iv) in ivs
+            if nm_iv not in ("residency", "cta_residency", "warp_residency") and (e_ns - s_ns) > 0
+        ]
+        n_tracks = max(1, len(by_track_x))
+        slices_per_track = len(all_durs_us) / float(n_tracks)
+        mean_dur_us = (sum(all_durs_us) / len(all_durs_us)) if all_durs_us else 0.0
+        if len(by_track_x) >= 4 and slices_per_track <= 4.0 and mean_dur_us >= 120.0:
+            errors.append(
+                f"G1 coarse macro-phase collapse: only {slices_per_track:.2f} software slices/track "
+                f"with mean duration {mean_dur_us:.1f} us across {n_tracks} warp tracks "
+                "(instrument inner tile/task load, mma/compute, and epilogue stages)"
+            )
 
     # G2 & G3: hardware utilization [0-100%] & topmost pinning (sort_index AND R6 pid < sw_pid)
     if require_hw and not hw_counters:

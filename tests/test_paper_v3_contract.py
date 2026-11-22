@@ -145,7 +145,7 @@ class PaperContractTests(unittest.TestCase):
         result = engine.inject_probes(paper_source(), HANDOFF)
         self.assertTrue(result["ok"], result["diagnostics"])
         code, names = result["instrumented_source"], result["names"]
-        self.assertIn("wp_g", code)
+        self.assertIn("WP_OPEN_BY(", code)
         self.assertIn("wp_lite.cuh", code)
         self.assertLess(code.index("WP_B("), code.index("tma_load_async(s)"))
         self.assertLess(code.index("full_bar[s].wait()"), code.index("WP_E("))
