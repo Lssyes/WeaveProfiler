@@ -279,10 +279,24 @@ class FrontendFacadeTest(unittest.TestCase):
                     os.environ[k] = v
         self.addCleanup(restore)
 
+    def _patch_modules(self, mapping):
+        sentinel = object()
+        saved = {k: sys.modules.get(k, sentinel) for k in mapping}
+        for k, v in mapping.items():
+            sys.modules[k] = v
+
+        def restore():
+            for k, old in saved.items():
+                if old is sentinel:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = old
+        self.addCleanup(restore)
+
     def test_wp_cute_maps_env_and_degrades_without_cutlass(self):
         self._env(WP_LEVEL=1, WP_GRAN=1)
-        with mock.patch.dict(sys.modules, {"cutlass": None}):
-            mod = _load_module("wp_cute_under_test", CUTE_DIR / "wp_cute.py")
+        self._patch_modules({"cutlass": None})
+        mod = _load_module("wp_cute_under_test", CUTE_DIR / "wp_cute.py")
         self.assertEqual((os.environ["FI_LEVEL"], os.environ["FI_GRAN"]), ("1", "1"))
         self.assertEqual((mod.WP_LEVEL, mod.WP_GRAN), (1, 1))
         self.assertFalse(mod.wp_available())
@@ -320,8 +334,8 @@ class FrontendFacadeTest(unittest.TestCase):
             "cutlass._mlir": fake_mlir, "cutlass._mlir.dialects": fake_dialects,
             "cutlass._mlir.dialects.nvvm": fake_nvvm, "cutlass.cutlass_dsl": fake_dsl,
         }
-        with mock.patch.dict(sys.modules, fake_mods):
-            mod = _load_module("wp_cute_fake_under_test", CUTE_DIR / "wp_cute.py")
+        self._patch_modules(fake_mods)
+        mod = _load_module("wp_cute_fake_under_test", CUTE_DIR / "wp_cute.py")
         self.assertTrue(mod.wp_available())
         for wp_name, fi_name in (("WpBuffer", "FiBuffer"), ("WpCtx", "FiCtx"), ("wp_open", "fi_open"),
                                  ("wp_open_by", "fi_open_by"), ("WP_B", "fi_b"), ("WP_CLOSE", "fi_close"),
@@ -330,9 +344,9 @@ class FrontendFacadeTest(unittest.TestCase):
 
     def test_wp_triton_facades(self):
         self._env(WP_LEVEL=1, WP_TIMER=1)
-        with mock.patch.dict(sys.modules, {"triton": None, "triton.language": None}):
-            nv = _load_module("wp_triton_under_test", TRITON_DIR / "wp_triton.py")
-            amd = _load_module("wp_triton_amd_under_test", TRITON_DIR / "wp_triton_amd.py")
+        self._patch_modules({"triton": None, "triton.language": None})
+        nv = _load_module("wp_triton_under_test", TRITON_DIR / "wp_triton.py")
+        amd = _load_module("wp_triton_amd_under_test", TRITON_DIR / "wp_triton_amd.py")
         self.assertEqual(os.environ["FI_TIMER"], "1")
         cfg = nv.wp_cfg(cap=64, warps=4, n_slots=8, threads=128)
         self.assertEqual((cfg.level, cfg.timer, cfg.gran), (1, 1, 0))

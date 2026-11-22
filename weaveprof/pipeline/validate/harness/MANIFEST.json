@@ -214,7 +214,7 @@
     "tests/test_selection_roundtrip.py": "fd7c700c122c49aff248fed3bc9d143561224a65eec70ef959c2ef82fe8c5d49",
     "tests/test_trace_processor_fallback.py": "84db9018f3ed4d3f81a3386219af210d3c9904b72cc6a905634c909e89b0bde8",
     "tests/test_triton_recorder.py": "db0057f15b8573e038ada7efd83348555055c1e99219913d558bdd0de682c0ab",
-    "tests/test_wp_megakernel.py": "c4a5d56c94e405c39883b964aa5cf556c88cd0646560bd156cc6b84b4819b747",
+    "tests/test_wp_megakernel.py": "53f4f4e0a5cc0d50237c158044a176fdfb86b5da265961219f6009689b47256c",
     "tests/validate_kb.py": "fac452b2e945f698388f8ef2063b5023f6d54811c97614205b572100b55a1687",
     "weaveprof/__init__.py": "7556af7e189608e9544828babcc36b265294701fa230551393d09242714a168b",
     "weaveprof/__main__.py": "307299fda7b77d22c64cb51430ec75e5f59d78e9c948786afb3b2544fe45e4b7",
@@ -327,8 +327,8 @@
     "weaveprof/viz.py": "a5e602a620994400a786befed114152343829cce7f6d0dda56e506a077b8d56d",
     "weaveprof/workspace.py": "ed6fc99220d1cbf2203f1065edcf7cff173ad7404d7fbf618bc6512bdf073e72"
   },
-  "generated_at_utc": "2026-11-22T10:21:08.129307Z",
-  "root_sha256": "555ea68be1cd21209f9d0adcfd654182712bd9f9f5d2a35daf34e9ef06a387a1",
+  "generated_at_utc": "2026-11-22T10:23:41.438105Z",
+  "root_sha256": "0117f48c9b5221c763475f27d58bfb609c945aacc4221f2c87b94768640546c4",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }
