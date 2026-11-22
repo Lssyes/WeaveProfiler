@@ -136,7 +136,15 @@ def make_nsys_sqlite(path: Path, kernel_us: float = LONG_US) -> Path:
 def _load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    prev = sys.modules.get(name)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        if prev is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = prev
     return mod
 
 
@@ -207,17 +215,15 @@ class HeaderContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.wp = (CUDA_DIR / "wp_lite.cuh").read_text(encoding="utf-8")
-        cls.fi = (CUDA_DIR / "fi_lite.cuh").read_text(encoding="utf-8")
         cls.hip = (HIP_DIR / "wp_lite_hip.h").read_text(encoding="utf-8")
 
     def test_wp_build_switches_map_before_defaults(self):
         for wp_name, fi_name in (("WP_LEVEL", "FI_LEVEL"), ("WP_TIMER", "FI_TIMER"), ("WP_GRAN", "FI_GRAN"),
                                  ("WP_GROUPS", "FI_GROUPS")):
             mapping = f"#define {fi_name} {wp_name}"
-            self.assertIn(mapping, self.fi)
-            self.assertLess(self.fi.index(mapping), self.fi.index(f"#ifndef {fi_name}\n#define {fi_name}"))
+            self.assertIn(mapping, self.wp)
+            self.assertLess(self.wp.index(mapping), self.wp.index(f"#ifndef {fi_name}\n#define {fi_name}"))
         for name in ("WP_SMEM_ZREG", "WP_CTX_1R", "WP_CTX_1R_NOINLINE", "WP_DEFINE_HOST_API"):
-            self.assertIn(name, self.fi)
             self.assertIn(name, self.wp)
         for wp_name, fi_name in (("WP_LEVEL", "FI_LEVEL"), ("WP_TIMER", "FI_TIMER"), ("WP_GRAN", "FI_GRAN")):
             self.assertIn(f"#define {fi_name} {wp_name}", self.hip)
@@ -228,32 +234,33 @@ class HeaderContractTest(unittest.TestCase):
                   "WP_CTX_PARAM", "WP_CTX_ARG", "WP_BG", "WP_EG", "WP_MG", "WP_BG_PRED", "WP_EG_PRED", "WP_MG_PRED",
                   "WP_TRANS_PRED", "WP_OPEN", "WP_CLOSE", "WP_B", "WP_E", "WP_M")
         for m in macros:
-            self.assertRegex(self.fi, rf"#define {m}\b", m)
+            self.assertRegex(self.wp, rf"#define {m}\b", m)
         for fn in ("wp_alloc", "wp_attach", "wp_reset", "wp_dump", "wp_free", "wp_host_init", "wp_host_dump"):
-            self.assertRegex(self.fi, rf"static inline \w+ {fn}\(", fn)
+            self.assertRegex(self.wp, rf"static inline \w+ {fn}\(", fn)
             self.assertRegex(self.hip, rf"static inline \w+ {fn}\(", fn)
         for m in ("WP_CTX_PARAM", "WP_CTX_ARG"):
             self.assertRegex(self.hip, rf"#define {m}\b")
         for export in ("wp_init", "wp_reset", "wp_dump", "wp_free"):
-            self.assertRegex(self.fi, rf'extern "C" \w+ {export}\(')
+            self.assertRegex(self.wp, rf'extern "C" \w+ {export}\(')
 
     def test_sync_cursor_handles_every_context_mode(self):
         body = self.wp
         self.assertNotRegex(body, r"#define WP_SYNC_CURSOR_(?:OUT|IN)\(\).*fi_ctx_\.p")
-        i_zreg, i_1r = body.index("#if defined(FI_SMEM_ZREG)"), body.index("#elif defined(WP_CTX_1R)")
-        i_def = body.index("#else", i_1r)
+        sync_body = body[body.index("wp_sync_cursor_out_zreg"):]
+        i_zreg = sync_body.index("wp_sync_cursor_out_zreg(FI_ZREG_SLOT())")
+        i_1r = sync_body.index("#elif defined(WP_CTX_1R)")
+        i_def = sync_body.index("#else", i_1r)
         self.assertLess(i_zreg, i_1r)
-        self.assertIn("wp_sync_cursor_out_zreg(FI_ZREG_SLOT())", body[i_zreg:i_1r])
-        self.assertIn("wp_sync_cursor_out_1r(fi_ctx_)", body[i_1r:i_def])
-        self.assertIn("WP_1R_SLOT_SHIFT", body[i_1r:i_def])
-        self.assertIn("wp_sync_cursor_out_ctx(fi_ctx_)", body[i_def:])
+        self.assertIn("wp_sync_cursor_out_1r(fi_ctx_)", sync_body[i_1r:i_def])
+        self.assertIn("WP_1R_SLOT_SHIFT", sync_body[i_1r:i_def])
+        self.assertIn("wp_sync_cursor_out_ctx(fi_ctx_)", sync_body[i_def:])
         self.assertEqual(len(re.findall(r"#define WP_SYNC_CURSOR_OUT\(\)", body)), 4)
         self.assertEqual(len(re.findall(r"#define WP_SYNC_CURSOR_IN\(\)", body)), 4)
-        self.assertNotRegex(body, r"static inline \w+ wp_host_init\(")  # moved into fi_lite.cuh (no redefinition)
+        self.assertEqual(len(re.findall(r"static inline \w+ wp_host_init\(", body)), 1)
         # SMEM_ZREG callees bind the shared context under the kernel's name (FI_ZREG_SLOT resolves in both).
-        self.assertIn("#define FI_ZREG_PARAM_DECL FiSmemCtx* fi_sctx_", self.fi)
-        self.assertIn("#define FI_ZREG_PARAM_DECL FiSmemCtx& fi_sctx_", self.fi)
-        self.assertIn("#define FI_CTX_ARG , fi_sctx_", self.fi)
+        self.assertIn("#define FI_ZREG_PARAM_DECL FiSmemCtx* fi_sctx_", self.wp)
+        self.assertIn("#define FI_ZREG_PARAM_DECL FiSmemCtx& fi_sctx_", self.wp)
+        self.assertIn("#define FI_CTX_ARG , fi_sctx_", self.wp)
 
 
 class FrontendFacadeTest(unittest.TestCase):
@@ -272,19 +279,8 @@ class FrontendFacadeTest(unittest.TestCase):
                     os.environ[k] = v
         self.addCleanup(restore)
 
-    def _fake(self, name, targets):
-        mod = types.ModuleType(name)
-        for t in targets:
-            setattr(mod, t, types.SimpleNamespace(target=t))
-        saved = sys.modules.get(name)
-        sys.modules[name] = mod
-        self.addCleanup(lambda: sys.modules.__setitem__(name, saved) if saved else sys.modules.pop(name, None))
-        return mod
-
     def test_wp_cute_maps_env_and_degrades_without_cutlass(self):
         self._env(WP_LEVEL=1, WP_GRAN=1)
-        saved = sys.modules.pop("fi_cute", None)
-        self.addCleanup(lambda: sys.modules.__setitem__("fi_cute", saved) if saved else None)
         with mock.patch.dict(sys.modules, {"cutlass": None}):
             mod = _load_module("wp_cute_under_test", CUTE_DIR / "wp_cute.py")
         self.assertEqual((os.environ["FI_LEVEL"], os.environ["FI_GRAN"]), ("1", "1"))
@@ -298,43 +294,54 @@ class FrontendFacadeTest(unittest.TestCase):
         for name in ("open_perfetto", "write_names"):
             self.assertTrue(callable(getattr(mod, name)))
 
-    def test_wp_cute_exports_device_api_when_fi_cute_present(self):
+    def test_wp_cute_exports_device_api_when_cutlass_present(self):
         self._env()
-        targets = ("FiCtx", "FiBuffer", "fi_open", "fi_open_by", "fi_b", "fi_e", "fi_m", "fi_close", "fi_attach",
-                   "fi_get_attached", "_FiCuteProxy", "_FiCuteDescriptor", "write_names")
-        fake = self._fake("fi_cute", targets)
-        mod = _load_module("wp_cute_fake_under_test", CUTE_DIR / "wp_cute.py")
+        fake_cutlass = types.ModuleType("cutlass")
+        fake_cutlass.Boolean = bool
+        fake_cutlass.Int32 = int
+        fake_cutlass.Int64 = int
+        fake_cutlass.Constexpr = type("Constexpr", (), {"__class_getitem__": classmethod(lambda cls, _i: cls)})
+        fake_cutlass.const_expr = lambda v: v
+        fake_cute = types.ModuleType("cutlass.cute")
+        fake_cute.Tensor = object
+        fake_cute.jit = lambda fn: fn
+        fake_cute.arch = types.SimpleNamespace()
+        fake_cutlass.cute = fake_cute
+        fake_mlir = types.ModuleType("cutlass._mlir")
+        fake_dialects = types.ModuleType("cutlass._mlir.dialects")
+        fake_nvvm = types.ModuleType("cutlass._mlir.dialects.nvvm")
+        fake_dialects.nvvm = fake_nvvm
+        fake_mlir.dialects = fake_dialects
+        fake_dsl = types.ModuleType("cutlass.cutlass_dsl")
+        fake_dsl.T = types.SimpleNamespace(i64=lambda: "i64", i32=lambda: "i32")
+        fake_dsl.dsl_user_op = lambda fn: fn
+        fake_mods = {
+            "cutlass": fake_cutlass, "cutlass.cute": fake_cute,
+            "cutlass._mlir": fake_mlir, "cutlass._mlir.dialects": fake_dialects,
+            "cutlass._mlir.dialects.nvvm": fake_nvvm, "cutlass.cutlass_dsl": fake_dsl,
+        }
+        with mock.patch.dict(sys.modules, fake_mods):
+            mod = _load_module("wp_cute_fake_under_test", CUTE_DIR / "wp_cute.py")
         self.assertTrue(mod.wp_available())
         for wp_name, fi_name in (("WpBuffer", "FiBuffer"), ("WpCtx", "FiCtx"), ("wp_open", "fi_open"),
                                  ("wp_open_by", "fi_open_by"), ("WP_B", "fi_b"), ("WP_CLOSE", "fi_close"),
                                  ("wp_wrap", "_FiCuteProxy"), ("wp_get_attached", "fi_get_attached")):
-            self.assertIs(getattr(mod, wp_name), getattr(fake, fi_name))
+            self.assertIs(getattr(mod, wp_name), getattr(mod, fi_name))
 
     def test_wp_triton_facades(self):
         self._env(WP_LEVEL=1, WP_TIMER=1)
-        nv_targets = ("FiBuffer", "fi_open", "fi_open_by", "fi_b", "fi_e", "fi_m", "fi_trans", "fi_bg", "fi_eg", "fi_mg",
-                      "fi_close", "fi_b_by", "fi_e_by", "fi_m_by", "fi_close_by", "fi_attach", "fi_get_attached",
-                      "_FiTritonProxy", "write_names")
-        fake = self._fake("fi_triton", nv_targets)
-        captured = {}
-        fake.FiCfg = lambda **kw: captured.update(kw) or kw
-        nv = _load_module("wp_triton_under_test", TRITON_DIR / "wp_triton.py")
+        with mock.patch.dict(sys.modules, {"triton": None, "triton.language": None}):
+            nv = _load_module("wp_triton_under_test", TRITON_DIR / "wp_triton.py")
+            amd = _load_module("wp_triton_amd_under_test", TRITON_DIR / "wp_triton_amd.py")
         self.assertEqual(os.environ["FI_TIMER"], "1")
-        self.assertIs(nv.wp_open, fake.fi_open)
-        self.assertIs(nv.WP_E, fake.fi_e)
-        self.assertIs(nv.WpBuffer, fake.FiBuffer)
-        nv.wp_cfg(cap=64, warps=4, n_slots=8)
-        self.assertEqual((captured["level"], captured["timer"], captured["gran"]), (1, 1, 0))
-        amd_targets = ("FiBuffer", "FiPackedBuffer", "fi_open", "fi_b", "fi_e", "fi_m", "fi_close", "fi_attach",
-                       "fi_get_attached", "_FiTritonProxy")
-        amd_fake = self._fake("fi_triton_amd", amd_targets)
-        amd = _load_module("wp_triton_amd_under_test", TRITON_DIR / "wp_triton_amd.py")
-        self.assertIs(amd.wp_open, amd_fake.fi_open)
-        self.assertIs(amd.WP_M, amd_fake.fi_m)
+        cfg = nv.wp_cfg(cap=64, warps=4, n_slots=8, threads=128)
+        self.assertEqual((cfg.level, cfg.timer, cfg.gran), (1, 1, 0))
+        with self.assertRaises(ImportError):
+            nv.wp_open  # noqa: B018
         with self.assertRaises(NotImplementedError):
             amd.wp_open_by()
         with self.assertRaises(ImportError):
-            amd.wp_b_16b  # noqa: B018  (fake lacks the 16B device API)
+            amd.wp_b_16b  # noqa: B018
         with tempfile.TemporaryDirectory() as td:
             doc = json.loads(Path(amd.write_names(os.path.join(td, "n.json"), {2: "wait"})).read_text("utf-8"))
             self.assertEqual(doc["group"], "cu")
@@ -792,7 +799,7 @@ class MegakernelAuditTest(_TmpCase):
 
 class HygieneTest(unittest.TestCase):
     OWNED = (
-        "recorders/cuda_cpp/wp_lite.cuh", "recorders/cuda_cpp/fi_lite.cuh",
+        "recorders/cuda_cpp/wp_lite.cuh",
         "recorders/hip_cpp/wp_lite_hip.h", "recorders/cutedsl/wp_cute.py",
         "recorders/triton/wp_triton.py", "recorders/triton/wp_triton_amd.py",
         "weaveprof/pipeline/validate/tools/wp_decode.py", "weaveprof/pipeline/validate/tools/fi_lite_decode.py", "weaveprof/megakernel.py",

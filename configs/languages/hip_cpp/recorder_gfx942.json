@@ -301,7 +301,7 @@
     {
       "semantic": "记录点",
       "language": "Python analyzer",
-      "construct": "插桩前后 AMDGCN 相似度（Triton 前端）：parse .file/.loc, strip fi_triton.py instructions, strict/opcode LCS, key mnemonic sequence",
+      "construct": "插桩前后 AMDGCN 相似度（Triton 前端）：parse .file/.loc, strip wp_triton.py instructions, strict/opcode LCS, key mnemonic sequence",
       "isa_mnemonics": [
         "行表: .file/.loc",
         "分析函数: lcs_pairs"

@@ -24,7 +24,7 @@
     ],
     "language_contracts": {
       "cuda_cpp": {
-        "headers": "#include \"wp_lite.cuh\"  // (alias of fi_lite.cuh; defines global wp_g / fi_g automatically — NEVER redeclare `FiBuf fi_g;`!)",
+        "headers": "#include \"wp_lite.cuh\"  // (alias of wp_lite.cuh; defines global wp_g / fi_g automatically — NEVER redeclare `FiBuf fi_g;`!)",
         "scope_open": "WP_KERNEL_SCOPE(role_id);  // Place AFTER early-exit bounds checks (`if (idx >= N) return;`), at top of active kernel body.",
         "probe_pair": "WP_B(stage_id, aux);\n... stage statements ...\nWP_E(stage_id, aux);",
         "predicated_pair": "WP_B_PRED(pred, stage_id, aux);\n... stage statements ...\nWP_E_PRED(pred, stage_id, aux);",
@@ -35,7 +35,7 @@
         ]
       },
       "hip_cpp": {
-        "headers": "#include \"wp_lite_hip.h\"  // (alias of fi_lite_hip.h for AMD ROCm gfx942 wave64; NEVER redeclare `FiBuf fi_g;`!)",
+        "headers": "#include \"wp_lite_hip.h\"  // (alias of wp_lite_hip.h for AMD ROCm gfx942 wave64; NEVER redeclare `FiBuf fi_g;`!)",
         "scope_open": "WP_KERNEL_SCOPE(role_id);  // Uses wave64 lane-0 (`threadIdx.x & 63 == 0`) scalar `s_memrealtime` without draining `vmcnt`.",
         "probe_pair": "WP_B(stage_id, aux);\n... stage statements ...\nWP_E(stage_id, aux);",
         "pitfalls": [

@@ -67,7 +67,7 @@
         "persistent tile",
         "GEMM"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_GEMM: tl.constexpr = 10\n\n@triton.jit\ndef gemm_kernel(a_ptr, b_ptr, c_ptr, rec, ovf, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offs_m = tl.arange(0, BLOCK_M)\n    offs_n = tl.arange(0, BLOCK_N)\n    offs_k = tl.arange(0, BLOCK_K)\n    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_GEMM & 0x0FFF), aux=aux)\n    for k0 in range(0, K, BLOCK_K):\n        a = tl.load(a_ptr + offs_m[:, None] * K + (k0 + offs_k)[None, :])\n        b = tl.load(b_ptr + (k0 + offs_k)[:, None] * N + offs_n[None, :])\n        acc = tl.dot(a, b, acc)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_GEMM & 0x0FFF), aux=aux)\n    tl.store(c_ptr + offs_m[:, None] * N + offs_n[None, :], acc)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_GEMM: tl.constexpr = 10\n\n@triton.jit\ndef gemm_kernel(a_ptr, b_ptr, c_ptr, rec, ovf, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offs_m = tl.arange(0, BLOCK_M)\n    offs_n = tl.arange(0, BLOCK_N)\n    offs_k = tl.arange(0, BLOCK_K)\n    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_GEMM & 0x0FFF), aux=aux)\n    for k0 in range(0, K, BLOCK_K):\n        a = tl.load(a_ptr + offs_m[:, None] * K + (k0 + offs_k)[None, :])\n        b = tl.load(b_ptr + (k0 + offs_k)[:, None] * N + offs_n[None, :])\n        acc = tl.dot(a, b, acc)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_GEMM & 0x0FFF), aux=aux)\n    tl.store(c_ptr + offs_m[:, None] * N + offs_n[None, :], acc)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Immediately before the first A/B tile load for the selected GEMM segment.",
         "end": "After the final accumulator update and after any async MMA completion wait; the enclosing task span closes after the final C write or selected segment boundary."
@@ -77,7 +77,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -102,7 +102,7 @@
         "p v",
         "attention sink"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_ATTENTION: tl.constexpr = 11\n\n@triton.jit\ndef attention_kernel(q_ptr, k_ptr, v_ptr, out_ptr, rec, ovf, D: tl.constexpr, BLOCK_N: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    d = tl.arange(0, D)\n    keys = tl.arange(0, BLOCK_N)\n    q = tl.load(q_ptr + pid * D + d)\n    k = tl.load(k_ptr + keys[:, None] * D + d[None, :])\n    v = tl.load(v_ptr + keys[:, None] * D + d[None, :])\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_ATTENTION & 0x0FFF), aux=aux)\n    scores = tl.sum(k * q[None, :], axis=1)\n    probabilities = tl.exp(scores - tl.max(scores, axis=0))\n    probabilities = probabilities / tl.sum(probabilities, axis=0)\n    row_out = tl.sum(probabilities[:, None] * v, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_ATTENTION & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid * D + d, row_out)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_ATTENTION: tl.constexpr = 11\n\n@triton.jit\ndef attention_kernel(q_ptr, k_ptr, v_ptr, out_ptr, rec, ovf, D: tl.constexpr, BLOCK_N: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    d = tl.arange(0, D)\n    keys = tl.arange(0, BLOCK_N)\n    q = tl.load(q_ptr + pid * D + d)\n    k = tl.load(k_ptr + keys[:, None] * D + d[None, :])\n    v = tl.load(v_ptr + keys[:, None] * D + d[None, :])\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_ATTENTION & 0x0FFF), aux=aux)\n    scores = tl.sum(k * q[None, :], axis=1)\n    probabilities = tl.exp(scores - tl.max(scores, axis=0))\n    probabilities = probabilities / tl.sum(probabilities, axis=0)\n    row_out = tl.sum(probabilities[:, None] * v, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_ATTENTION & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid * D + d, row_out)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Before Q staging or the first QK score work for the selected attention segment.",
         "end": "After the final output value is visible and the final store or TMA completion wait has finished."
@@ -112,7 +112,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -136,7 +136,7 @@
         "normalized probability",
         "online softmax"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_SOFTMAX: tl.constexpr = 16\n\n@triton.jit\ndef softmax_kernel(src_ptr, out_ptr, rec, ovf, WIDTH: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    cols = tl.arange(0, WIDTH)\n    values = tl.load(src_ptr + pid * WIDTH + cols)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_SOFTMAX & 0x0FFF), aux=aux)\n    shifted = values - tl.max(values, axis=0)\n    numerator = tl.exp(shifted)\n    probabilities = numerator / tl.sum(numerator, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_SOFTMAX & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid * WIDTH + cols, probabilities)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_SOFTMAX: tl.constexpr = 16\n\n@triton.jit\ndef softmax_kernel(src_ptr, out_ptr, rec, ovf, WIDTH: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    cols = tl.arange(0, WIDTH)\n    values = tl.load(src_ptr + pid * WIDTH + cols)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_SOFTMAX & 0x0FFF), aux=aux)\n    shifted = values - tl.max(values, axis=0)\n    numerator = tl.exp(shifted)\n    probabilities = numerator / tl.sum(numerator, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_SOFTMAX & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid * WIDTH + cols, probabilities)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Before the row maximum reduction or the first online-softmax update.",
         "end": "After the normalized probabilities are materialized and visible to the following consumer."
@@ -146,7 +146,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -171,7 +171,7 @@
         "register reduction",
         "归约"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_REDUCTION: tl.constexpr = 12\n\n@triton.jit\ndef reduction_kernel(src_ptr, out_ptr, rec, ovf, WIDTH: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    cols = tl.arange(0, WIDTH)\n    values = tl.load(src_ptr + pid * WIDTH + cols)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_REDUCTION & 0x0FFF), aux=aux)\n    row_sum = tl.sum(values, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_REDUCTION & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid, row_sum)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_REDUCTION: tl.constexpr = 12\n\n@triton.jit\ndef reduction_kernel(src_ptr, out_ptr, rec, ovf, WIDTH: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    cols = tl.arange(0, WIDTH)\n    values = tl.load(src_ptr + pid * WIDTH + cols)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_REDUCTION & 0x0FFF), aux=aux)\n    row_sum = tl.sum(values, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_REDUCTION & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid, row_sum)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Before the first combine instruction for the selected reduction.",
         "end": "After the last cross-lane, cross-wave, or cross-CTA combine and the result is visible to its consumer."
@@ -181,7 +181,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -206,7 +206,7 @@
         "gate",
         "专家网络"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_MOE: tl.constexpr = 13\n\n@triton.jit\ndef moe_kernel(x_ptr, w0_ptr, w1_ptr, out_ptr, route_ptr, rec, ovf, WIDTH: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    cols = tl.arange(0, WIDTH)\n    x = tl.load(x_ptr + pid * WIDTH + cols)\n    weight0 = tl.load(w0_ptr + cols)\n    weight1 = tl.load(w1_ptr + cols)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_MOE & 0x0FFF), aux=aux)\n    score0 = tl.sum(x * weight0, axis=0)\n    score1 = tl.sum(x * weight1, axis=0)\n    expert = tl.where(score0 >= score1, 0, 1)\n    top_score = tl.maximum(score0, score1)\n    gate0 = tl.exp(score0 - top_score)\n    gate1 = tl.exp(score1 - top_score)\n    output = (gate0 * score0 + gate1 * score1) / (gate0 + gate1)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_MOE & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid, output)\n    tl.store(route_ptr + pid, expert)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_MOE: tl.constexpr = 13\n\n@triton.jit\ndef moe_kernel(x_ptr, w0_ptr, w1_ptr, out_ptr, route_ptr, rec, ovf, WIDTH: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    cols = tl.arange(0, WIDTH)\n    x = tl.load(x_ptr + pid * WIDTH + cols)\n    weight0 = tl.load(w0_ptr + cols)\n    weight1 = tl.load(w1_ptr + cols)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_MOE & 0x0FFF), aux=aux)\n    score0 = tl.sum(x * weight0, axis=0)\n    score1 = tl.sum(x * weight1, axis=0)\n    expert = tl.where(score0 >= score1, 0, 1)\n    top_score = tl.maximum(score0, score1)\n    gate0 = tl.exp(score0 - top_score)\n    gate1 = tl.exp(score1 - top_score)\n    output = (gate0 * score0 + gate1 * score1) / (gate0 + gate1)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_MOE & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid, output)\n    tl.store(route_ptr + pid, expert)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Before routing logits or expert selection for the selected token tile.",
         "end": "After the selected expert output and combine/write-back are visible."
@@ -216,7 +216,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -241,7 +241,7 @@
         "padding",
         "卷积"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_CONVOLUTION: tl.constexpr = 14\n\n@triton.jit\ndef convolution_kernel(im2col_ptr, weight_ptr, out_ptr, rec, ovf, C: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    patch_offsets = tl.arange(0, 9)\n    channels = tl.arange(0, C)\n    patch = tl.load(im2col_ptr + pid * 9 * C + patch_offsets[:, None] * C + channels[None, :])\n    weight = tl.load(weight_ptr + patch_offsets[:, None] * C + channels[None, :])\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_CONVOLUTION & 0x0FFF), aux=aux)\n    output = tl.sum(patch * weight, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_CONVOLUTION & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid * C + channels, output)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_CONVOLUTION: tl.constexpr = 14\n\n@triton.jit\ndef convolution_kernel(im2col_ptr, weight_ptr, out_ptr, rec, ovf, C: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    patch_offsets = tl.arange(0, 9)\n    channels = tl.arange(0, C)\n    patch = tl.load(im2col_ptr + pid * 9 * C + patch_offsets[:, None] * C + channels[None, :])\n    weight = tl.load(weight_ptr + patch_offsets[:, None] * C + channels[None, :])\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_CONVOLUTION & 0x0FFF), aux=aux)\n    output = tl.sum(patch * weight, axis=0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_CONVOLUTION & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid * C + channels, output)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Before the first input patch load for the selected output tile.",
         "end": "After the final accumulation and output write or async store completion."
@@ -251,7 +251,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -276,7 +276,7 @@
         "task queue",
         "大核"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_MEGAKERNEL: tl.constexpr = 15\n\n@triton.jit\ndef megakernel_kernel(src_ptr, dst_ptr, rec, ovf, NUM_TILES: tl.constexpr, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_MEGAKERNEL & 0x0FFF), aux=aux)\n    for tile in tl.range(pid, NUM_TILES, tl.num_programs(0)):\n        offsets = tile * BLOCK + tl.arange(0, BLOCK)\n        values = tl.load(src_ptr + offsets)\n        tl.store(dst_ptr + offsets, values)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_MEGAKERNEL & 0x0FFF), aux=aux)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_MEGAKERNEL: tl.constexpr = 15\n\n@triton.jit\ndef megakernel_kernel(src_ptr, dst_ptr, rec, ovf, NUM_TILES: tl.constexpr, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_MEGAKERNEL & 0x0FFF), aux=aux)\n    for tile in tl.range(pid, NUM_TILES, tl.num_programs(0)):\n        offsets = tile * BLOCK + tl.arange(0, BLOCK)\n        values = tl.load(src_ptr + offsets)\n        tl.store(dst_ptr + offsets, values)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_MEGAKERNEL & 0x0FFF), aux=aux)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "After capture setup and before the persistent scheduler or first segment work.",
         "end": "After the final segment retires and its output visibility wait has completed."
@@ -286,7 +286,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -311,7 +311,7 @@
         "masked load",
         "装载"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_LOAD: tl.constexpr = 1\n\n@triton.jit\ndef load_kernel(src_ptr, dst_ptr, rec, ovf, N: tl.constexpr, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    mask = offsets < N\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_LOAD & 0x0FFF), aux=aux)\n    values = tl.load(src_ptr + offsets, mask=mask, other=0.0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_LOAD & 0x0FFF), aux=aux)\n    tl.store(dst_ptr + offsets, values, mask=mask)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_LOAD: tl.constexpr = 1\n\n@triton.jit\ndef load_kernel(src_ptr, dst_ptr, rec, ovf, N: tl.constexpr, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    mask = offsets < N\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_LOAD & 0x0FFF), aux=aux)\n    values = tl.load(src_ptr + offsets, mask=mask, other=0.0)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_LOAD & 0x0FFF), aux=aux)\n    tl.store(dst_ptr + offsets, values, mask=mask)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Immediately before the load or async-copy issue for the selected tile.",
         "end": "After the value is available for a synchronous load; for async copy, only after the matching wait or barrier/fence returns."
@@ -321,7 +321,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -346,7 +346,7 @@
         "s_waitcnt",
         "等待"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_WAIT: tl.constexpr = 2\n\n@triton.jit\ndef wait_kernel(ready_ptr, out_ptr, rec, ovf, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    aux = pid\n    ready = tl.load(ready_ptr + pid, volatile=True)\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_WAIT & 0x0FFF), aux=aux)\n    while ready == 0:\n        ready = tl.load(ready_ptr + pid, volatile=True)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_WAIT & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid, ready)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_WAIT: tl.constexpr = 2\n\n@triton.jit\ndef wait_kernel(ready_ptr, out_ptr, rec, ovf, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    aux = pid\n    ready = tl.load(ready_ptr + pid, volatile=True)\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_WAIT & 0x0FFF), aux=aux)\n    while ready == 0:\n        ready = tl.load(ready_ptr + pid, volatile=True)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_WAIT & 0x0FFF), aux=aux)\n    tl.store(out_ptr + pid, ready)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Immediately before the polling, wait instruction, or dependency check.",
         "end": "After the waited condition is true and the required visibility fence or completion check has returned."
@@ -356,7 +356,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -381,7 +381,7 @@
         "mfma",
         "张量核"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_MMA: tl.constexpr = 3\n\n@triton.jit\ndef mma_kernel(a_ptr, b_ptr, c_ptr, rec, ovf, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    rows = tl.arange(0, BLOCK_M)\n    cols = tl.arange(0, BLOCK_N)\n    inner = tl.arange(0, BLOCK_K)\n    a = tl.load(a_ptr + rows[:, None] * BLOCK_K + inner[None, :])\n    b = tl.load(b_ptr + inner[:, None] * BLOCK_N + cols[None, :])\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_MMA & 0x0FFF), aux=aux)\n    acc = tl.dot(a, b)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_MMA & 0x0FFF), aux=aux)\n    tl.store(c_ptr + rows[:, None] * BLOCK_N + cols[None, :], acc)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_MMA: tl.constexpr = 3\n\n@triton.jit\ndef mma_kernel(a_ptr, b_ptr, c_ptr, rec, ovf, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    rows = tl.arange(0, BLOCK_M)\n    cols = tl.arange(0, BLOCK_N)\n    inner = tl.arange(0, BLOCK_K)\n    a = tl.load(a_ptr + rows[:, None] * BLOCK_K + inner[None, :])\n    b = tl.load(b_ptr + inner[:, None] * BLOCK_N + cols[None, :])\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_MMA & 0x0FFF), aux=aux)\n    acc = tl.dot(a, b)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_MMA & 0x0FFF), aux=aux)\n    tl.store(c_ptr + rows[:, None] * BLOCK_N + cols[None, :], acc)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Immediately before the tensor-core instruction or async WGMMA/tcgen05 issue.",
         "end": "After the synchronous instruction retires or after the matching async completion wait; never at the issue instruction for async MMA."
@@ -391,7 +391,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -416,7 +416,7 @@
         "type conversion",
         "计算"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_COMPUTE: tl.constexpr = 4\n\n@triton.jit\ndef compute_kernel(src_ptr, out_ptr, rec, ovf, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    values = tl.load(src_ptr + offsets)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_COMPUTE & 0x0FFF), aux=aux)\n    output = tl.exp2(values) * 0.5 + 0.25\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_COMPUTE & 0x0FFF), aux=aux)\n    tl.store(out_ptr + offsets, output)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_COMPUTE: tl.constexpr = 4\n\n@triton.jit\ndef compute_kernel(src_ptr, out_ptr, rec, ovf, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    values = tl.load(src_ptr + offsets)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_COMPUTE & 0x0FFF), aux=aux)\n    output = tl.exp2(values) * 0.5 + 0.25\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_COMPUTE & 0x0FFF), aux=aux)\n    tl.store(out_ptr + offsets, output)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Before the first scalar or vector arithmetic instruction in the selected region.",
         "end": "After the last arithmetic result is materialized and available to the next stage."
@@ -426,7 +426,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -451,7 +451,7 @@
         "rescale",
         "收尾"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_EPILOGUE: tl.constexpr = 5\n\n@triton.jit\ndef epilogue_kernel(accum_ptr, bias_ptr, out_ptr, rec, ovf, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    accum = tl.load(accum_ptr + offsets)\n    bias = tl.load(bias_ptr + offsets)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_EPILOGUE & 0x0FFF), aux=aux)\n    output = (accum + bias).to(tl.bfloat16)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_EPILOGUE & 0x0FFF), aux=aux)\n    tl.store(out_ptr + offsets, output)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_EPILOGUE: tl.constexpr = 5\n\n@triton.jit\ndef epilogue_kernel(accum_ptr, bias_ptr, out_ptr, rec, ovf, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    accum = tl.load(accum_ptr + offsets)\n    bias = tl.load(bias_ptr + offsets)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_EPILOGUE & 0x0FFF), aux=aux)\n    output = (accum + bias).to(tl.bfloat16)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_EPILOGUE & 0x0FFF), aux=aux)\n    tl.store(out_ptr + offsets, output)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "After the main MMA loop and async MMA wait, immediately before accumulator readback or conversion.",
         "end": "After the last conversion, bias, activation, or rescale result is ready for the store."
@@ -461,7 +461,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -486,7 +486,7 @@
         "masked store",
         "写回"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_STORE: tl.constexpr = 6\n\n@triton.jit\ndef store_kernel(src_ptr, dst_ptr, rec, ovf, N: tl.constexpr, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    mask = offsets < N\n    values = tl.load(src_ptr + offsets, mask=mask, other=0.0)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_STORE & 0x0FFF), aux=aux)\n    tl.store(dst_ptr + offsets, values, mask=mask)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_STORE & 0x0FFF), aux=aux)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_STORE: tl.constexpr = 6\n\n@triton.jit\ndef store_kernel(src_ptr, dst_ptr, rec, ovf, N: tl.constexpr, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    offsets = pid * BLOCK + tl.arange(0, BLOCK)\n    mask = offsets < N\n    values = tl.load(src_ptr + offsets, mask=mask, other=0.0)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_STORE & 0x0FFF), aux=aux)\n    tl.store(dst_ptr + offsets, values, mask=mask)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_STORE & 0x0FFF), aux=aux)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Immediately before the store instruction or async TMA store issue.",
         "end": "After a synchronous store is issued and visibility is established; for async TMA store, only after the matching wait_group.read returns."
@@ -496,7 +496,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -521,7 +521,7 @@
         "bar.sync",
         "同步"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_BARRIER: tl.constexpr = 7\n\n@triton.jit\ndef barrier_kernel(src_ptr, dst_ptr, rec, ovf, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    values = tl.load(src_ptr + pid * BLOCK + tl.arange(0, BLOCK))\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_BARRIER & 0x0FFF), aux=aux)\n    tl.debug_barrier()\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_BARRIER & 0x0FFF), aux=aux)\n    tl.store(dst_ptr + pid * BLOCK + tl.arange(0, BLOCK), values)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_BARRIER: tl.constexpr = 7\n\n@triton.jit\ndef barrier_kernel(src_ptr, dst_ptr, rec, ovf, BLOCK: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    values = tl.load(src_ptr + pid * BLOCK + tl.arange(0, BLOCK))\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_BARRIER & 0x0FFF), aux=aux)\n    tl.debug_barrier()\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_BARRIER & 0x0FFF), aux=aux)\n    tl.store(dst_ptr + pid * BLOCK + tl.arange(0, BLOCK), values)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Immediately before the barrier arrive/wait sequence.",
         "end": "After all required participants pass the barrier and the associated fence or visibility rule holds."
@@ -531,7 +531,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -557,7 +557,7 @@
         "task queue",
         "分发"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_DISPATCH: tl.constexpr = 8\n\n@triton.jit\ndef dispatch_kernel(ticket_ptr, assigned_ptr, rec, ovf, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_DISPATCH & 0x0FFF), aux=aux)\n    work_item = tl.atomic_add(ticket_ptr, 1)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_DISPATCH & 0x0FFF), aux=aux)\n    tl.store(assigned_ptr + pid, work_item)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_DISPATCH: tl.constexpr = 8\n\n@triton.jit\ndef dispatch_kernel(ticket_ptr, assigned_ptr, rec, ovf, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    aux = pid\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_DISPATCH & 0x0FFF), aux=aux)\n    work_item = tl.atomic_add(ticket_ptr, 1)\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_DISPATCH & 0x0FFF), aux=aux)\n    tl.store(assigned_ptr + pid, work_item)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Immediately before the ticket, work-item, token, or expert assignment operation.",
         "end": "After the assignment is visible and the selected work item is known to its consumers."
@@ -567,7 +567,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],
@@ -593,7 +593,7 @@
         "peer counter",
         "通信"
       ],
-      "source_example": "import triton\nimport triton.language as tl\nfrom fi_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_COMMUNICATION: tl.constexpr = 9\n\n@triton.jit\ndef communication_kernel(value_ptr, peer_value_ptr, peer_ready_ptr, rec, ovf, NUM_RANKS: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    rank = pid\n    local = tl.load(value_ptr + rank)\n    aux = rank\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_COMMUNICATION & 0x0FFF), aux=aux)\n    tl.store(peer_value_ptr + rank, local)\n    tl.atomic_add(peer_ready_ptr + rank, 1)\n    total = tl.zeros((1,), dtype=tl.float32)\n    for peer in tl.static_range(0, NUM_RANKS):\n        ready = tl.load(peer_ready_ptr + peer, volatile=True)\n        while ready < NUM_RANKS:\n            ready = tl.load(peer_ready_ptr + peer, volatile=True)\n        total += tl.load(peer_value_ptr + peer)\n    tl.store(value_ptr + rank, tl.sum(total, axis=0))\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_COMMUNICATION & 0x0FFF), aux=aux)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
+      "source_example": "import triton\nimport triton.language as tl\nfrom wp_triton import fi_open, fi_b, fi_e, fi_close\n\nEV_COMMUNICATION: tl.constexpr = 9\n\n@triton.jit\ndef communication_kernel(value_ptr, peer_value_ptr, peer_ready_ptr, rec, ovf, NUM_RANKS: tl.constexpr, FI: tl.constexpr):\n    pid = tl.program_id(0)\n    n = fi_open(rec, ovf, pid, FI, role=0)\n    rank = pid\n    local = tl.load(value_ptr + rank)\n    aux = rank\n    n = fi_b(rec, ovf, pid, n, FI, ev=(EV_COMMUNICATION & 0x0FFF), aux=aux)\n    tl.store(peer_value_ptr + rank, local)\n    tl.atomic_add(peer_ready_ptr + rank, 1)\n    total = tl.zeros((1,), dtype=tl.float32)\n    for peer in tl.static_range(0, NUM_RANKS):\n        ready = tl.load(peer_ready_ptr + peer, volatile=True)\n        while ready < NUM_RANKS:\n            ready = tl.load(peer_ready_ptr + peer, volatile=True)\n        total += tl.load(peer_value_ptr + peer)\n    tl.store(value_ptr + rank, tl.sum(total, axis=0))\n    n = fi_e(rec, ovf, pid, n, FI, ev=(EV_COMMUNICATION & 0x0FFF), aux=aux)\n    n = fi_close(rec, ovf, pid, n, FI)\n",
       "event_boundaries": {
         "begin": "Before the first peer publish, collective issue, or communication wait for the selected rank group.",
         "end": "After the local collective result is visible to the consumer and all required completion waits return."
@@ -603,7 +603,7 @@
       "buffer_rule": "Before every write the frontend must check n < cap and, for a physical-warp lane, warp < warps; before OPEN it must check slot < n_slots. Mask event ids with ev & 0x0FFF, reserve 0 for empty records, set overflow bit0 for lane-full and bit1 for slot-out-of-range, and fail delivery when overflow != 0. cap must include OPEN/CLOSE and timer anchors.",
       "language_notes": [
         "Targets: H20 is nv/sm_90; B300 is nv/sm_100a or nv/sm_103a (measured on sm_103a at 501.28 TFLOPS / 68.54 us, sample1 overhead +1.38%, full fi-l2-s0 66,048 spans, 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1) and must be configured with FiCfg(arch=...) explicitly when device discovery is unavailable.",
-        "Use recorders/triton/fi_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
+        "Use recorders/triton/wp_triton.py APIs: fi_open, fi_b, fi_e, fi_m, fi_close and FiBuffer.dump; predicated inline PTX @p_rec emits a single 16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atom.global.or.b32 in fi_close.",
         "Triton does not expose threadIdx or a producer/consumer warp split; record_scope must describe the whole program/CTA and physical warp ownership is compiler-selected.",
         "For async dot or TMA, put fi_e after a consumer wait or barrier; tl.dot issue is not a completion timestamp."
       ],

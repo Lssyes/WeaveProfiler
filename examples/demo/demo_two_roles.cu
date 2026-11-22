@@ -1,9 +1,9 @@
 // fast-instrument 示例：一个 kernel 两种角色（链 CTA 逐块等就绪再计算；辅助 CTA 生产块并置就绪计数），
-// 结构上模仿 GDN 复合算子。用来验证 fi_lite.cuh 在目标机上能编、能记、能解码，并量出插桩开销。
+// 结构上模仿 GDN 复合算子。用来验证 wp_lite.cuh 在目标机上能编、能记、能解码，并量出插桩开销。
 // 编译：nvcc -O3 -std=c++17 -arch=<sm> -DFI_LEVEL=2 [-DFI_TIMER=1] -I../include demo_two_roles.cu -o demo_l2
 //      （再编一份 -DFI_LEVEL=0 对照开销）
 // 运行：./demo_l2 <out.bin>     打印 ITER_US 中位，并在 FI_LEVEL>=1 时写转储
-#include "fi_lite.cuh"
+#include "wp_lite.cuh"
 #include <algorithm>
 #include <cstdlib>
 #include <cuda_profiler_api.h>

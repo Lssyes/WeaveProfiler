@@ -31,7 +31,7 @@
   },
   "language": "triton",
   "language_display_name": "Triton",
-  "platform_note": "MI308X is gfx942 with wave64 (80 CUs, 4 XCCs). Use 128x128x16 4-wave64 MFMA tile geometry (256 CTAs for 2048x2048, <= 4 concurrent CTAs/CU on 80 CUs), single-16B AoS global_store_dwordx4 via FiPackedBuffer and fi_*_16b in fi_triton_amd.py with s_memrealtime (100 MHz) / s_memtime and hoisted overflow atomic_or in fi_close_16b, 12-buffer cold-HBM ring (3.2% warm L2 vs 13.2% cold HBM), and Rendering Contract R6 pid=1 / upid=1 / sort_index=-1000 topmost [0-100%] hardware utilization.",
+  "platform_note": "MI308X is gfx942 with wave64 (80 CUs, 4 XCCs). Use 128x128x16 4-wave64 MFMA tile geometry (256 CTAs for 2048x2048, <= 4 concurrent CTAs/CU on 80 CUs), single-16B AoS global_store_dwordx4 via FiPackedBuffer and fi_*_16b in wp_triton_amd.py with s_memrealtime (100 MHz) / s_memtime and hoisted overflow atomic_or in fi_close_16b, 12-buffer cold-HBM ring (3.2% warm L2 vs 13.2% cold HBM), and Rendering Contract R6 pid=1 / upid=1 / sort_index=-1000 topmost [0-100%] hardware utilization.",
   "machine_profiles": [
     "configs/cards/mi308x_gfx942.json"
   ],
@@ -71,11 +71,11 @@
         "lane-0 record predicate must use lane==0 or threadIdx.x&63==0",
         "FiPackedBuffer + fi_open_16b / fi_b_16b / fi_e_16b / fi_close_16b single-16B AoS global_store_dwordx4 + hoisted atomic_or"
       ],
-      "guidance": "Never reuse NVIDIA warp32 masks or lane arithmetic. Use FiPackedBuffer and fi_*_16b in fi_triton_amd.py so each record emits a single 16B global_store_dwordx4 with zero vmcnt(0) vector-memory stalls and hoisted overflow atomic_or in fi_close_16b."
+      "guidance": "Never reuse NVIDIA warp32 masks or lane arithmetic. Use FiPackedBuffer and fi_*_16b in wp_triton_amd.py so each record emits a single 16B global_store_dwordx4 with zero vmcnt(0) vector-memory stalls and hoisted overflow atomic_or in fi_close_16b."
     }
   },
   "recorder": {
-    "path": "recorders/triton/fi_triton_amd.py",
+    "path": "recorders/triton/wp_triton_amd.py",
     "api_family": "FI_B / FI_E / FI_M / FI_OPEN / FI_CLOSE / fi_*_16b",
     "backend": "gfx942_wave64",
     "build_gates": "FiCfg(level, timer, gran, groups)",
@@ -256,7 +256,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_LOAD, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -327,7 +327,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_WAIT, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -397,7 +397,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_MMA, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -470,7 +470,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_COMPUTE, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -533,7 +533,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_EPILOGUE, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -596,7 +596,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_STORE, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -661,7 +661,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_BARRIER, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -727,7 +727,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_DISPATCH, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -791,7 +791,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_COMMUNICATION, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -854,7 +854,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_GEMM, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -917,7 +917,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_ATTENTION, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -980,7 +980,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_REDUCTION, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -1044,7 +1044,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_MOE, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -1107,7 +1107,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_CONVOLUTION, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -1170,7 +1170,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_MEGAKERNEL, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "The frontend is wave64-aware: FI_GRAN=0 requires wpc>=64 and combines SIMD and WAVE_ID in the slot key; FI_GRAN=1 selects one physical wave per CTA."
         ]
       },
@@ -1232,7 +1232,7 @@
         "mark": "n = fi_m(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, EVENT=EV_SOFTMAX, aux=tile_id, CAP=FI_CAP, THREADS=FI_THREADS)",
         "guard": "slot, selected, n = fi_open(time_ptr, tag_ptr, aux_ptr, overflow_ptr, ROLE=role, GRAN=FI_GRAN, CAP=FI_CAP, WPC=FI_WPC, THREADS=FI_THREADS); /* ... */ n = fi_close(time_ptr, tag_ptr, aux_ptr, overflow_ptr, slot, selected, n, CAP=FI_CAP, THREADS=FI_THREADS)",
         "notes": [
-          "Import the AMD frontend from recorders/triton/fi_triton_amd.py, not the NVIDIA frontend.",
+          "Import the AMD frontend from recorders/triton/wp_triton_amd.py, not the NVIDIA frontend.",
           "EV_SOFTMAX must be a tl.constexpr from the canonical event constants; keep and return the loop-carried n."
         ]
       },

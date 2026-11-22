@@ -204,7 +204,7 @@ class RouteEvidenceTests(unittest.TestCase):
         self.profile_100_path = self.repo / "configs" / "cards" / "b300_sm_100a.json"
         self.profile_103_path = self.repo / "configs" / "cards" / "b300_sm_103a.json"
         self.pattern_path = self.repo / "configs" / "languages" / "triton" / "nvidia_patterns.json"
-        self.recorder_path = self.repo / "recorders" / "triton" / "fi_triton.py"
+        self.recorder_path = self.repo / "recorders" / "triton" / "wp_triton.py"
         self._write_repo()
 
     def _write_json(self, relative: str, value: object) -> Path:
@@ -235,7 +235,7 @@ class RouteEvidenceTests(unittest.TestCase):
                 "configs/cards/b300_sm_100a.json",
                 "configs/cards/b300_sm_103a.json",
             ],
-            "recorder": {"path": "recorders/triton/fi_triton.py"},
+            "recorder": {"path": "recorders/triton/wp_triton.py"},
         })
         self._write_json("configs/cards/b300_sm_100a.json", {
             "schema": "weaveprofiler.card-machine/v1", "card": "b300", "arch": "sm_100a"})

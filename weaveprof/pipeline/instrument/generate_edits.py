@@ -1311,7 +1311,7 @@ def _triton_frontend(scan: Mapping[str, Any]) -> str:
     target = target if isinstance(target, Mapping) else {}
     platform = str(target.get("platform") or "").lower()
     recorder = str(route.get("recorder") or "").lower()
-    if platform == "amd" or "fi_triton_amd" in recorder:
+    if platform == "amd" or "wp_triton_amd" in recorder:
         return "amd"
     return "nv"
 

@@ -32,7 +32,7 @@
       "timeout_seconds": 60
     },
     "plan-context": {
-      "description": "Plan D2 low-overhead recorder context (1-reg bit-packed WpCtx1R vs 16B FI_SMEM_ZREG fallback and setmaxnreg pre/post placement search space) from kernel source and resource limits.",
+      "description": "Plan low-overhead recorder state placement (single-register bit-packed default vs 16B shared-memory + __noinline__ fallback) and compiler flags from kernel source and resource limits.",
       "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "plan-context"],
       "input_schema": "weaveprof/aka_schemas/plan_context.input.json",
       "output_schema": "weaveprof/aka_schemas/generic.output.json",

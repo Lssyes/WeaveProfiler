@@ -145,7 +145,7 @@ TOOL_DEFS: List[Dict[str, Any]] = [
                 "nsys_freq_hz": {"type": "integer", "minimum": 1000, "maximum": 500000},
                 "nsys_gpu_device": _S,
                 "nsys_capture_range": _S,
-                "render_overview_png": {"type": "boolean", "description": "Auto-render 3-panel SW+HW overview.png on the GPU host (default: true)."},
+                "render_overview_png": {"type": "boolean", "description": "Auto-render 3-panel SW+HW overview.png locally (default: true)."},
                 "write_perfetto_gz": {"type": "boolean", "description": "Opt-in: also write trace.perfetto.json.gz (default: false)."},
                 "overview_title": _S,
                 "overview_subtitle": _S,
@@ -190,8 +190,8 @@ TOOL_DEFS: List[Dict[str, Any]] = [
     },
     {
         "name": "weaveprof_plan_context",
-        "description": ("D2 context plan + compiler search space (WpCtx1R vs SMEM/zero-register context, "
-                        "pre/post setmaxnreg) for a kernel source."),
+        "description": ("Plan low-overhead recorder state placement (single-register default vs 16B shared-memory "
+                        "+ __noinline__ fallback) and compiler flags for a kernel source."),
         "inputSchema": {
             "type": "object",
             "properties": {

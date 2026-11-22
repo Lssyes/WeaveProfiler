@@ -1334,7 +1334,7 @@ def _run_gpu_triton(
     dump_full = out_dir / "fi_full.bin"
 
     if platform == "nv":
-        import fi_triton as FT
+        import wp_triton as FT
         buf_by_var = {
             "L0": FT.FiBuffer(1, num_warps, 8, gran=1, timer=1, level=0),
             "sample1": FT.FiBuffer(n_ctas, num_warps, cap_s1, gran=1, timer=1, level=2),
@@ -1391,7 +1391,7 @@ def _run_gpu_triton(
         buf_by_var["sample1"].dump(str(dump_s1), meta={"kernel": plan["kernel"], "arch": arch})
         buf_by_var["full"].dump(str(dump_full), meta={"kernel": plan["kernel"], "arch": arch})
     else:
-        import fi_triton_amd as FTA
+        import wp_triton_amd as FTA
         buf_by_var = {
             "L0": FTA.FiPackedBuffer(n_ctas=1, cap=8, gran=1, num_warps=num_warps, timer_mode=1),
             "sample1": FTA.FiPackedBuffer(n_ctas=n_ctas, cap=cap_s1, gran=1, num_warps=num_warps, timer_mode=1),
@@ -1563,7 +1563,7 @@ As = [torch.randn((M, K), dtype=torch.float16, device='cuda') for _ in range(RIN
 Bs = [torch.randn((K, N), dtype=torch.float16, device='cuda') for _ in range(RING)]
 C = torch.empty((M, N), dtype=torch.float32, device='cuda')
 if {platform!r} == 'nv':
-    import fi_triton as FT
+    import wp_triton as FT
     st_hw = {stages_for_variant.get(selected_var, 3) if platform == 'nv' else 3}
     buf = FT.FiBuffer(n_ctas, 4, {sel_cap}, gran=1, timer=1, level=2)
     cfg = FT.FiCfg(cap={sel_cap}, warps=1, n_slots=n_ctas, gran=1, timer=1, level=2, threads={threads}, arch={arch!r})
@@ -1581,7 +1581,7 @@ if {platform!r} == 'nv':
     torch.cuda.cudart().cudaProfilerStop()
     buf.dump({str(tmp_dump)!r}, meta={{'kernel': {plan['kernel']!r}, 'arch': {arch!r}}})
 else:
-    import fi_triton_amd as FTA
+    import wp_triton_amd as FTA
     st_hw_amd = {stages_for_variant.get(selected_var, 2) if platform != 'nv' else 2}
     buf = FTA.FiPackedBuffer(n_ctas=n_ctas, cap={sel_cap}, gran=1, num_warps=4, timer_mode=1)
     for r in range(3):

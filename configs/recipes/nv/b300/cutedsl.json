@@ -26,7 +26,7 @@
   },
   "language": "cutedsl",
   "language_display_name": "CUTLASS CuTeDSL",
-  "platform_note": "B300 has two machine targets. Compile and label sm_100a and sm_103a separately; never merge their captures or evidence. On B300 sm_103a (148 SMs, 267 GB HBM3e), CuTeDSL instrumentation uses LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer (recorders/cutedsl/fi_cute.py / fi_cutedsl.py) with cute.arch.barrier() brackets around cute.gemm, measuring 85.20 TFLOPS (403.41 us), 526,336 full (fi-l2-s0) spans, and 200 kHz cold-HBM [Throughput %] hardware utilization curves at pid=1 / upid=1 / sort_index=-1000.",
+  "platform_note": "B300 has two machine targets. Compile and label sm_100a and sm_103a separately; never merge their captures or evidence. On B300 sm_103a (148 SMs, 267 GB HBM3e), CuTeDSL instrumentation uses LLVM IR atomicrmw add + @llvm.nvvm.read.ptx.sreg.globaltimer (recorders/cutedsl/wp_cute.py / fi_cutedsl.py) with cute.arch.barrier() brackets around cute.gemm, measuring 85.20 TFLOPS (403.41 us), 526,336 full (fi-l2-s0) spans, and 200 kHz cold-HBM [Throughput %] hardware utilization curves at pid=1 / upid=1 / sort_index=-1000.",
   "machine_profiles": [
     "configs/cards/b300_sm_100a.json",
     "configs/cards/b300_sm_103a.json"
@@ -60,7 +60,7 @@
     }
   },
   "recorder": {
-    "path": "recorders/cutedsl/fi_cute.py",
+    "path": "recorders/cutedsl/wp_cute.py",
     "api_family": "FI_B / FI_E / FI_M / FI_OPEN / FI_CLOSE",
     "backend": "nvidia_globaltimer",
     "build_gates": "FI_LEVEL, FI_GRAN",
@@ -75,7 +75,7 @@
     ],
     "notes": [
       "Use one logical begin/end pair per selected semantic interval.",
-      "Pillar I-IV (v14 <= 10% perturbation engine): CuTeDSL recorder (recorders/cutedsl/fi_cute.py) supports dual-anchor affine local clock calibration (readcyclecounter + globaltimer anchors), single-exit helpers with cute.arch.barrier() brackets around cute.gemm, L2-isolated host fi_reset, and closed-loop stride selection S in {full(1), stride4(4), stride8(8)} enforcing Measured_Overhead(S*) <= 10.0% (fi_trace_gate.py G1-G5).",
+      "Pillar I-IV (v14 <= 10% perturbation engine): CuTeDSL recorder (recorders/cutedsl/wp_cute.py) supports dual-anchor affine local clock calibration (readcyclecounter + globaltimer anchors), single-exit helpers with cute.arch.barrier() brackets around cute.gemm, L2-isolated host fi_reset, and closed-loop stride selection S in {full(1), stride4(4), stride8(8)} enforcing Measured_Overhead(S*) <= 10.0% (fi_trace_gate.py G1-G5).",
       "Keep aux stable between pair members so waits and phases can be correlated.",
       "The device recorder can only carry a 32-bit aux; move larger descriptors to names.json or the capture metadata."
     ]

@@ -34,7 +34,7 @@ sys.path.insert(0, str(PKG / "weaveprof/pipeline/validate" / "tools"))
 
 import fi_align_nsys as AN            # noqa: E402  复用它的合成转储/合成 sqlite 助手
 
-# FILITE02 的 tag 位（与 recorders/cuda_cpp/fi_lite.cuh、weaveprof/pipeline/validate/tools/fi_lite_decode.py 同源）
+# FILITE02 的 tag 位（与 recorders/cuda_cpp/wp_lite.cuh、weaveprof/pipeline/validate/tools/fi_lite_decode.py 同源）
 END, OPEN, MARK, CLOSE = 0x80000000, 0x40000000, 0x20000000, 0x08000000
 
 # 12 条能被默认 --metrics 正则命中的指标名（正向对照要过"至少 10 条曲线"这一关）

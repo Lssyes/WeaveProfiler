@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """AMDGCN 插桩前后相似度：strict/opcode LCS、探针剔除、资源与关键指令顺序。
 
-Triton 的 AMDGCN 汇编带 ``.file``/``.loc`` 行表。可以用 ``--strip-file fi_triton.py`` 只剔除
+Triton 的 AMDGCN 汇编带 ``.file``/``.loc`` 行表。可以用 ``--strip-file wp_triton.py`` 只剔除
 前端探针实现产生的指令，再与 baseline 比较，避免把插入代码本身误算成主循环扰动。
 
 用法：
   python3 -I fi_binsim.py --l0 baseline.s --fi instrumented.s --kernel mm_persistent \
-      --strip-file fi_triton.py -o similarity.json
+      --strip-file wp_triton.py -o similarity.json
   python3 -I fi_binsim.py --selftest
 """
 from __future__ import annotations
@@ -337,7 +337,7 @@ sample:
 """, encoding="utf-8")
         fi.write_text("""
         .file 1 "base.py"
-        .file 2 "/x/fi_triton.py"
+        .file 2 "/x/wp_triton.py"
 sample:
 .LBB0_0:
         .loc 1 1 0
@@ -364,7 +364,7 @@ sample:
             raise AssertionError("kernel 标签缺失时没有报错")
         except SystemExit as e:
             assert "no_such_kernel" in str(e) and "sample" in str(e), str(e)
-        r = analyze(l0, fi, "sam", "sample", ["fi_triton.py"], ["global_load", "v_mfma", "global_store"])
+        r = analyze(l0, fi, "sam", "sample", ["wp_triton.py"], ["global_load", "v_mfma", "global_store"])
         assert r["fi_probe_instructions_removed"] == 3, r
         assert r["sim_strict"] == 1.0 and r["sim_opcode"] == 1.0, r
         assert r["probe_removal_verified"] and r["key_all_present"] and r["key_relative_order_preserved"], r

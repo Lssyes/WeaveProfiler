@@ -26,8 +26,8 @@ try:
     import torch
     import triton
     import triton.language as tl
-    import fi_triton as NV
-    import fi_triton_amd as AMD
+    import wp_triton as NV
+    import wp_triton_amd as AMD
 except Exception as exc:  # pragma: no cover - 依赖缺失时明确跳过，不伪造 PASS
     raise unittest.SkipTest(f"Triton recorder tests require torch/triton: {type(exc).__name__}: {exc}")
 

@@ -69,7 +69,7 @@
         "MFMA",
         "GEMM"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_GEMM = 10;\n\nextern \"C\" __global__ void gemm_one_element(\n    float* c, const float* a, const float* b, int m, int n, int k) {\n  FI_OPEN(0);\n  const int row = blockIdx.x * blockDim.x + threadIdx.x;\n  const int col = blockIdx.y * blockDim.y + threadIdx.y;\n  if (row < m && col < n) {\n    const unsigned aux = static_cast<unsigned>(row * n + col);\n    FI_B(EV_GEMM, aux);\n    float acc = 0.0f;\n    for (int inner = 0; inner < k; ++inner) {\n      acc = fmaf(a[row * k + inner], b[inner * n + col], acc);\n    }\n    FI_E(EV_GEMM, aux);\n    c[row * n + col] = acc;\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_GEMM = 10;\n\nextern \"C\" __global__ void gemm_one_element(\n    float* c, const float* a, const float* b, int m, int n, int k) {\n  FI_OPEN(0);\n  const int row = blockIdx.x * blockDim.x + threadIdx.x;\n  const int col = blockIdx.y * blockDim.y + threadIdx.y;\n  if (row < m && col < n) {\n    const unsigned aux = static_cast<unsigned>(row * n + col);\n    FI_B(EV_GEMM, aux);\n    float acc = 0.0f;\n    for (int inner = 0; inner < k; ++inner) {\n      acc = fmaf(a[row * k + inner], b[inner * n + col], acc);\n    }\n    FI_E(EV_GEMM, aux);\n    c[row * n + col] = acc;\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Immediately before the first A/B tile load for the selected GEMM segment.",
         "end": "After the final accumulator update and after any async MMA completion wait; the enclosing task span closes after the final C write or the selected segment boundary."
@@ -79,7 +79,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -106,7 +106,7 @@
         "attention sink",
         "稀疏注意力"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_ATTENTION = 11;\n\nextern \"C\" __global__ void attention_row(\n    float* out, const float* q, const float* k, const float* v,\n    int keys, int dim) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  const int row = blockIdx.x;\n  const float scale = rsqrtf(static_cast<float>(dim));\n  FI_B(EV_ATTENTION, static_cast<unsigned>(row));\n  float norm = 0.0f;\n  for (int key = 0; key < keys; ++key) {\n    float score = 0.0f;\n    for (int d = 0; d < dim; ++d) {\n      score = fmaf(q[row * dim + d], k[key * dim + d], score);\n    }\n    norm += expf(score * scale);\n  }\n  for (int d = 0; d < dim; ++d) {\n    float acc = 0.0f;\n    for (int key = 0; key < keys; ++key) {\n      float score = 0.0f;\n      for (int e = 0; e < dim; ++e) {\n        score = fmaf(q[row * dim + e], k[key * dim + e], score);\n      }\n      acc = fmaf(expf(score * scale) / norm, v[key * dim + d], acc);\n    }\n    out[row * dim + d] = acc;\n  }\n  FI_E(EV_ATTENTION, static_cast<unsigned>(row));\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_ATTENTION = 11;\n\nextern \"C\" __global__ void attention_row(\n    float* out, const float* q, const float* k, const float* v,\n    int keys, int dim) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  const int row = blockIdx.x;\n  const float scale = rsqrtf(static_cast<float>(dim));\n  FI_B(EV_ATTENTION, static_cast<unsigned>(row));\n  float norm = 0.0f;\n  for (int key = 0; key < keys; ++key) {\n    float score = 0.0f;\n    for (int d = 0; d < dim; ++d) {\n      score = fmaf(q[row * dim + d], k[key * dim + d], score);\n    }\n    norm += expf(score * scale);\n  }\n  for (int d = 0; d < dim; ++d) {\n    float acc = 0.0f;\n    for (int key = 0; key < keys; ++key) {\n      float score = 0.0f;\n      for (int e = 0; e < dim; ++e) {\n        score = fmaf(q[row * dim + e], k[key * dim + e], score);\n      }\n      acc = fmaf(expf(score * scale) / norm, v[key * dim + d], acc);\n    }\n    out[row * dim + d] = acc;\n  }\n  FI_E(EV_ATTENTION, static_cast<unsigned>(row));\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Before Q staging or the first QK score work for the selected attention segment.",
         "end": "After the final output value is visible and the final store or TMA completion wait has finished."
@@ -116,7 +116,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -142,7 +142,7 @@
         "row_sum",
         "归一化指数"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_SOFTMAX = 16;\n\nextern \"C\" __global__ void softmax_row(float* out, const float* src, int width) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  const int row = blockIdx.x;\n  FI_B(EV_SOFTMAX, static_cast<unsigned>(row));\n  float row_max = -INFINITY;\n  for (int col = 0; col < width; ++col) row_max = fmaxf(row_max, src[row * width + col]);\n  float denominator = 0.0f;\n  for (int col = 0; col < width; ++col) denominator += expf(src[row * width + col] - row_max);\n  for (int col = 0; col < width; ++col) {\n    out[row * width + col] = expf(src[row * width + col] - row_max) / denominator;\n  }\n  FI_E(EV_SOFTMAX, static_cast<unsigned>(row));\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_SOFTMAX = 16;\n\nextern \"C\" __global__ void softmax_row(float* out, const float* src, int width) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  const int row = blockIdx.x;\n  FI_B(EV_SOFTMAX, static_cast<unsigned>(row));\n  float row_max = -INFINITY;\n  for (int col = 0; col < width; ++col) row_max = fmaxf(row_max, src[row * width + col]);\n  float denominator = 0.0f;\n  for (int col = 0; col < width; ++col) denominator += expf(src[row * width + col] - row_max);\n  for (int col = 0; col < width; ++col) {\n    out[row * width + col] = expf(src[row * width + col] - row_max) / denominator;\n  }\n  FI_E(EV_SOFTMAX, static_cast<unsigned>(row));\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Before the row maximum reduction or the first online-softmax update.",
         "end": "After the normalized probabilities are materialized and visible to the following consumer."
@@ -152,7 +152,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -181,7 +181,7 @@
         "tl.sum",
         "归约"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_REDUCTION = 12;\n\nextern \"C\" __global__ void warp_sum(const float* src, float* dst) {\n  FI_OPEN(0);\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  const unsigned lane = linear & 31u;\n  const unsigned warp = linear >> 5;\n  const unsigned block_track = blockIdx.x * (blockDim.x * blockDim.y * blockDim.z / 32u) + warp;\n  float value = src[blockIdx.x * blockDim.x + linear];\n  if (lane == 0u) FI_B(EV_REDUCTION, block_track);\n  __syncwarp();\n  for (int delta = 16; delta > 0; delta >>= 1) {\n    value += __shfl_down_sync(0xffffffffu, value, delta);\n  }\n  __syncwarp();\n  if (lane == 0u) {\n    dst[block_track] = value;\n    FI_E(EV_REDUCTION, block_track);\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_REDUCTION = 12;\n\nextern \"C\" __global__ void warp_sum(const float* src, float* dst) {\n  FI_OPEN(0);\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  const unsigned lane = linear & 31u;\n  const unsigned warp = linear >> 5;\n  const unsigned block_track = blockIdx.x * (blockDim.x * blockDim.y * blockDim.z / 32u) + warp;\n  float value = src[blockIdx.x * blockDim.x + linear];\n  if (lane == 0u) FI_B(EV_REDUCTION, block_track);\n  __syncwarp();\n  for (int delta = 16; delta > 0; delta >>= 1) {\n    value += __shfl_down_sync(0xffffffffu, value, delta);\n  }\n  __syncwarp();\n  if (lane == 0u) {\n    dst[block_track] = value;\n    FI_E(EV_REDUCTION, block_track);\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Before the first combine instruction for the selected reduction.",
         "end": "After the last cross-lane, cross-wave, or cross-CTA combine and the result is visible to its consumer."
@@ -191,7 +191,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -218,7 +218,7 @@
         "unpermute",
         "专家网络"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_MOE = 13;\n\n__device__ float dot(const float* x, const float* w, int width) {\n  float acc = 0.0f;\n  for (int i = 0; i < width; ++i) acc = fmaf(x[i], w[i], acc);\n  return acc;\n}\n\nextern \"C\" __global__ void moe_top1(\n    float* out, const float* x, const float* expert0, const float* expert1, int width) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  const int token = blockIdx.x;\n  FI_B(EV_MOE, static_cast<unsigned>(token));\n  const float score0 = dot(x + token * width, expert0, width);\n  const float score1 = dot(x + token * width, expert1, width);\n  const float gate = fmaxf(score0, score1);\n  const float weight0 = expf(score0 - gate);\n  const float weight1 = expf(score1 - gate);\n  const float y0 = dot(x + token * width, expert0, width);\n  const float y1 = dot(x + token * width, expert1, width);\n  out[token] = (weight0 * y0 + weight1 * y1) / (weight0 + weight1);\n  FI_E(EV_MOE, static_cast<unsigned>(token));\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_MOE = 13;\n\n__device__ float dot(const float* x, const float* w, int width) {\n  float acc = 0.0f;\n  for (int i = 0; i < width; ++i) acc = fmaf(x[i], w[i], acc);\n  return acc;\n}\n\nextern \"C\" __global__ void moe_top1(\n    float* out, const float* x, const float* expert0, const float* expert1, int width) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  const int token = blockIdx.x;\n  FI_B(EV_MOE, static_cast<unsigned>(token));\n  const float score0 = dot(x + token * width, expert0, width);\n  const float score1 = dot(x + token * width, expert1, width);\n  const float gate = fmaxf(score0, score1);\n  const float weight0 = expf(score0 - gate);\n  const float weight1 = expf(score1 - gate);\n  const float y0 = dot(x + token * width, expert0, width);\n  const float y1 = dot(x + token * width, expert1, width);\n  out[token] = (weight0 * y0 + weight1 * y1) / (weight0 + weight1);\n  FI_E(EV_MOE, static_cast<unsigned>(token));\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Before routing logits or expert selection for the selected token tile.",
         "end": "After the selected expert output and combine/write-back are visible."
@@ -228,7 +228,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -255,7 +255,7 @@
         "wgrad",
         "卷积"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_CONVOLUTION = 14;\n\nextern \"C\" __global__ void conv3x3_one_pixel(\n    float* out, const float* in, const float* weight, int height, int width) {\n  FI_OPEN(0);\n  const int x = blockIdx.x * blockDim.x + threadIdx.x;\n  const int y = blockIdx.y * blockDim.y + threadIdx.y;\n  if (x < width && y < height) {\n    const unsigned aux = static_cast<unsigned>(y * width + x);\n    FI_B(EV_CONVOLUTION, aux);\n    float acc = 0.0f;\n    for (int ky = 0; ky < 3; ++ky) {\n      for (int kx = 0; kx < 3; ++kx) {\n        const int iy = min(max(y + ky - 1, 0), height - 1);\n        const int ix = min(max(x + kx - 1, 0), width - 1);\n        acc = fmaf(in[iy * width + ix], weight[ky * 3 + kx], acc);\n      }\n    }\n    FI_E(EV_CONVOLUTION, aux);\n    out[y * width + x] = acc;\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_CONVOLUTION = 14;\n\nextern \"C\" __global__ void conv3x3_one_pixel(\n    float* out, const float* in, const float* weight, int height, int width) {\n  FI_OPEN(0);\n  const int x = blockIdx.x * blockDim.x + threadIdx.x;\n  const int y = blockIdx.y * blockDim.y + threadIdx.y;\n  if (x < width && y < height) {\n    const unsigned aux = static_cast<unsigned>(y * width + x);\n    FI_B(EV_CONVOLUTION, aux);\n    float acc = 0.0f;\n    for (int ky = 0; ky < 3; ++ky) {\n      for (int kx = 0; kx < 3; ++kx) {\n        const int iy = min(max(y + ky - 1, 0), height - 1);\n        const int ix = min(max(x + kx - 1, 0), width - 1);\n        acc = fmaf(in[iy * width + ix], weight[ky * 3 + kx], acc);\n      }\n    }\n    FI_E(EV_CONVOLUTION, aux);\n    out[y * width + x] = acc;\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Before the first input patch load for the selected output tile.",
         "end": "After the final accumulation and output write or async store completion."
@@ -265,7 +265,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -291,7 +291,7 @@
         "work queue",
         "大核"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_MEGAKERNEL = 15;\n\nextern \"C\" __global__ void persistent_copy(\n    float* out, const float* in, unsigned* ticket, unsigned num_tiles) {\n  __shared__ unsigned tile;\n  FI_OPEN(0);\n  for (;;) {\n    if (threadIdx.x == 0) tile = atomicAdd(ticket, 1u);\n    __syncthreads();\n    if (tile >= num_tiles) break;\n    FI_B(EV_MEGAKERNEL, tile);\n    for (unsigned i = threadIdx.x; i < 1024u; i += blockDim.x) {\n      out[tile * 1024u + i] = in[tile * 1024u + i];\n    }\n    FI_E(EV_MEGAKERNEL, tile);\n    __syncthreads();\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_MEGAKERNEL = 15;\n\nextern \"C\" __global__ void persistent_copy(\n    float* out, const float* in, unsigned* ticket, unsigned num_tiles) {\n  __shared__ unsigned tile;\n  FI_OPEN(0);\n  for (;;) {\n    if (threadIdx.x == 0) tile = atomicAdd(ticket, 1u);\n    __syncthreads();\n    if (tile >= num_tiles) break;\n    FI_B(EV_MEGAKERNEL, tile);\n    for (unsigned i = threadIdx.x; i < 1024u; i += blockDim.x) {\n      out[tile * 1024u + i] = in[tile * 1024u + i];\n    }\n    FI_E(EV_MEGAKERNEL, tile);\n    __syncthreads();\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "After capture setup and before the persistent scheduler or first segment work.",
         "end": "After the final segment retires and its output visibility wait has completed."
@@ -301,7 +301,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -328,7 +328,7 @@
         "buffer_load",
         "装载"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_LOAD = 1;\n\nextern \"C\" __global__ void load_tile(const float* src, float* dst, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_LOAD, static_cast<unsigned>(index));\n    const float value = src[index];\n    FI_E(EV_LOAD, static_cast<unsigned>(index));\n    dst[index] = value;\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_LOAD = 1;\n\nextern \"C\" __global__ void load_tile(const float* src, float* dst, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_LOAD, static_cast<unsigned>(index));\n    const float value = src[index];\n    FI_E(EV_LOAD, static_cast<unsigned>(index));\n    dst[index] = value;\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Immediately before the load or async-copy issue for the selected tile.",
         "end": "After the value is available for a synchronous load; for async copy, only after the matching wait or barrier/fence returns."
@@ -338,7 +338,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -364,7 +364,7 @@
         "stall",
         "等待"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_WAIT = 2;\n\nextern \"C\" __global__ void wait_for_epoch(unsigned* ready, unsigned epoch) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  FI_B(EV_WAIT, epoch);\n  while (atomicAdd(ready, 0u) != epoch) {\n    __nanosleep(64);\n  }\n  FI_E(EV_WAIT, epoch);\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_WAIT = 2;\n\nextern \"C\" __global__ void wait_for_epoch(unsigned* ready, unsigned epoch) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  FI_B(EV_WAIT, epoch);\n  while (atomicAdd(ready, 0u) != epoch) {\n    __nanosleep(64);\n  }\n  FI_E(EV_WAIT, epoch);\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Immediately before the polling, wait instruction, or dependency check.",
         "end": "After the waited condition is true and the required visibility fence or completion check has returned."
@@ -374,7 +374,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -402,7 +402,7 @@
         "cute.gemm",
         "张量核"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n#include <mma.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_MMA = 3;\nusing namespace nvcuda;\n\nextern \"C\" __global__ void one_wmma(\n    const half* a, const half* b, float* c) {\n  if (threadIdx.x >= 32) return;\n  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;\n  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> b_frag;\n  wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;\n  wmma::fill_fragment(c_frag, 0.0f);\n  wmma::load_matrix_sync(a_frag, a, 16);\n  wmma::load_matrix_sync(b_frag, b, 16);\n  FI_OPEN(0);\n  if (threadIdx.x == 0) FI_B(EV_MMA, 0u);\n  wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);\n  if (threadIdx.x == 0) FI_E(EV_MMA, 0u);\n  FI_CLOSE();\n  wmma::store_matrix_sync(c, c_frag, 16, wmma::mem_row_major);\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n#include <mma.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_MMA = 3;\nusing namespace nvcuda;\n\nextern \"C\" __global__ void one_wmma(\n    const half* a, const half* b, float* c) {\n  if (threadIdx.x >= 32) return;\n  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;\n  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> b_frag;\n  wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;\n  wmma::fill_fragment(c_frag, 0.0f);\n  wmma::load_matrix_sync(a_frag, a, 16);\n  wmma::load_matrix_sync(b_frag, b, 16);\n  FI_OPEN(0);\n  if (threadIdx.x == 0) FI_B(EV_MMA, 0u);\n  wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);\n  if (threadIdx.x == 0) FI_E(EV_MMA, 0u);\n  FI_CLOSE();\n  wmma::store_matrix_sync(c, c_frag, 16, wmma::mem_row_major);\n}\n",
       "event_boundaries": {
         "begin": "Immediately before the tensor-core instruction or async WGMMA/tcgen05 issue.",
         "end": "After the synchronous instruction retires or after the matching async completion wait; never at the issue instruction for async MMA."
@@ -412,7 +412,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -440,7 +440,7 @@
         "elementwise",
         "计算"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_COMPUTE = 4;\n\nextern \"C\" __global__ void affine_exp(float* out, const float* src, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_COMPUTE, static_cast<unsigned>(index));\n    const float value = fmaf(exp2f(src[index]), 0.5f, 0.25f);\n    FI_E(EV_COMPUTE, static_cast<unsigned>(index));\n    out[index] = value;\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_COMPUTE = 4;\n\nextern \"C\" __global__ void affine_exp(float* out, const float* src, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_COMPUTE, static_cast<unsigned>(index));\n    const float value = fmaf(exp2f(src[index]), 0.5f, 0.25f);\n    FI_E(EV_COMPUTE, static_cast<unsigned>(index));\n    out[index] = value;\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Before the first scalar or vector arithmetic instruction in the selected region.",
         "end": "After the last arithmetic result is materialized and available to the next stage."
@@ -450,7 +450,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -477,7 +477,7 @@
         "rescale",
         "收尾"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_EPILOGUE = 5;\n\nextern \"C\" __global__ void convert_with_bias(\n    __half* out, const float* accum, const float* bias, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_EPILOGUE, static_cast<unsigned>(index));\n    const __half value = __float2half_rn(accum[index] + bias[index]);\n    FI_E(EV_EPILOGUE, static_cast<unsigned>(index));\n    out[index] = value;\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_EPILOGUE = 5;\n\nextern \"C\" __global__ void convert_with_bias(\n    __half* out, const float* accum, const float* bias, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    FI_B(EV_EPILOGUE, static_cast<unsigned>(index));\n    const __half value = __float2half_rn(accum[index] + bias[index]);\n    FI_E(EV_EPILOGUE, static_cast<unsigned>(index));\n    out[index] = value;\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "After the main MMA loop and async MMA wait, immediately before accumulator readback or conversion.",
         "end": "After the last conversion, bias, activation, or rescale result is ready for the store."
@@ -487,7 +487,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -513,7 +513,7 @@
         "writeback",
         "写回"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_STORE = 6;\n\nextern \"C\" __global__ void store_tile(float* dst, const float* src, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    const float value = src[index];\n    FI_B(EV_STORE, static_cast<unsigned>(index));\n    dst[index] = value;\n    FI_E(EV_STORE, static_cast<unsigned>(index));\n  }\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_STORE = 6;\n\nextern \"C\" __global__ void store_tile(float* dst, const float* src, int count) {\n  FI_OPEN(0);\n  const int index = blockIdx.x * blockDim.x + threadIdx.x;\n  if (index < count) {\n    const float value = src[index];\n    FI_B(EV_STORE, static_cast<unsigned>(index));\n    dst[index] = value;\n    FI_E(EV_STORE, static_cast<unsigned>(index));\n  }\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Immediately before the store instruction or async TMA store issue.",
         "end": "After a synchronous store is issued and visibility is established; for async TMA store, only after the matching wait_group.read returns."
@@ -523,7 +523,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -550,7 +550,7 @@
         "s_barrier",
         "同步"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_BARRIER = 7;\n\nextern \"C\" __global__ void cta_handoff(float* dst, const float* src) {\n  __shared__ float tile[256];\n  FI_OPEN(0);\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  tile[linear] = src[blockIdx.x * blockDim.x + linear];\n  if (linear == 0u) FI_B(EV_BARRIER, blockIdx.x);\n  __syncthreads();\n  if (linear == 0u) FI_E(EV_BARRIER, blockIdx.x);\n  dst[blockIdx.x * blockDim.x + linear] = tile[255u - linear];\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_BARRIER = 7;\n\nextern \"C\" __global__ void cta_handoff(float* dst, const float* src) {\n  __shared__ float tile[256];\n  FI_OPEN(0);\n  const unsigned linear = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);\n  tile[linear] = src[blockIdx.x * blockDim.x + linear];\n  if (linear == 0u) FI_B(EV_BARRIER, blockIdx.x);\n  __syncthreads();\n  if (linear == 0u) FI_E(EV_BARRIER, blockIdx.x);\n  dst[blockIdx.x * blockDim.x + linear] = tile[255u - linear];\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Immediately before the barrier arrive/wait sequence.",
         "end": "After all required participants pass the barrier and the associated fence or visibility rule holds."
@@ -560,7 +560,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -587,7 +587,7 @@
         "task queue",
         "分发"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_DISPATCH = 8;\n\nextern \"C\" __global__ void acquire_work(unsigned* ticket, unsigned* assigned) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  FI_B(EV_DISPATCH, blockIdx.x);\n  const unsigned work = atomicAdd(ticket, 1u);\n  FI_E(EV_DISPATCH, blockIdx.x);\n  assigned[blockIdx.x] = work;\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_DISPATCH = 8;\n\nextern \"C\" __global__ void acquire_work(unsigned* ticket, unsigned* assigned) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  FI_B(EV_DISPATCH, blockIdx.x);\n  const unsigned work = atomicAdd(ticket, 1u);\n  FI_E(EV_DISPATCH, blockIdx.x);\n  assigned[blockIdx.x] = work;\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Immediately before the ticket, work-item, token, or expert assignment operation.",
         "end": "After the assignment is visible and the selected work item is known to its consumers."
@@ -597,7 +597,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."
@@ -626,7 +626,7 @@
         "nvshmem",
         "通信"
       ],
-      "source_example": "#include <cuda_runtime.h>\n#include \"fi_lite.cuh\"\nconstexpr unsigned EV_COMMUNICATION = 9;\n\nextern \"C\" __global__ void rank_allreduce(\n    float* value, volatile unsigned* peer_ready, volatile float* peer_value,\n    unsigned rank, unsigned num_ranks, unsigned epoch) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  FI_B(EV_COMMUNICATION, rank);\n  const float local = value[rank];\n  peer_value[rank] = local;\n  __threadfence_system();\n  peer_ready[rank] = epoch;\n  for (unsigned peer = 0; peer < num_ranks; ++peer) {\n    while (peer_ready[peer] != epoch) __nanosleep(64);\n  }\n  float total = 0.0f;\n  for (unsigned peer = 0; peer < num_ranks; ++peer) total += peer_value[peer];\n  value[rank] = total;\n  FI_E(EV_COMMUNICATION, rank);\n  FI_CLOSE();\n}\n",
+      "source_example": "#include <cuda_runtime.h>\n#include \"wp_lite.cuh\"\nconstexpr unsigned EV_COMMUNICATION = 9;\n\nextern \"C\" __global__ void rank_allreduce(\n    float* value, volatile unsigned* peer_ready, volatile float* peer_value,\n    unsigned rank, unsigned num_ranks, unsigned epoch) {\n  if (threadIdx.x != 0) return;\n  FI_OPEN(0);\n  FI_B(EV_COMMUNICATION, rank);\n  const float local = value[rank];\n  peer_value[rank] = local;\n  __threadfence_system();\n  peer_ready[rank] = epoch;\n  for (unsigned peer = 0; peer < num_ranks; ++peer) {\n    while (peer_ready[peer] != epoch) __nanosleep(64);\n  }\n  float total = 0.0f;\n  for (unsigned peer = 0; peer < num_ranks; ++peer) total += peer_value[peer];\n  value[rank] = total;\n  FI_E(EV_COMMUNICATION, rank);\n  FI_CLOSE();\n}\n",
       "event_boundaries": {
         "begin": "Before the first peer publish, collective issue, or communication wait for the selected rank group.",
         "end": "After the local collective result is visible to the consumer and all required completion waits return."
@@ -636,7 +636,7 @@
       "buffer_rule": "Use a fixed per-slot cap and set FI_LEVEL=0/1/2 for off/entry-only/full; cap includes OPEN, CLOSE, and timer anchors. Before delivery check every offset < max_records, every slot < n_slots, FI overflow is zero, and final trace/summary/log SHAs close the run. Never wrap or reuse a full slot.",
       "language_notes": [
         "Targets: H20 is nv/sm_90 (measured 57.52 TFLOPS Warp-Specialized GEMM); B300 is nv/sm_100a or nv/sm_103a (measured 179.92 TFLOPS / 190.98 us Warp-Specialized GEMM on sm_103a, 148 SMs, 267 GB HBM3e) and must be compiled and labelled per actual architecture.",
-        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/fi_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
+        "FI_B/FI_E/FI_M and branchless predicated FI_BG_PRED(fi_rec_k_, ...)/FI_EG_PRED(fi_rec_k_, ...) arrive through recorders/cuda_cpp/wp_lite.cuh; event ids are 1..4095 and 0 means an empty record.",
         "For 2-WarpGroup Warp-Specialized GEMM (if (warp_id < 4) { /* Producer_DMA */ } else { /* Consumer_MMA */ }), Producer_DMA warps 0..3 must use cp.async.mbarrier.arrive.noinc.shared.b64 (never omit .noinc, which doubles expected arrival count 128 -> 256 and deadlocks mbarrier.try_wait.parity.shared.b64).",
         "Record an async load, WGMMA, or TMA store end only after the matching wait; an issue-site timestamp is not data-ready evidence.",
         "Keep FI_OPEN and FI_CLOSE on every executed path and keep the same event id/aux pairing for begin and end."

@@ -564,11 +564,11 @@ def build_direct_search_replace_prompt(
         probe_guide = """
 ### Direct Ad-Hoc Timer Mode (KB-Only Ablation — Without WeaveProfiler Sidecar Library)
 - Apply the Two-Level Knowledge Base stage & boundary rules above (outer-stage granularity, spin-loop exclusion, async completion pairing),
-  using standard native GPU clock intrinsics (`clock64()` / `s_memrealtime` / inline PTX) without `#include "wp_lite.cuh"` or `#include "fi_lite.cuh"`,
+  using standard native GPU clock intrinsics (`clock64()` / `s_memrealtime` / inline PTX) without `#include "wp_lite.cuh"` or `#include "wp_lite.cuh"`,
   and keep outer kernel parameter signatures intact so existing callers still compile.
 """
     elif lang in ("cuda_cpp", "hip_cpp"):
-        recorder_hdr = "fi_lite.cuh" if lang == "cuda_cpp" else "fi_lite_hip.h"
+        recorder_hdr = "wp_lite.cuh" if lang == "cuda_cpp" else "wp_lite_hip.h"
         wp_hdr = "wp_lite.cuh" if lang == "cuda_cpp" else "wp_lite_hip.h"
         probe_guide = f"""
 ### WeaveProfiler Probe Primitives (`{wp_hdr}` / `{recorder_hdr}`)

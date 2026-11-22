@@ -412,7 +412,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/cuda_cpp/fi_lite.cuh"
+                "const": "recorders/cuda_cpp/wp_lite.cuh"
               }
             }
           }
@@ -442,7 +442,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/triton/fi_triton.py"
+                "const": "recorders/triton/wp_triton.py"
               }
             }
           }
@@ -472,7 +472,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/cutedsl/fi_cute.py"
+                "const": "recorders/cutedsl/wp_cute.py"
               }
             }
           }
@@ -502,7 +502,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/cuda_cpp/fi_lite.cuh"
+                "const": "recorders/cuda_cpp/wp_lite.cuh"
               }
             }
           }
@@ -532,7 +532,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/triton/fi_triton.py"
+                "const": "recorders/triton/wp_triton.py"
               }
             }
           }
@@ -562,7 +562,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/cutedsl/fi_cute.py"
+                "const": "recorders/cutedsl/wp_cute.py"
               }
             }
           }
@@ -592,7 +592,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/hip_cpp/fi_lite_hip.h"
+                "const": "recorders/hip_cpp/wp_lite_hip.h"
               }
             }
           }
@@ -622,7 +622,7 @@
           "recorder": {
             "properties": {
               "path": {
-                "const": "recorders/triton/fi_triton_amd.py"
+                "const": "recorders/triton/wp_triton_amd.py"
               }
             }
           }

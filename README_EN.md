@@ -1,17 +1,23 @@
-# WeaveProfiler (wp)
+# WeaveProfiler (`wp`)
 [简体中文](README.md) | English
 
-## Overview & Quickstart
+WeaveProfiler is a low-overhead intra-kernel GPU profiler and software–hardware timeline aligner built for both human engineers and AI coding agents (Claude Code, Codex CLI, etc.). It reveals what every physical SM and every physical warp is doing microsecond by microsecond, aligned directly with same-run `nsys` / `rocprof` hardware utilization curves.
 
-WeaveProfiler (`wp`) is a toolkit for low-overhead intra-kernel instrumentation on GPUs, software/hardware timeline alignment, and closed-loop operator optimization together with AI coding agents. It targets complex persistent kernels (Sparse Attention, GDN, MoE) as well as common CUDA/HIP/CuTeDSL/Triton operators.
+It runs directly on your local GPU machine **without modifying your original kernel source, function signatures, or caller code**.
 
-Supported hardware: NVIDIA H20 (`sm_90a`), NVIDIA B300 (`sm_100a` / `sm_103a`), AMD Instinct MI308X (`gfx942`).
+---
 
-Supported frontends: CUDA C++, HIP C++, CuTeDSL, Triton (NVIDIA and AMD).
+## 1. Quickstart
 
-Supported agents: Claude Code and OpenAI Codex CLI natively; any command-line agent through `guard-exec` wrapping.
+### Supported Platforms & Frontends
 
-Quickstart (2 steps):
+| Dimension | Support |
+| --- | --- |
+| Hardware | NVIDIA H20 (`sm_90a`), NVIDIA B300 (`sm_100a` / `sm_103a`), AMD Instinct MI308X (`gfx942`) |
+| Languages | CUDA C++, HIP C++, CuTeDSL, Triton (NVIDIA and AMD) |
+| Agents | Native Claude Code and OpenAI Codex CLI; any CLI agent via `guard-exec` |
+
+### 2-Step Local Setup
 
 ```bash
 git clone https://github.com/ziyuhuang123/WeaveProfiler.git
@@ -21,116 +27,121 @@ python3 -B WeaveProfiler/run.py install-agent \
   --card h20
 ```
 
-After entering the operator directory, run `claude` or `codex` directly — MCP, hooks and the skill are already configured. Alternatively, use the non-interactive wrapper:
+This configures MCP, Hooks, and the Skill inside your operator repository. Then simply open the directory and run `claude` or `codex`.
+
+For non-interactive CLI runs:
 
 ```bash
 python3 -B WeaveProfiler/run.py guard-exec \
   --workspace /path/to/your_kernel_repo \
-  -- codex exec "Profile the baseline kernel and diagnose cross-SM load imbalance"
+  -- codex exec "Profile this kernel and diagnose cross-SM load imbalance"
 ```
 
-## Measured From-Zero-to-Instrumented Wall-Clock Time (H20)
+---
 
-The input is fully uninstrumented source. Starting from zero, the flow covers: locate instrumentation points -> rule-based injection generating shadow code -> compile -> on-device ABBA timing with byte-level output comparison -> four fidelity gates -> automatic loop re-hoisting and re-measurement if needed -> issue `seal.json` on pass.
+## 2. Real-World Case Studies & H20 Silicon Results
 
-**Triton 3.6 Sparse/Flash Attention (0 lines changed in external callers):**
-- Pure deterministic rule path (0 LLM calls): first round identification 2 ms + injection 25.6 ms + JIT/run/decode 1.93 s = 1.96 s (first-round probe in the inner loop raised overhead by 19.9%, did not pass gates) -> automatic loop re-hoist 42.4 ms + JIT/run/decode 1.28 s -> **total 3.29 s to PASS** (overhead +4.95%, 0-byte diff, 0 overflow, 3,072 spans).
-- LLM semantic identification path (`deepseek-v4.1-flash-1017`, `effort=low`): first-round identification 5.09 s + injection 40.0 ms + run 2.00 s + second-round automatic re-hoist 1.33 s -> **total about 8.5 s**.
+### 2.1 Paper Case Study: 8×H20 Production DeepGEMM MegaMoE Optimization (`1.47×` Speedup)
 
-**CUDA C++ multi-file `.so` Sparse TopK MQA (0 `__global__` signature changes, 0 host changes):**
-- `deepseek-v4.1-flash-1017` (`effort=low`) + deterministic expansion + automatic loop re-hoist: first-round identification 10.01 s + expansion 21.8 ms + parallel `L0`/`L_inst` compilation and on-device run 8.71 s = 18.75 s (first round hit +20.1% inner-loop overhead and overflow gates) -> second round, 0 LLM, automatic re-hoist 30.4 ms + `L0` cache-hit incremental compile/run/seal 7.75 s -> **total 26.53 s to PASS seal** (overhead +5.70%, 0 spill, 0-byte diff, 0 overflow, `seal_verified=true`).
-- Note: if first-round identification were set to a slow-thinking depth (for example `qwen4-max` with `reasoning_effort=max`), a single identification alone takes about 189 s. Therefore `identify_source` defaults to `low` for the first round (5–12 s) and only raises to `max` on failure-repair rounds.
+On an 8×NVIDIA H20 system (`sm_90a`, 78 SMs, full-mesh NVLink) running production **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8, S=1024, E=512`), WeaveProfiler's aligned SW+HW timeline directly pinpointed two root bottlenecks and guided refactoring to a **`1.47×` end-to-end speedup** (full walkthrough in [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)):
 
-**`ziyuhuang123/weave` 348-line `sm90_fp8_mqa_logits.cuh` (`CUTLASS_GLOBAL __launch_bounds__`):**
-- From-zero identification plus deterministic rule expansion: `offline` heuristic 25 ms; `deepseek-v4.1-flash-1017` (`low`) 11.72 s (identified `load/compute/wait/mma/store` 5 stages, `zero_sig_change=true`); `.cubin` `cudaLibrary_t` compile-load-run-decode 2.83 s (`STO_ENTRY == 1`).
+![8×H20 DeepGEMM MegaMoE Before/After Co-Axial Timeline](docs/images/case_h20_megamoe_1p47x.png)
 
-**Subsequent optimization iterations (second round onward, `L0` compile cache hit):**
-- Triton approximately **1.3–2.0 s**; CUDA C++ `.so` approximately **7.0–7.8 s**.
+| Variant | Latency | FP8 Tensor Core (Avg / Peak) | HBM BW (Avg / Peak) | Root Cause & Optimization |
+| --- | ---: | ---: | ---: | --- |
+| Original split DeepGEMM (a) | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` | ① ~65 µs idle gap between GEMM1 & GEMM2 launches; ② Synchronous `Scatter` blocks GEMM2 compute warpgroups |
+| **Optimized fused Megakernel (b)** | **`416.4 µs` (`1.47×`)** | **`41.8%` / `62.6%`** | **`55.7%` / `81.5%`** | ① Single-kernel fusion + dynamic expert queue (`94.0%` active SMs); ② Async `Scatter` offloaded to idle `Disp` warps |
 
-## Core Engineering Design
+### 2.2 Zero-Signature Profiling of Open-Source Libraries (Direct Local 3-Panel PNGs)
 
-### Register compression and low-perturbation in-kernel recording
+Measured on NVIDIA H20 (`sm_90a`, 78 SMs) starting from completely unmodified open-source library code (stage identification -> deterministic injection in an isolated temp copy -> compile & benchmark -> four checks -> automatic refinement on failure -> same-run 200.3 kHz `nsys` aligned PNG):
 
-`WP_CTX_1R` compresses the slot number (`slot`, high 16 bits), write cursor (`cur`, low 15 bits) and an overflow-disable flag (sign bit) into a single 32-bit register. The recording buffer metadata is placed in `__constant__ wp_fi_c` (constant cache, 0 B SMEM, no per-thread general-purpose register). `-DWP_CTX_1R_NOINLINE` moves the cold path into a `__noinline__` helper, reducing main-loop register pressure.
+| Open-Source Library & Kernel | Frontend & Shape (H20) | Warp Coverage | Closed-Loop Result & Overhead |
+| --- | --- | :---: | --- |
+| **FlashInfer 0.6.8 Hopper FA3** (`prefill_sm90.cuh` + 2 mainloop headers) | CUDA C++, `B=5, H=16, S=512, D=128` (also `S=4096`) | **12 / 12** (`W00..W11`) | Zero signature edits; `-1.62%` steady-state overhead (`S=4096`), `0.33%` SW–HW boundary delta |
+| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`, DeepSeek-V3 paged MLA) | CUDA C++, `B=64, H=128, KV=512` (also `KV=4096`) | **8 / 8** (`W00..W07`) | Round 1 over-fine probes (`+14.55%`) auto-rejected -> Round 2 auto-pruned PASS: **`+8.25%`** (`KV=512`) / **`+6.11%`** (`KV=4096`), 0 B spill |
+| **vLLM FLA FlashKDA** (`chunk_delta_h.py`, linear attention recurrence) | Triton 3.6, `B=1, T=512, H=64, D=128` (also `T=8192`) | **4 / 4** (`W00..W03`) | Pins baseline winning `@autotune` config; auto-hoist + boundary fusion PASS: **`+6.74%`** (`T=512`) / **`+8.14%`** (`T=8192`), 0 B spill |
+| **DeepGEMM** (`8×H20` production MegaMoE, Qwen3.5-397B) | CUDA C++, `EP=8, S=1024, E=512` | All warp roles | End-to-end **`613.2 → 416.4 µs` (`1.47×`)** |
 
-`WP_SMEM_ZREG` is intended for kernels that use `setmaxnreg` or are extremely register-constrained. It places the context in 16 B of static `__shared__` memory and pairs with a `__noinline__` writer function, so 0 additional registers stay live in the loop body.
+All three figures below are raw 3-panel PNGs (`overview.png`) rendered directly by WeaveProfiler on H20:
 
-For memory access and timing: 16-byte streaming store instructions `st.global.cs.v4.u32` avoid polluting L2 business data; support for `%globaltimer` (`-DWP_TIMER=0`) and for `%clock64` local clock with OPEN/CLOSE dual-anchor calibration (`-DWP_TIMER=1`); support for PTX predicate recording without control-flow divergence and merge of adjacent stage timestamps (`WP_TRANS_PRED`).
+- **FlashInfer 0.6.8 Hopper FA3 Prefill** (CUDA C++ across 3 headers, `B=5, H=16, S=512, D=128`, all 12 physical warps):
 
-### Four-language support with zero call-stack changes
+![FlashInfer 0.6.8 Hopper FA3 H20 Overview](docs/images/case_h20_flashinfer_fa3.png)
 
-**CUDA C++** (`recorders/cuda_cpp/wp_lite.cuh`) and **HIP C++** (`recorders/hip_cpp/wp_lite_hip.h`):
-- `__global__` entry points acquire no new parameters; they bind via `__constant__ wp_fi_c` / `__device__ wp_g` and host-side `wp_attach`.
-- `__device__` sub-function call chains do not change signatures; `WP_KERNEL_SCOPE` + `WP_DEVICE_SCOPE` + `WP_SYNC_CURSOR_OUT/IN` synchronize the cursor through `wp_g.cur[slot]`, so the context does not need to be passed through every level.
-- Multi-file `.so` supports `-DWP_DEFINE_HOST_API` to export `extern "C" wp_init/wp_reset/wp_dump/wp_free`; the Python side controls it through `weaveprof.WpSoController`.
-- Runtime `.cubin` JIT (for example DeepGEMM / `weave`'s `cudaLibrary_t`) is bound via `wp_attach_library(lib, &buf)`, keeping `STO_ENTRY == 1` and adding no new `__global__` symbols.
+- **FlashInfer 0.6.8 Hopper FlashMLA** (CUDA C++ `mla_hopper.cuh`, `B=64, H=128, KV=512`, all 8 physical warps, showing the `128 = 78 + 50` two-wave step):
 
-**Triton (NVIDIA / AMD)** (`recorders/triton/wp_triton.py`, `wp_triton_amd.py`) and **CuTeDSL** (`recorders/cutedsl/wp_cute.py`):
-- The rule engine replaces the original kernel name with a same-name transparent proxy (`_FiTritonProxy` / `_FiCuteProxy` / `_FiCuteDescriptor`, supporting module functions and class methods); external Python call sites `kernel[grid](...)` or `obj.method(...)` require 0 line changes.
-- At runtime the recording buffer is injected through `wp_attach(buf)`; the Triton proxy preserves the uninstrumented `L0` `@triton.autotune` and directly reuses its winning configuration.
+![FlashInfer 0.6.8 Hopper FlashMLA H20 Overview](docs/images/case_h20_flashmla.png)
 
-### Shadow copies and sandbox isolation
+- **vLLM FLA FlashKDA** (Triton 3.6 `chunk_delta_h.py`, `B=1, T=512, H=64, D=128`, all 4 physical warps, breaking down load, 8 recurrence chunks, and store):
 
-**Independent shadow copies**: all instrumentation, compilation and runs happen inside independent `L0` (uninstrumented) and `L_inst` (instrumented) copies outside the workspace; production source is never touched. The production source SHA-256 is re-checked before sealing.
+![vLLM FLA FlashKDA H20 Overview](docs/images/case_h20_flashkda.png)
 
-**Content-addressed `L0` cache and parallel builds**: `L0` build artifacts are cached by source-tree hash and compiled in parallel with `L_inst`; re-measurement skips duplicate baseline builds.
+---
 
-**Linux `bwrap` read-only mounts and a 100 ms watchdog thread**: on Linux, `guard-exec` uses `bubblewrap` to mount the `WeaveProfiler` directory, `.claude/`, `.codex/`, `.agents/skills/weaveprofiler/`, `.mcp.json` and `.supervisor.key` read-only, and runs a 100 ms background watchdog thread that detects and rolls back unsigned tampering.
+## 3. Core Engineering Design
 
-### Four fidelity gates and HMAC anti-forgery seal
+WeaveProfiler is built around **two core design pillars** and **one engineering implementation layer**:
 
-- **Compiler resource and spill check**: besides register count, parse `nvcc`/`cuobjdump` `spill_stores`, `spill_loads`, `stack_bytes` and SASS `STL`/`LDL` deltas, blocking cases where the register count is unchanged but the compiler silently spills to local memory.
-- **Output consistency check**: byte-level (or tolerance-specified) comparison of `L0` and `L_inst` output tensors.
-- **Probe integrity and hollow-probe rejection**: requires 0 overflow, 0 pairing errors, and rejects hollow probes whose duration is close to the recorder's own latency (for example 64 ns).
-- **Symmetric ABBA hot-state overhead gate**: requires alternating hot-state timing (ABBA) with `|overhead| <= 10%`, blocking both positive slowdown and negative distortion caused by instrumentation disrupting the compiler's loop unrolling or scheduling (`NEGATIVE_OVERHEAD_PERTURBATION`).
-- **HMAC seal**: `seal.json` is issued using `~/.cache/weaveprof/sessions/<id>/.supervisor.key` outside the workspace, binding source, configuration, verification results and trace summary.
+### 3.1 Design Point 1: Ensuring Correctness (LLM Understanding + Deterministic Injection & Verification)
 
-### Timeline visualization and optimization comparison
+- **The LLM only reads code; deterministic Python inserts the probes**: The LLM never edits your kernel source directly. It reads the source against cross-language exemplars and outputs a structured `probe.json` (warp-role predicates and stage start/end line numbers). Fixed Python code copies your source into an isolated temp directory and deterministically injects the timing calls, keeping results reproducible and leaving original source files untouched.
+- **Tamper-resistant execution (MCP Server + HMAC Seal + Hooks + Read-Only Isolation)**:
+  - **MCP Server & HMAC-SHA256 Seal**: Instrumentation, compilation, benchmarking, and rendering run inside a separate MCP server process. Only when all four checks pass does it compute an HMAC-SHA256 signature (`seal.json`) over **original source hash + `probe.json` hash + timeline artifact hash + check results** using a secret key invisible to the agent. Downstream checks and `Stop` hooks re-verify all hashes and signatures.
+  - **Lifecycle Hooks (`PreToolUse / PostToolUse / Stop`)**: Automatically block the agent from bypassing `probe.json` to edit production kernel code with timing statements or tamper with verification scripts/seals, and block finishing a turn until the live source matches a valid `PASS` seal with zero leftover probe code.
+  - **Read-Only Isolation**: Verification scripts, compiler configs, and signing keys are isolated read-only from normal workspace commands.
+- **Four Blocking Checks & Closed-Loop Refinement**:
+  1. *Disassembly check*: After ignoring probe instructions and register numbering, verifies that core compute/memory instruction order and main-loop unrolling are unchanged and no new register spills are introduced.
+  2. *Output check*: Verifies numerical outputs match the uninstrumented kernel within tolerance.
+  3. *Event completeness check*: Verifies every begin/end pair is closed (`t_end >= t_begin`), zero drops/overflow, no hollow/collapsed stages, and every physical warp in the CTA is recorded.
+  4. *Runtime overhead check*: Interleaved warm timing against the original kernel stays within the configured budget (default `10%`).
+  - Whenever any check fails, the verifier rejects delivery and returns `feedback.json` **together with the failed-run timeline** to the LLM so it can revise `probe.json` (for example, lifting hot inner-loop probes to outer loop boundaries) until all four checks pass.
 
-- **Remote 3-panel SW+HW overview PNG (`overview.png`)**: `run_megakernel_audit` and `weaveprof_megakernel_audit` automatically render a single-run 3-panel overview PNG directly on the GPU host via `weaveprof/viz.py` (~1.4 s, ~250–350 KB) on one locked microsecond axis, and do not emit `.perfetto.json.gz` by default (opt in with `write_perfetto_gz=True`):
-  - **Panel (A)**: Same-run 200 kHz `nsys` hardware utilization curves (`Tensor Active`, `DRAM BW`, `SM Issue`, `Active SMs`) with boxed peak/mean KPI chips.
-  - **Panel (B)**: All physical SMs (`SM0..SM{N-1}`) dense per-tile stage waterfall showing cross-SM tail skew.
-  - **Panel (C)**: Representative SM (`SM 0`) per-warp-role (or concurrent CTA slot) timeline.
-- **Compact `<2 KB` causal JSON & cross-SM imbalance**: Alongside `overview.png`, the audit returns `<2 KB` JSON (`stage_summary`, quartile hardware trajectories `hw_quartiles`, `megakernel_skew`, and ranked `causal_opportunities`) readable by both multimodal and text-only coding agents.
-- **Before/after comparison**: Using the current card's measured compute throughput and bandwidth ceiling (H20 / B300 / MI308X), compare pre-change and post-change duration and stage-share changes, and decide whether the change is effective or should be reverted.
+### 3.2 Design Point 2: Ensuring Measurement Accuracy (Low-Perturbation In-Kernel Recording)
 
-## MCP Server Reference
+- **Per-warp private buffers & cache-bypassing stores**: Each `(CTA, physical warp)` gets its own sequential memory slice written by `lane 0` in 16-byte records with zero atomics, using cache-bypassing streaming stores (`st.global.cs.v4.u32`) so kernel data caches are not polluted.
+- **Constant-memory descriptor & 1-register cursor**: Buffer base address and capacity live in read-only constant memory while the live loop packs `(slot, cursor, overflow)` into **a single 32-bit register** (`0 B` shared memory). On register-saturated kernels where even 1 extra register triggers spilling, the harness automatically switches to keeping the write cursor in 16 bytes of shared memory with a `__noinline__` recording helper so the main loop uses zero extra registers.
+- **Dual-anchor timing & adjacent boundary fusion**: Supports chip-wide synchronized clocks (`%globaltimer` / `s_memrealtime`) or open/close synchronized anchors plus lightweight cycle counters (`%clock64` / `s_memtime`) converted offline. Adjacent end+begin stage boundaries automatically merge into a single clock read + paired write.
 
-`weaveprof/mcp_server.py` is a zero-external-dependency stdio JSON-RPC 2.0 server (compatible with newline-delimited and `Content-Length` framing; at startup, fd 1 is redirected to stderr to prevent stray output from breaking the protocol; output directories and build/measure commands are validated internally for path and command legality).
+### 3.3 Implementation: Zero Signature Changes & Direct Local 3-Panel PNGs
 
-It exposes 7 tools:
+- **Zero function-signature or call-stack changes**:
+  - **CUDA C++ (`recorders/cuda_cpp/wp_lite.cuh`) & HIP C++ (`recorders/hip_cpp/wp_lite_hip.h`)**: `__global__` parameter lists stay untouched; the host binds the buffer address via `MemcpyToSymbol` or dynamic `.cubin` symbol lookup (`cuLibraryGetGlobal`), while nested `__device__` helpers across headers hand off the write position via per-warp progress slots.
+  - **Triton (`recorders/triton/wp_triton.py`, `wp_triton_amd.py`) & CuTeDSL (`recorders/cutedsl/wp_cute.py`)**: A transparent same-name wrapper proxy unwraps `@heuristics` / `@autotune`, pins the baseline winning configuration, and passes the buffer pointer only at the lowest kernel launch site with zero caller edits.
+- **Direct local 3-panel SW+HW overview PNG (`overview.png`)**: After aligning software events with same-run `nsys` / `rocprof` hardware metrics on one shared microsecond axis, `weaveprof/viz.py` directly renders a compact 3-panel PNG locally (while optionally keeping Perfetto traces):
+  - **Panel (A)**: Same-run hardware utilization curves (Tensor/Matrix Core, HBM BW, NVLink BW, Active SMs).
+  - **Panel (B)**: All physical SMs (`SM0..SM{N-1}`) multi-stage execution waterfall.
+  - **Panel (C)**: Representative SM per-physical-warp detailed timeline.
 
-1. `weaveprof_status` — shows the current workspace's protected-file list, baseline SHA-256, live SHA-256, count of valid PASS seals, whether the Edit and Stop gates are unlocked, and the current best duration.
-2. `weaveprof_megakernel_audit` — runs (or works from an already-collected dump) a single-file or multi-file kernel audit inside an independent shadow copy: compiles `L0`/`L_inst` in parallel (with `L0` cache), runs ABBA timing, passes the four fidelity gates, emits cross-SM load analysis and bottleneck hints, generates a Perfetto trace and an HMAC `seal.json`, and automatically registers valid seals to the current session.
-3. `weaveprof_profile` — runs the from-zero automatic identification and closed-loop instrumentation profile (produce `probe.json` -> rule-inject into a shadow copy -> ABBA timing and gate validation -> automatic loop re-hoist on failure -> issue and register `seal.json`).
-4. `weaveprof_plan_context` — given kernel source, architecture and register/shared-memory headroom, plans a low-overhead context mode (`WP_CTX_1R` vs `WP_SMEM_ZREG`) and compile-parameter recommendations.
-5. `weaveprof_analyze` — attributes bottlenecks on an already-aligned software/hardware trace JSON and outputs a compute/bandwidth utilization summary, cross-SM skew statistics and yield-ordered optimization suggestions.
-6. `weaveprof_compare_rounds` — compares the previous round's and current round's analysis report, identifies eliminated / residual / newly introduced bottlenecks, and gives continue-optimizing or revert recommendations.
-7. `weaveprof_verify_seal` — verifies the HMAC of a specified `seal.json` using the out-of-workspace session key (HMAC + bound-artifact digest + overhead-limit check); on pass, registers it to the session.
+---
 
-## Hook Guard Reference
+## 4. MCP Tools & Hook Rules
 
-`install-agent` writes the hooks to both Claude Code (`.claude/settings.json`) and OpenAI Codex CLI (`.codex/hooks.json` plus `.codex/config.toml` with `hooks = true`). They follow a unified protocol: read JSON from stdin; allow with exit `0`; block with a clear reason on stderr and exit `2`.
+### MCP Tools (`weaveprof/mcp_server.py`)
 
-All session state and keys live outside the workspace under `~/.cache/weaveprof/sessions/<workspace_hash>/` (containing `.supervisor.key`, `session.json`, and `backups/` with raw-byte baselines).
+`install-agent` registers 7 MCP tools for Claude Code and Codex CLI:
 
-Three trigger phases:
+| Tool | Purpose |
+| --- | --- |
+| `weaveprof_status` | Show protected files, baseline/live SHA-256 hashes, valid verified seals, and current best latency. |
+| `weaveprof_megakernel_audit` | Instrument in an isolated temp copy, benchmark, run all 4 checks, analyze cross-SM skew, render `overview.png`, and issue `seal.json`. |
+| `weaveprof_profile` | End-to-end closed-loop profiling from scratch (`probe.json` -> temp-copy inject & verify -> auto-refine on failure -> `seal.json`). |
+| `weaveprof_plan_context` | Recommend recorder state placement and compiler flags based on register/shared-memory headroom. |
+| `weaveprof_analyze` | Run bottleneck attribution on an aligned trace, returning compute/bandwidth summaries, cross-SM skew, and ranked optimization ideas. |
+| `weaveprof_compare_rounds` | Compare previous and current profiling rounds to verify whether bottlenecks were eliminated or regressed. |
+| `weaveprof_verify_seal` | Verify the HMAC signature and bound artifact hashes of a `seal.json`. |
 
-**PreToolUse (before the tool call):**
-- Block reads of or access to `.supervisor.key`, the session store directory, `guard_hook.py`, `mcp_server.py` and related environment variables.
-- Block any command or argument that sets `WP_SAMPLE` / `FI_SAMPLE > 1`, block re-running `install-agent` / `guard-exec` to reset the baseline, and block modifications or deletions of `seal.json` / `verify.json` / `episode_ledger.json` and `.claude/` / `.codex/` / `.mcp.json` / `~/.claude/` / `~/.codex/` (this also covers `bench_cmd`, `build_cmd`, `out_dir` and similar fields passed through MCP tools).
-- Before any HMAC-verified baseline `PASS` seal exists, block `Edit` / `Write` / `apply_patch` / `Bash` from modifying any protected operator file.
-- Even after edit is unlocked, block insertion of `wp_lite.cuh`, `WP_OPEN`, `WP_B(`, `FI_OPEN` and similar probe code into production operator source; instrumentation may only occur in shadow copies.
+### Hook Protection (`weaveprof/guard_hook.py`)
 
-**PostToolUse (after the tool call):**
-- Verify the protected files' live SHA-256. If they were silently modified via `Bash` or scripts before a valid `PASS` seal exists, immediately restore original bytes from the out-of-workspace `backups/` and block with an error.
-- Scan protected files for newly added probe macros and block on detection.
+Session keys and clean source backups live outside the repo under `~/.cache/weaveprof/sessions/<workspace_hash>/`:
 
-**Stop / SubagentStop (before ending a turn):**
-- Require at least one HMAC-verified `PASS` seal in the session; the current bytes of each protected file must match some sealed `PASS` version (after code changes, the audit must be run again and a new seal issued, or the file must be reverted to a sealed version); files must not contain probe macros.
-- A single-turn anti-infinite-loop counter is included: after three consecutive blocks in one stop sequence, the fourth is allowed and the counter is immediately zeroed, taking effect again on the next turn; the gate is not permanently disabled.
+- **`PreToolUse`**: Blocks reading keys/verifiers, blocks editing protected source files before a verified baseline seal exists, blocks writing probe code (`wp_lite.cuh`, `WP_OPEN`, `WP_B(`) into production files, and blocks altering seals or hook configs.
+- **`PostToolUse`**: Checks live SHA-256 of protected files; restores from backup and fails if modified before baseline verification, and blocks if probe macros were inserted.
+- **`Stop` / `SubagentStop`**: Requires live protected source bytes to match a validly signed `PASS` version with zero probe code remaining.
 
-## Repository Layout
+---
+
+## 5. Repository Layout & Offline Tests
 
 ```text
 WeaveProfiler/
@@ -138,43 +149,17 @@ WeaveProfiler/
 ├── README_EN.md           # English documentation
 ├── SKILL.md               # Agent skill entry (Claude Code / Codex CLI / Antigravity)
 ├── pyproject.toml         # Python package config and weaveprof CLI entry
-├── plugin.json            # Agent plugin and tool manifest
-├── run.py                 # Unified command-line entry
-├── recorders/             # In-kernel recorder frontends (cuda_cpp / hip_cpp / cutedsl / triton)
-├── weaveprof/             # Core Python package (mcp_server / guard_hook / agent_installer / megakernel / causal / harness / api / cli + pipeline/{core,scan,instrument,capture,validate}/)
-├── configs/               # Hardware tiers (H20/B300/MI308X), hardware metrics, language matching patterns, operator semantics, recipes and schemas
-├── docs/                  # Design notes and per-platform hardware sampling guides
-├── examples/              # Minimal instrumentation reference examples for each language
-└── tests/                 # Offline unit tests, structural contract tests and adversarial security test suite
+├── plugin.json            # Agent plugin manifest
+├── run.py                 # Unified CLI entry point
+├── recorders/             # In-kernel recorders (wp_lite.cuh / wp_lite_hip.h / wp_cute.py / wp_triton.py / wp_triton_amd.py)
+├── weaveprof/             # Core backend, MCP server, hooks, instrumentation, alignment, and plotting
+├── configs/               # H20/B300/MI308X configs, hardware metrics, cross-language exemplars, and recipes
+├── docs/                  # Case studies and platform profiling guides
+├── examples/              # Minimal instrumentation examples per language
+└── tests/                 # Offline unit, contract, and adversarial security tests
 ```
 
-## Real-World Case Studies & H20 Silicon Verification
-
-### 1. Paper Case Study: 8×H20 Production DeepGEMM MegaMoE Optimization (`1.47×` Speedup)
-
-On an $8\times$NVIDIA H20 node (`sm_90a`, 78 SMs, full-mesh NVLink) running production **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8`, `S=1024`), WeaveProfiler's co-axial SW+HW timeline exposed two root bottlenecks and guided refactoring to a **`1.47×` end-to-end speedup** (`613.2 µs → 416.4 µs`, full walkthrough in [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)):
-
-![8×H20 DeepGEMM MegaMoE Before/After Co-Axial Timeline](docs/images/case_h20_megamoe_1p47x.png)
-
-| Variant | Latency | FP8 Tensor Core (Avg / Peak) | HBM BW (Avg / Peak) | Diagnosis & Optimization |
-| --- | ---: | ---: | ---: | --- |
-| Original split DeepGEMM (a) | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` | ① ~65 µs inter-kernel barrier bubble between GEMM1 & GEMM2; ② Synchronous `Scatter` blocks GEMM2 compute warpgroups |
-| **Optimized fused Megakernel (b)** | **`416.4 µs` (`1.47×`)** | **`41.8%` / `62.6%`** | **`55.7%` / `81.5%`** | ① Single-kernel fusion + dynamic expert queue (`94.0%` active SMs); ② Async `Scatter` offloaded onto idle `Disp` warps |
-
-### 2. Zero-Signature Instrumentation of Production Open-Source Libraries (FlashInfer Hopper FA3)
-
-Without modifying any FlashInfer 0.6.8 Python wrappers, TVM-FFI bindings, or kernel signatures, WeaveProfiler instruments across three C++ template headers (`prefill_sm90.cuh`, `mainloop.cuh`, `mainloop_mma.cuh`), captures all 12 physical warps (`W00..W11`), and directly renders a same-run 200.3 kHz `nsys` 3-panel PNG:
-
-![FlashInfer 0.6.8 Hopper FA3 H20 3-Panel Overview](docs/images/case_h20_flashinfer_fa3.png)
-
-### 3. Additional H20 Silicon Verification Highlights
-
-- **GLM-5.3 SparseMLA Decode** (CuTeDSL, 78 SMs × 12 warps, [full 78-SM figure](docs/images/case_h20_glm53_sparse_mla.png)): hot-state overhead **`+4.99%`** (`768.0 µs`, 6 hollow 64 ns stubs removed), 0-byte diff across 14.3 MB output, `1.15 µs` `nsys` alignment error — exposing 28/78 SMs idling `185.7 µs` (49.3%) at `grid_sync(5)`.
-- **Qwen3.8-Next GDN Prefill SerialMK** (CUDA C++, 78 SMs × 16 warps, [full 78-SM figure](docs/images/case_h20_qwen38_gdn_prefill.png)): **`+0.026%`** end-to-end overhead (`223.29 → 223.35 ms`) at 128 regs / 232 KB SMEM, exposing a `4.0 ms` 28-SM straggler barrier wait in `P5 GDN`.
-- **CUDA `.so` Sparse TopK MQA optimization loop**: V0 `689.0 µs` (overhead `+1.55%`, 32→32 registers, 0 spill, 50 vs 28 SM spread `518.8 µs`) → V1 dynamic tile queue `495.0 µs` (`1.392×` speedup, spread `83.3 µs`, overhead `+0.064%`).
-- **Runtime `.cubin` `cudaLibrary_t` JIT (`weave`-style)**: `STO_ENTRY == 1`, zero `__global__` signature changes, compile+load+run+decode `2.83 s`, `max_ref_abs_err = 8e-6`, 15,840 records / 0 overflow / 0 decode errors.
-
-## CLI & Offline Tests
+### Offline Verification (No GPU Required)
 
 ```bash
 python3 -B tests/package_structure.py

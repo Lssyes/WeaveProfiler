@@ -1,6 +1,6 @@
 // fast-instrument 两角色 HIP 示例：链 CTA 等就绪→计算；辅助 CTA 生产。用于验收与开销测量。
 // FI_GRAN=0：每 wave64 的 lane 0 记录；FI_GRAN=1：每 CTA 只由 threadIdx.x==0 记录（本 kernel 的角色按 CTA 分，两种粒度都能看全）。
-#include "fi_lite_hip.h"
+#include "wp_lite_hip.h"
 #include <algorithm>
 #include <cstdlib>
 

@@ -100,8 +100,8 @@ LANGUAGE_SPECS: Dict[str, Dict[str, Any]] = {
         "language": "cuda_cpp",
         "display_name": "CUDA C++",
         "source_extensions": [".cu", ".cuh"],
-        "header": "recorders/cuda_cpp/fi_lite.cuh",
-        "recorder": "recorders/cuda_cpp/fi_lite.cuh",
+        "header": "recorders/cuda_cpp/wp_lite.cuh",
+        "recorder": "recorders/cuda_cpp/wp_lite.cuh",
         "sample_gate": "FI_LEVEL",
         "timer_macro": "FI_TIMER",
         "markers": [
@@ -113,8 +113,8 @@ LANGUAGE_SPECS: Dict[str, Dict[str, Any]] = {
         "language": "hip_cpp",
         "display_name": "HIP C++",
         "source_extensions": [".hip", ".cpp", ".cc", ".cxx", ".cu"],
-        "header": "recorders/hip_cpp/fi_lite_hip.h",
-        "recorder": "recorders/hip_cpp/fi_lite_hip.h",
+        "header": "recorders/hip_cpp/wp_lite_hip.h",
+        "recorder": "recorders/hip_cpp/wp_lite_hip.h",
         "sample_gate": "FI_LEVEL",
         "timer_macro": "FI_TIMER",
         "markers": [
@@ -129,8 +129,8 @@ LANGUAGE_SPECS: Dict[str, Dict[str, Any]] = {
         "source_extensions": [".py"],
         "header": None,
         "recorder_by_platform": {
-            "nv": "recorders/triton/fi_triton.py",
-            "amd": "recorders/triton/fi_triton_amd.py",
+            "nv": "recorders/triton/wp_triton.py",
+            "amd": "recorders/triton/wp_triton_amd.py",
         },
         "markers": [r"import\s+triton", r"@triton\.jit", r"\btl\.load\b", r"\btl\.dot\b"],
     },
@@ -139,7 +139,7 @@ LANGUAGE_SPECS: Dict[str, Dict[str, Any]] = {
         "display_name": "CUTLASS CuTeDSL",
         "source_extensions": [".py"],
         "header": None,
-        "recorder": "recorders/cutedsl/fi_cute.py",
+        "recorder": "recorders/cutedsl/wp_cute.py",
         "markers": [r"import\s+cutlass\.cute", r"from\s+cutlass\s+import\s+cute", r"@cute\.jit"],
     },
 }

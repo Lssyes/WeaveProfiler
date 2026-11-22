@@ -3,7 +3,7 @@
 """Behavior tests for the CuTeDSL recorder without requiring a CUDA toolkit.
 
 The test installs a small CuTeDSL value/tensor runtime and executes the real
-``fi_cute.py`` functions.  It therefore checks emitted record contents, writer
+``wp_cute.py`` functions.  It therefore checks emitted record contents, writer
 selection, bounds handling and FILITE02 serialization rather than grepping the
 source text.  The fake runtime is a test double only; these results are offline
 behavior tests, not a claim of H20/B300 hardware verification.
@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND = ROOT / "recorders" / "cutedsl" / "fi_cute.py"
+FRONTEND = ROOT / "recorders" / "cutedsl" / "wp_cute.py"
 
 
 class Scalar:
@@ -277,7 +277,7 @@ def _install_fake_cutlass(arch):
 
 ARCH = FakeArch()
 _install_fake_cutlass(ARCH)
-_spec = importlib.util.spec_from_file_location("fi_cute_under_test", FRONTEND)
+_spec = importlib.util.spec_from_file_location("wp_cute_under_test", FRONTEND)
 if _spec is None or _spec.loader is None:
     raise RuntimeError(f"cannot load {FRONTEND}")
 FC = importlib.util.module_from_spec(_spec)

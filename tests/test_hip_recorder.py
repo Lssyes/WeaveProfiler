@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline structure/compile checks plus MI308X runtime checks for fi_lite_hip.h."""
+"""Offline structure/compile checks plus MI308X runtime checks for wp_lite_hip.h."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEADER = ROOT / "recorders" / "hip_cpp" / "fi_lite_hip.h"
+HEADER = ROOT / "recorders" / "hip_cpp" / "wp_lite_hip.h"
 
 
 HARNESS = r'''
-#include "fi_lite_hip.h"
+#include "wp_lite_hip.h"
 
 #include <cstdint>
 #include <cstdlib>

@@ -31,7 +31,7 @@
   },
   "language": "hip_cpp",
   "language_display_name": "HIP C++",
-  "platform_note": "MI308X is gfx942 with wave64 (80 CUs, 4 XCCs). Use 128x128x16 4-wave64 MFMA tile geometry (256 CTAs for 2048x2048, <= 4 concurrent CTAs/CU on 80 CUs instead of 4,096 tiny 32x32 CTAs), single-16B AoS global_store_dwordx4 in fi_lite_hip.h (FI_BG_PRED/FI_EG_PRED) with s_memrealtime (100 MHz) and hoisted overflow atomicOr in fi_close, 12-buffer cold-HBM ring (3.2% warm L2 vs 13.2% cold HBM), and Rendering Contract R6 pid=1 / upid=1 / sort_index=-1000 topmost [0-100%] hardware utilization.",
+  "platform_note": "MI308X is gfx942 with wave64 (80 CUs, 4 XCCs). Use 128x128x16 4-wave64 MFMA tile geometry (256 CTAs for 2048x2048, <= 4 concurrent CTAs/CU on 80 CUs instead of 4,096 tiny 32x32 CTAs), single-16B AoS global_store_dwordx4 in wp_lite_hip.h (FI_BG_PRED/FI_EG_PRED) with s_memrealtime (100 MHz) and hoisted overflow atomicOr in fi_close, 12-buffer cold-HBM ring (3.2% warm L2 vs 13.2% cold HBM), and Rendering Contract R6 pid=1 / upid=1 / sort_index=-1000 topmost [0-100%] hardware utilization.",
   "machine_profiles": [
     "configs/cards/mi308x_gfx942.json"
   ],
@@ -75,7 +75,7 @@
     }
   },
   "recorder": {
-    "path": "recorders/hip_cpp/fi_lite_hip.h",
+    "path": "recorders/hip_cpp/wp_lite_hip.h",
     "api_family": "FI_B / FI_E / FI_M / FI_BG_PRED / FI_EG_PRED / FI_OPEN / FI_CLOSE",
     "backend": "gfx942_wave64",
     "build_gates": "FI_LEVEL, FI_TIMER, FI_GRAN, FI_GROUPS",
@@ -90,7 +90,7 @@
     ],
     "notes": [
       "Use one logical begin/end pair per selected semantic interval.",
-      "Pillar I & II (v14 <= 10% perturbation engine): Single-16B AoS global_store_dwordx4 in fi_lite_hip.h with s_memrealtime (100 MHz), FI_BG_PRED / FI_EG_PRED, L2-isolated host fi_reset, and hoisted overflow atomicOr in fi_close avoids K-loop basic-block bloat.",
+      "Pillar I & II (v14 <= 10% perturbation engine): Single-16B AoS global_store_dwordx4 in wp_lite_hip.h with s_memrealtime (100 MHz), FI_BG_PRED / FI_EG_PRED, L2-isolated host fi_reset, and hoisted overflow atomicOr in fi_close avoids K-loop basic-block bloat.",
       "Pillar III & IV: Use 12-buffer cold-HBM ring (As[12], Bs[12]) during hardware capture (revealing 13.2% cold-HBM bandwidth vs 3.2% warm-L2), closed-loop stride selection S in {full(1), stride4(4), stride8(8)} enforcing Measured_Overhead(S*) <= 10.0% (G5), and Rendering Contract R6 (pid=1 / upid=1 / sort_index=-1000 topmost [0-100%] hardware utilization, verified by fi_trace_gate.py G1-G5).",
       "Keep aux stable between pair members so waits and phases can be correlated.",
       "The device recorder can only carry a 32-bit aux; move larger descriptors to names.json or the capture metadata."

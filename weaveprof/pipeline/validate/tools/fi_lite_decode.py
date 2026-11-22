@@ -105,7 +105,7 @@ def _ticks_to_ns(t, hz):
 def _is_amd(meta):
     """AMD 转储判定，按证据强弱依次看：
 
-    1) meta.backend 写明 nvidia_ptx / ptx -> NVIDIA（fi_triton.py 会写；它同时也会写 timer_hz=1e9，
+    1) meta.backend 写明 nvidia_ptx / ptx -> NVIDIA（wp_triton.py 会写；它同时也会写 timer_hz=1e9，
        所以“有 timer_hz 就是 AMD”这条老规则在 NVIDIA Triton 转储上是错的，fi_bugs_b3-sk-qwen B17）；
     2) meta.arch 以 gfx 开头（HIP 头文件写入，如 "gfx942"）-> AMD；
     3) meta.arch 是 sm_* -> NVIDIA；
@@ -178,7 +178,7 @@ def read_dump(path, timer_hz=None, platform=None):
         meta["timer_hz"] = int(timer_hz)
         meta["timer_hz_source"] = "cli --timer-hz"
     if timer == 0 and meta.get("timer_hz") and not d["amd"]:
-        # NVIDIA 转储里出现 timer_hz：只有 fi_triton（NVIDIA 后端）会写，且固定 1e9（tick 就是 ns）。
+        # NVIDIA 转储里出现 timer_hz：只有 wp_triton（NVIDIA 后端）会写，且固定 1e9（tick 就是 ns）。
         # 不当换算系数用，如实记一条说明；万一哪天不是 1e9，也要让人一眼看出来。
         hz = int(meta["timer_hz"])
         meta["timer_hz_ignored"] = ("NVIDIA 转储（platform=nvidia，backend=%s）：%%globaltimer 记录值已是 ns，"

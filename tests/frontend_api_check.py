@@ -15,21 +15,21 @@ HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 
 FRONTENDS = {
-    "recorders/triton/fi_triton.py": {
+    "recorders/triton/wp_triton.py": {
         "symbols": ["FiCfg", "FiBuffer", "FiAsmBackend", "FI_BACKENDS", "fi_open", "fi_open_by", "fi_close",
                     "fi_b", "fi_e", "fi_m", "fi_bg", "fi_eg", "fi_mg", "cap_for", "write_names",
                     "fi_b_by", "fi_e_by", "fi_m_by", "fi_close_by", "resolve_arch"],
         "must_contain": ["%globaltimer", "%clock64", "%smid", "st.global.cs.v4.u32", "atom.global.or.b32",
                          "%laneid", "%warpid"],
-        "must_not_contain": ["amd_gfx942"],   # 未实测的 AMD 设计稿后端已移除，AMD 走 fi_triton_amd.py
+        "must_not_contain": ["amd_gfx942"],   # 未实测的 AMD 设计稿后端已移除，AMD 走 wp_triton_amd.py
     },
-    "recorders/triton/fi_triton_amd.py": {
+    "recorders/triton/wp_triton_amd.py": {
         "symbols": ["FiBuffer", "fi_open", "fi_b", "fi_e", "fi_m", "fi_close"],
         # 设备侧读 s_memrealtime（前后各一条 waitcnt），记录写三块探测缓冲（time/tag/aux），host 打包成 FILITE02
         "must_contain": ["s_memrealtime", "s_waitcnt lgkmcnt(0)", "_fi_hw_id", "tl.store", "FILITE02"],
         "must_not_contain": [],
     },
-    "recorders/cutedsl/fi_cute.py": {
+    "recorders/cutedsl/wp_cute.py": {
         "symbols": ["FiBuffer", "fi_open", "fi_b", "fi_e", "fi_close"],
         "must_contain": ["FILITE02"],
         "must_not_contain": [],
@@ -38,7 +38,7 @@ FRONTENDS = {
 
 
 def top_level_symbols(tree: ast.AST) -> set:
-    """模块级可见的名字。fi_triton_amd.py 把设备侧函数放在 `if tl is not None:` 里，
+    """模块级可见的名字。wp_triton_amd.py 把设备侧函数放在 `if tl is not None:` 里，
     这种模块级条件块里的定义同样是公开 API，要一并收进来。"""
     out = set()
 
@@ -92,7 +92,7 @@ def main() -> int:
         sys.path.insert(0, str(PKG / "recorders" / "triton"))
         import torch  # noqa: F401
         import triton  # noqa: F401
-        import fi_triton as FT
+        import wp_triton as FT
     except Exception as e:
         print(f"  SKIP PTX 生成（torch/triton 不可用：{type(e).__name__}: {e}）")
     else:
@@ -103,9 +103,9 @@ def main() -> int:
         for txt, needle in ((open_asm, "%globaltimer"), (open_asm, "%smid"),
                             (ev_asm, "st.global.cs.v4.u32"), (close_asm, "st.global.cs.v4.u32")):
             if needle not in txt:
-                fails.append(f"fi_triton 生成的 PTX 缺 {needle}")
+                fails.append(f"wp_triton 生成的 PTX 缺 {needle}")
         if cfg.open_nr < 1 or cfg.close_nr < 1 or cfg.event_nr < 1:
-            fails.append("fi_triton 记录条数不对")
+            fails.append("wp_triton 记录条数不对")
         # FI_TIMER=1 时 OPEN/CLOSE 各多一条 clock64 锚点
         cfg1 = FT.FiCfg(cap=64, warps=8, n_slots=8, gran=0, timer=1, level=2, threads=256)
         if not (cfg1.open_nr > cfg.open_nr and "%clock64" in cfg1.open_asm(0)):
@@ -128,7 +128,7 @@ def main() -> int:
         for k in ("gran", "timer", "level", "arch", "cap_per_lane", "n_slots", "warps_per_cta",
                   "arch_source"):
             if k not in m:
-                fails.append(f"fi_triton meta 缺 {k}")
+                fails.append(f"wp_triton meta 缺 {k}")
         # 谓词版 API：event 的谓词排到 $8（$6/$7 被 tag/aux 占了），open/close 的谓词是 $6。
         # 只给 fi_open_by 加谓词会产生“只有事件、没有 OPEN/CLOSE”的残缺泳道（fi_bugs_h20-sk-qwen B2）。
         if len(cfg.event_by_cons.split(",")) != 9:
@@ -155,7 +155,7 @@ def main() -> int:
                            arch="sm_103a")
         if cfg_exp.meta()["arch"] != "sm_103a":
             fails.append("FiCfg(arch=...) 没有写进 meta")
-        print(f"  fi_triton: PTX 生成通过（open {cfg.open_nr} 条 / event {cfg.event_nr} 条 / close {cfg.close_nr} 条），"
+        print(f"  wp_triton: PTX 生成通过（open {cfg.open_nr} 条 / event {cfg.event_nr} 条 / close {cfg.close_nr} 条），"
               f"meta 字段 {len(m)} 个")
 
     if fails:

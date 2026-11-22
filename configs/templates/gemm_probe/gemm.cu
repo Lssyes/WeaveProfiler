@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-#include "fi_lite.cuh"
+#include "wp_lite.cuh"
 
 using namespace nvcuda;
 

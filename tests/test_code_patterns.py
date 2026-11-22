@@ -73,11 +73,11 @@ ALLOWED_EVIDENCE = {"measured", "compiled", "simulated", "unverified", "referenc
 PLACEHOLDER_RE = re.compile(r"(?i)\b(?:TODO|TBD|FIXME|pseudocode|placeholder)\b|\.\.\.")
 
 LANGUAGE_API_KEYWORDS = {
-    "cuda_cpp": ("#include <cuda_runtime.h>", '#include "fi_lite.cuh"', "FI_OPEN(", "FI_B(", "FI_E(", "FI_CLOSE("),
-    "hip_cpp": ("#include <hip/hip_runtime.h>", '#include "fi_lite_hip.h"', "FI_OPEN(", "FI_B(", "FI_E(", "FI_CLOSE("),
-    "triton_nv": ("@triton.jit", "from fi_triton import", "fi_open(", "fi_b(", "fi_e(", "fi_close(", "tl."),
-    "triton_amd": ("@triton.jit", "from fi_triton_amd import", "fi_open(", "fi_b(", "fi_e(", "fi_close(", "FI_CAP", "FI_THREADS"),
-    "cutedsl": ("@cute.jit", "from fi_cute import", "fi_open(", "fi_b(", "fi_e(", "fi_close(", "<< 32) |", "ARCH", "BACKEND", "GRAN"),
+    "cuda_cpp": ("#include <cuda_runtime.h>", '#include "wp_lite.cuh"', "FI_OPEN(", "FI_B(", "FI_E(", "FI_CLOSE("),
+    "hip_cpp": ("#include <hip/hip_runtime.h>", '#include "wp_lite_hip.h"', "FI_OPEN(", "FI_B(", "FI_E(", "FI_CLOSE("),
+    "triton_nv": ("@triton.jit", "from wp_triton import", "fi_open(", "fi_b(", "fi_e(", "fi_close(", "tl."),
+    "triton_amd": ("@triton.jit", "from wp_triton_amd import", "fi_open(", "fi_b(", "fi_e(", "fi_close(", "FI_CAP", "FI_THREADS"),
+    "cutedsl": ("@cute.jit", "from wp_cute import", "fi_open(", "fi_b(", "fi_e(", "fi_close(", "<< 32) |", "ARCH", "BACKEND", "GRAN"),
 }
 
 SEMANTIC_TOKENS = {

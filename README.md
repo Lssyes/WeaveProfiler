@@ -1,23 +1,23 @@
-# WeaveProfiler (wp)
+# WeaveProfiler (`wp`)
 简体中文 | [English](README_EN.md)
 
-WeaveProfiler 是一套面向 GPU 核内（intra-kernel）低开销插桩、软硬件时间线对齐、以及配合 AI Coding Agent 完成算子优化闭环的工具集。它在不修改生产源码、不改动 kernel 调用栈的前提下，对核内各阶段打点，验证插桩保真度，并把结果与硬件采样指标合并到同一条时间线上，供 Agent 或人工据此判断优化是否有效。
+WeaveProfiler 是一套面向 GPU 核内（intra-kernel）低开销自动插桩与软硬时间线对齐工具，帮助开发者和 AI Coding Agent（Claude Code、Codex CLI 等）看清复杂 GPU kernel 内部每个 SM、每个 Warp 在每一微秒都在干什么，并直接与 `nsys` / `rocprof` 硬件利用率曲线对齐。
 
-适用对象包括 Sparse Attention、GDN、MoE 等复杂持久 kernel，以及常见的 CUDA / HIP / CuTeDSL / Triton 算子。
+全程**不改动你的原始源码、不改动函数签名和上层调用代码**，本地开箱即用。
 
 ---
 
-## 一、定位与快速上手
+## 一、快速上手
 
 ### 支持范围
 
 | 维度 | 支持内容 |
 | --- | --- |
 | 硬件 | NVIDIA H20（`sm_90a`）、NVIDIA B300（`sm_100a` / `sm_103a`）、AMD Instinct MI308X（`gfx942`） |
-| 前端语言 | CUDA C++、HIP C++、CuTeDSL、Triton（NVIDIA 与 AMD） |
-| Agent | 原生支持 Claude Code 与 OpenAI Codex CLI；其他命令行 Agent 可通过 `guard-exec` 包装 |
+| 语言 | CUDA C++、HIP C++、CuTeDSL、Triton（NVIDIA 与 AMD） |
+| Agent | 原生支持 Claude Code 与 OpenAI Codex CLI；其他命令行 Agent 可用 `guard-exec` 包装 |
 
-### 两步接入
+### 两步安装
 
 ```bash
 git clone https://github.com/ziyuhuang123/WeaveProfiler.git
@@ -27,175 +27,121 @@ python3 -B WeaveProfiler/run.py install-agent \
   --card h20
 ```
 
-`install-agent` 会一次性写入 MCP 配置、Hook 配置与 Skill 说明。随后进入算子目录直接运行 `claude` 或 `codex` 即可，无需额外配置。
+执行完上面这条命令后，工具会自动在你的算子目录里配好 MCP、Hook 和 Skill 说明。之后直接进入目录运行 `claude` 或 `codex` 即可。
 
-若使用无交互方式，可用包装命令：
+如果你需要无交互批处理运行，可以用包装命令：
 
 ```bash
 python3 -B WeaveProfiler/run.py guard-exec \
   --workspace /path/to/your_kernel_repo \
-  -- codex exec "对基线 kernel 采样并分析跨 SM 负载不均"
+  -- codex exec "分析这个 kernel 的瓶颈和跨 SM 负载不均"
 ```
 
 ---
 
-## 二、从 0 到插桩完成的实测耗时
+## 二、真实案例与 H20 实卡效果
 
-测试环境：NVIDIA H20（`sm_90a`），GPU 4 实测。
+### 2.1 论文核心案例：8×H20 生产级 DeepGEMM MegaMoE 诊断与优化（1.47× 加速）
 
-输入为完全未插桩的原始源码，从 0 开始依次完成：定位插桩点 → 规则注入生成影子代码 → 编译 → 实卡 ABBA 测速与逐字节输出核对 → 四道保真门禁 → 必要时自动循环外提重测 → 通过并签发 `seal.json`。
+在 8×NVIDIA H20（`sm_90a`，78 SM，NVLink 全互联）上剖析生产级 **Qwen3.5-397B DeepGEMM MegaMoE**（`EP=8, S=1024, E=512`），WeaveProfiler 的软硬同轴时间线直接定位出两个核心瓶颈，指导重构实现 **`1.47×` 端到端加速**（详细过程见 [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)）：
 
-### 1. Triton 3.6 Sparse / Flash Attention（外部调用方 0 行修改）
+![8×H20 DeepGEMM MegaMoE 优化前后软硬同轴时间线对比](docs/images/case_h20_megamoe_1p47x.png)
 
-**纯确定性规则路径（0 次 LLM 调用）**
+| 版本 | 端到端耗时 | FP8 Tensor Core（均值 / 峰值） | HBM 带宽（均值 / 峰值） | 定位出的瓶颈与改动 |
+| --- | ---: | ---: | ---: | --- |
+| 原始分核 DeepGEMM（图 a） | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` | ① GEMM1 与 GEMM2 之间有约 65 µs 的核间空等；② GEMM2 里的同步 `Scatter` 卡住了计算 Warp |
+| **优化后融合 Megakernel（图 b）** | **`416.4 µs`（`1.47×`）** | **`41.8%` / `62.6%`** | **`55.7%` / `81.5%`** | ① 融合成单核持久 kernel + 动态领任务（94.0% 活跃 SM）；② 异步 `Scatter` 挪给空闲的 `Disp` Warp |
 
-| 阶段 | 耗时 | 结果 |
-| --- | --- | --- |
-| 首轮定位 | 2 ms | — |
-| 规则注入 | 25.6 ms | — |
-| JIT / 运行 / 解码 | 1.93 s | 首轮合计 1.96 s；探针位于内层循环，开销 +19.9%，未过门禁 |
-| 自动循环外提 | 42.4 ms | — |
-| JIT / 运行 / 解码 | 1.28 s | — |
-| **总计** | **3.29 s** | **PASS**：开销 +4.95%，0 字节差异，0 溢出，3,072 spans |
+### 2.2 开源算子库零改代码实测（直接本地输出软硬对齐图）
 
-**LLM 语义定位路径**（`deepseek-v4.1-flash-1017`，`effort=low`）
+测试环境：NVIDIA H20（`sm_90a`，78 SM），输入为完全未改动的开源算子库源码，全程自动完成“识别打点位置 → 临时目录插桩编译 → 实卡测速与四项检查 → 必要时自动调整重测 → 同次 200.3 kHz `nsys` 对齐并直接出图”。
 
-| 阶段 | 耗时 |
-| --- | --- |
-| 首轮定位 | 5.09 s |
-| 注入 | 40.0 ms |
-| 运行 | 2.00 s |
-| 第 2 轮自动外提 | 1.33 s |
-| **总计** | **约 8.5 s** |
+| 开源算子库与核函数 | 语言与测试规模（H20） | 物理 Warp 覆盖 | 实测结果与稳态开销 |
+| --- | --- | :---: | --- |
+| **FlashInfer 0.6.8 Hopper FA3**（`prefill_sm90.cuh` 等 3 个头文件） | CUDA C++，`B=5, H=16, S=512, D=128`（长序 `S=4096`） | **12 / 12**（`W00..W11`） | 0 签名改动；长序稳态开销 **`-1.62%`**，软硬边界差 `0.33%` |
+| **FlashInfer 0.6.8 Hopper FlashMLA**（`mla_hopper.cuh`，DeepSeek-V3 页式 MLA） | CUDA C++，`B=64, H=128, KV=512`（长序 `KV=4096`） | **8 / 8**（`W00..W07`） | 第 1 轮过细打点（`+14.55%`）被自动拦下 → 第 2 轮自动收敛通过：**`+8.25%`**（`KV=512`）/ **`+6.11%`**（`KV=4096`），0 B 溢出 |
+| **vLLM FLA FlashKDA**（`chunk_delta_h.py`，线性注意力递推） | Triton 3.6，`B=1, T=512, H=64, D=128`（长序 `T=8192`） | **4 / 4**（`W00..W03`） | 锁定原 `@autotune` 最优配置；自动外提与合并后通过：**`+6.74%`**（`T=512`）/ **`+8.14%`**（`T=8192`），0 B 溢出 |
+| **DeepGEMM**（`8×H20` 生产级 MegaMoE，Qwen3.5-397B） | CUDA C++，`EP=8, S=1024, E=512` | 全 Warp 角色 | 端到端 **`613.2 → 416.4 µs`（`1.47×`）** |
 
-### 2. CUDA C++ 多文件 `.so` Sparse TopK MQA（0 `__global__` 签名改动，0 Host 改动）
+以下三张图均为 WeaveProfiler 在 H20 上直接本地渲染输出的原始三栏软硬对齐图（`overview.png`）：
 
-配置：`deepseek-v4.1-flash-1017`（`effort=low`）+ 确定性展开 + 自动循环外提。
+- **FlashInfer 0.6.8 Hopper FA3 Prefill**（CUDA C++ 跨 3 个头文件，`B=5, H=16, S=512, D=128`，全 12 个物理 Warp：`W00` TMA 预取、`W01..W03` 空闲、`W04..W11` 双计算组）：
 
-| 阶段 | 耗时 | 结果 |
-| --- | --- | --- |
-| 首轮定位 | 10.01 s | — |
-| 确定性展开 | 21.8 ms | — |
-| 并行 `L0` / `L_inst` 编译与实卡运行 | 8.71 s | 首轮合计 18.75 s；探针在内层循环，触发 +20.1% 开销与溢出门禁 |
-| 第 2 轮自动外提（0 次 LLM 调用） | 30.4 ms | — |
-| `L0` 缓存命中的增量编译 / 运行 / 封签 | 7.75 s | — |
-| **总计** | **26.53 s** | **PASS 封签**：开销 +5.70%，0 spill，0 字节差异，0 溢出，`seal_verified=true` |
+![FlashInfer 0.6.8 Hopper FA3 H20 软硬对齐图](docs/images/case_h20_flashinfer_fa3.png)
 
-关于定位深度的说明：若把首轮定位设为慢思考深度（例如 `qwen4-max` + `reasoning_effort=max`），仅单次定位就耗时 189 s。因此 `identify_source` 默认首轮使用 `low`（5–12 s），仅在失败修复回合自动提升为 `max`。
+- **FlashInfer 0.6.8 Hopper FlashMLA**（CUDA C++ `mla_hopper.cuh`，`B=64, H=128, KV=512`，全 8 个物理 Warp，清晰呈现 128 个块在 78 个 SM 上的双波次台阶）：
 
-### 3. `ziyuhuang123/weave` 的 348 行 `sm90_fp8_mqa_logits.cuh`（`CUTLASS_GLOBAL __launch_bounds__`）
+![FlashInfer 0.6.8 Hopper FlashMLA H20 软硬对齐图](docs/images/case_h20_flashmla.png)
 
-从 0 定位 + 确定性规则展开：
+- **vLLM FLA FlashKDA**（Triton 3.6 `chunk_delta_h.py`，`B=1, T=512, H=64, D=128`，全 4 个物理 Warp，清晰分解加载、8 轮分块矩阵乘与状态衰减更新、以及写回）：
 
-| 环节 | 耗时 / 结果 |
-| --- | --- |
-| `offline` 启发式定位 | 25 ms |
-| `deepseek-v4.1-flash-1017`（`low`）定位 | 11.72 s；识别 `load/compute/wait/mma/store` 5 个阶段，`zero_sig_change=true` |
-| `.cubin` `cudaLibrary_t` 编译 / 加载 / 运行 / 解码 | 2.83 s，`STO_ENTRY == 1` |
-
-### 4. 后续优化迭代（第 2 轮及以后，命中 `L0` 编译缓存）
-
-| 前端 | 单轮耗时 |
-| --- | --- |
-| Triton | 约 1.3–2.0 s |
-| CUDA C++ `.so` | 约 7.0–7.8 s |
+![vLLM FLA FlashKDA H20 软硬对齐图](docs/images/case_h20_flashkda.png)
 
 ---
 
-## 三、核心工程设计
+## 三、核心设计
 
-### 3.1 寄存器压缩与低扰动核内录制
+WeaveProfiler 围绕**两个核心设计点**和**一层工程实现**构建：
 
-- **`WP_CTX_1R`**：把槽位号（`slot`，高 16 bit）、写入游标（`cur`，低 15 bit）与溢出停用标志（符号位）压缩进单个 32-bit 寄存器。录制缓冲区元数据放在 `__constant__ wp_fi_c` 中，走常量缓存，占用 0 B SMEM，也不占用每线程通用寄存器。附加开关 `-DWP_CTX_1R_NOINLINE` 把冷路径抽离为 `__noinline__` 辅助函数，降低主循环的寄存器压力。
-- **`WP_SMEM_ZREG`**：面向使用 `setmaxnreg` 或寄存器极度紧张的核函数，把上下文放入 16 B static `__shared__`，并配 `__noinline__` 写入函数，使循环体内常驻 0 个额外寄存器。
-- **访存与计时**：使用 16 字节流式写指令 `st.global.cs.v4.u32`，避免污染 L2 中的业务数据；计时支持 `%globaltimer`（`-DWP_TIMER=0`）与 `%clock64` 局部时钟 + OPEN/CLOSE 双锚点校准（`-DWP_TIMER=1`）；支持无控制流分裂的 PTX 谓词记录与相邻阶段时间戳合并（`WP_TRANS_PRED`）。
+### 3.1 设计点一：怎么保证自动插桩不出错（大模型看懂代码 + 固定程序插桩验收）
 
-### 3.2 四语言支持与零调用栈改动
+- **大模型只负责看代码，固定程序负责插计时语句**：大模型不会直接改你的源码，它只读源码并对照跨语言示例库，输出一份 JSON 清单（`probe.json`，记录每个 Warp 角色的判断条件以及各阶段的起止行号）。真正往代码里插计时调用的工作，全部由固定的 Python 程序在独立临时目录复制出来的源码副本里完成，保证语法稳定、结果可复现，且绝不碰原文件。
+- **防篡改与防作弊机制（MCP 服务 + HMAC 签名 + Hook + 只读隔离）**：
+  - **独立 MCP 服务与防篡改签名**：插桩、编译、实测和出图运行在独立的 MCP 服务进程中。只有全部检查通过时，服务才会用对 Agent 不可见的私钥，对**原始源码哈希、`probe.json` 哈希、实测时间线文件哈希与四项检查结果**联合计算 HMAC-SHA256 签名并生成 `seal.json`；后续流程和结束任务时都会重新核验哈希与签名，防止擅自篡改结果。
+  - **Hook 防护（`PreToolUse / PostToolUse / Stop`）**：自动拦住 Agent 绕过 `probe.json` 直接往生产源码里硬塞计时代码、或篡改验收脚本与签名文件；任务结束前必须确认当前源码有合法通过记录且不含任何残留计时语句。
+  - **只读权限隔离**：验证脚本、编译器配置与签名私钥在操作系统层面与工作区隔离（只读挂载），避免被常规命令改写。
+- **四项自动验收，不通过就自动重来**：
+  1. **反汇编检查**：排除打点指令本身和寄存器编号差异后，核对核心计算与访存指令的主要顺序和主循环展开结构没变，且没有新增寄存器溢出；
+  2. **计算结果检查**：核对插桩后的数值输出与原算子在误差范围内一致；
+  3. **事件完整性检查**：核对每个阶段的起止打点成对闭合（`t_end >= t_begin`）、缓冲区无丢包、拦截空壳打点与粗块折叠，且覆盖 CTA 内全部物理 Warp；
+  4. **运行开销检查**：与原算子热态交替测速，要求端到端稳态耗时增量不超过上限（默认 `10%`）。
+  - 只要任意一项不通过，验证程序就拒绝交付，把具体报错（`feedback.json`）**连同这一轮采到的时间线文件一起**返回给大模型；大模型对照源码和时间线自动修改 `probe.json`（比如发现高频内层循环打点导致开销超标，就自动提到外层循环边界），直到四项全部通过。
 
-**CUDA C++（`recorders/cuda_cpp/wp_lite.cuh`）与 HIP C++（`recorders/hip_cpp/wp_lite_hip.h`）**
+### 3.2 设计点二：怎么保证测量准确（低扰动片内记录）
 
-- `__global__` 入口不新增任何参数，通过 `__constant__ wp_fi_c` / `__device__ wp_g` 与主机侧 `wp_attach` 绑定。
-- `__device__` 子函数调用链不改签名：通过 `WP_KERNEL_SCOPE` + `WP_DEVICE_SCOPE` + `WP_SYNC_CURSOR_OUT/IN`，经由 `wp_g.cur[slot]` 同步游标，无需把上下文参数层层透传。
-- 多文件 `.so` 支持 `-DWP_DEFINE_HOST_API` 导出 `extern "C" wp_init/wp_reset/wp_dump/wp_free`，Python 侧用 `weaveprof.WpSoController` 直接控制。
-- 运行时 `.cubin` JIT（如 DeepGEMM / `weave` 的 `cudaLibrary_t`）通过 `wp_attach_library(lib, &buf)` 绑定，保持 `STO_ENTRY == 1`，不新增 `__global__` 符号。
+- **每 Warp 独立缓冲 + 绕过缓存写入**：按 `CTA × 物理 Warp` 预先分好各自独立的显存切片，由每个 Warp 的 `lane 0` 顺序追加 16 字节事件记录，不需要原子锁；写入使用绕过缓存的流式全局写指令（如 `st.global.cs.v4.u32`），避免挤掉原算子的数据缓存。
+- **常量内存放配置 + 单寄存器存进度**：把缓冲区基址和容量放在只读常量内存里，热循环里只用 **1 个 32 位寄存器**打包保存“槽号、当前写位置、溢出标记”，且占 **0 B 共享内存**；如果遇到原算子寄存器已经彻底用满、多用 1 个寄存器都会溢出的极端情况，就自动改用 16 字节共享内存存写位置，并调用禁止内联的独立记录函数（`__noinline__`），让主循环完全不额外占用寄存器。
+- **同步时钟 / 双锚点计时 + 相邻阶段合并**：支持直接读全卡同步纳秒时钟（`%globaltimer` / `s_memrealtime`），也支持只在 Warp 起止处记同步时钟锚点、循环内改读更轻量的周期计数器（`%clock64` / `s_memtime`）离线换算；上一阶段结束紧挨下一阶段开始时，自动合并成读一次时钟、连续写入前后两条记录，减少一半边界打点开销。
 
-**Triton（NVIDIA / AMD，`recorders/triton/wp_triton.py`、`wp_triton_amd.py`）与 CuTeDSL（`recorders/cutedsl/wp_cute.py`）**
+### 3.3 工程实现：不改函数签名接入与本地直接出图
 
-- 规则引擎把原核函数名替换为同名透明代理（`_FiTritonProxy` / `_FiCuteProxy` / `_FiCuteDescriptor`，同时支持模块函数与类方法），外部 Python 调用代码 `kernel[grid](...)` 或 `obj.method(...)` 0 行改动。
-- 运行时自动从 `wp_attach(buf)` 注入录制缓冲区；Triton 代理保留未插桩 L0 的 `@triton.autotune`，并直接复用其胜出配置。
+- **不改动函数签名和调用栈**：
+  - **CUDA C++（`recorders/cuda_cpp/wp_lite.cuh`）与 HIP C++（`recorders/hip_cpp/wp_lite_hip.h`）**：`__global__` 入口不新增任何参数，启动前通过符号拷贝（`MemcpyToSymbol`）或 `.cubin` 动态查找符号（`cuLibraryGetGlobal`）传入缓冲区地址；跨多个头文件的 `__device__` 子函数之间通过每物理 Warp 独立的进度槽交接写位置。
+  - **Triton（`recorders/triton/wp_triton.py`、`wp_triton_amd.py`）与 CuTeDSL（`recorders/cutedsl/wp_cute.py`）**：在外层套一层同名透明代理，自动解开 `@heuristics` / `@autotune` 装饰器并固定原算子选出的最优配置，只在最底层启动核函数时隐式传入缓冲指针，外部调用代码一行不用改。
+- **本地直接渲染三栏软硬对齐图（`overview.png`）**：完成同次软硬件时钟对齐后，直接通过 `weaveprof/viz.py` 在本地生成一张共享微秒时间轴的三栏 PNG 图（同时按需保留 Perfetto 轨迹与结构化摘要）：
+  - **上栏 (A)**：同次 `nsys` / `rocprof` 采样的硬件利用率曲线（Tensor/Matrix Core、HBM 带宽、NVLink 带宽、活跃 SM 占比）；
+  - **中栏 (B)**：全卡所有物理 SM（`SM0..SM{N-1}`）的逐分块多阶段执行瀑布图；
+  - **下栏 (C)**：代表性 SM 内全部物理 Warp 角色的细粒度时间线。
 
-### 3.3 影子副本与沙箱隔离
+---
 
-- **独立影子副本**：所有插桩、编译、运行都在工作区之外的独立 `L0`（未插桩）与 `L_inst`（插桩）副本中完成，不触碰生产源码；封签前再次校验生产源码的 SHA-256。
-- **内容寻址 `L0` 缓存与并行构建**：`L0` 构建产物按源码树哈希缓存，与 `L_inst` 并行编译，复测时跳过重复的基线构建。
-- **Linux `bwrap` 只读挂载 + 100 ms 守护线程**：`guard-exec` 在 Linux 下自动用 `bubblewrap` 把 `WeaveProfiler` 目录、`.claude/`、`.codex/`、`.agents/skills/weaveprofiler/`、`.mcp.json` 与 `.supervisor.key` 挂为只读，并运行 100 ms 周期的后台守护线程，监控并自动回滚未封签的篡改。
+## 四、MCP 工具与 Hook 规则
 
-### 3.4 四道保真门禁与 HMAC 防伪封签
+### MCP 工具（`weaveprof/mcp_server.py`）
 
-| 门禁 | 检查内容 |
+安装后会自动向 Claude Code 和 Codex CLI 注册 7 个 MCP 工具：
+
+| 工具 | 作用 |
 | --- | --- |
-| 编译器资源与 spill | 除寄存器数外，解析 `nvcc` / `cuobjdump` 的 `spill_stores`、`spill_loads`、`stack_bytes` 以及 SASS `STL` / `LDL` 增量，拦截“寄存器数未变但暗中 spill 到 local memory”的情况 |
-| 输出一致性 | 逐字节（或按指定容差）比对 `L0` 与 `L_inst` 的输出张量 |
-| 探针完整性与空壳拦截 | 要求 0 overflow、0 配对错误，并拦截耗时接近录制器自身延迟（如 64 ns）的空壳探针 |
-| 对称 ABBA 热态开销 | 要求热态交替计时（ABBA），且 `|overhead| <= 10%`；同时拦截正向减速，以及插桩破坏编译器循环展开 / 调度造成的负向失真（`NEGATIVE_OVERHEAD_PERTURBATION`） |
+| `weaveprof_status` | 查看当前受保护的源码文件、基线与实时哈希、已通过验证的记录数及当前最优耗时。 |
+| `weaveprof_megakernel_audit` | 在临时目录复制源码编译插桩、交替测速、执行四项检查、分析跨 SM 负载倾斜、生成对齐图并签发 `seal.json`。 |
+| `weaveprof_profile` | 从 0 自动识别打点位置并跑完闭环验证（生成 `probe.json` → 临时目录插桩实测 → 不通过自动修正 → 签发 `seal.json`）。 |
+| `weaveprof_plan_context` | 根据源码与寄存器 / 共享内存余量，推荐片内记录器的上下文存放模式与编译选项。 |
+| `weaveprof_analyze` | 对已对齐的软硬轨迹做瓶颈归因，输出算力 / 带宽摘要、跨 SM 偏斜与优化建议。 |
+| `weaveprof_compare_rounds` | 对比上一轮与当前轮的剖析结果，判断优化是否有效、瓶颈是否消除以及是否需要回退。 |
+| `weaveprof_verify_seal` | 用独立会话密钥核验 `seal.json` 签名与产物哈希。 |
 
-通过后签发 HMAC 封签：密钥位于工作区之外的 `~/.cache/weaveprof/sessions/<id>/.supervisor.key`，据此生成 `seal.json`，绑定源码、配置、验证结果与 trace 摘要。
+### Hook 自动防护（`weaveprof/guard_hook.py`）
 
-### 3.5 时间线可视化与优化对比
+会话密钥和原始源码备份存放在工作区外的 `~/.cache/weaveprof/sessions/<workspace_hash>/`：
 
-- **远端自动渲染三面板总览图（`overview.png`）**：`run_megakernel_audit` 与 `weaveprof_megakernel_audit` 默认在 GPU 宿主机上直接用 `weaveprof/viz.py` 渲染单次运行的三面板软硬同轴总览 PNG（约 1.4 s、250–350 KB），默认不再产出体积庞大的 `.perfetto.json.gz`（仅在显式传 `write_perfetto_gz=True` 时导出）：
-  - **Panel (A)**：同一次运行的 `nsys` 200 kHz 硬件利用率曲线（`Tensor Active`、`DRAM BW`、`SM Issue`、`Active SMs`）与峰值/均值指标框；
-  - **Panel (B)**：全部物理 SM（`SM0..SM{N-1}`）的逐 tile 多阶段执行瀑布图，一眼看清跨 SM 尾部负载不均；
-  - **Panel (C)**：代表 SM（如 `SM 0`）按 warp 角色（或并发 CTA 槽位）展开的同轴时间线。
-- **查跨 SM 负载不均与文本报告**：除 `overview.png` 外，返回 `<2 KB` 结构化 JSON（含 `stage_summary`、四分位硬件轨迹 `hw_quartiles`、`megakernel_skew` 与按收益排序的 `causal_opportunities`），支持纯文本与多模态 Agent 直接诊断。
-- **优化前后对比**：结合当前卡型（H20 / B300 / MI308X）的实测算力与带宽上限，对比修改前后的总耗时与各阶段占比变化，判断改动是否有效，或是否需要回退。
-
----
-
-## 四、MCP Server 工具说明
-
-实现位于 `weaveprof/mcp_server.py`：零外部依赖的标准 stdio JSON-RPC 2.0 服务端，兼容换行分隔与 `Content-Length` 两种帧格式；启动时把 fd 1 重定向到 stderr，避免杂散输出破坏协议；服务端内部对输出目录与构建 / 测速命令做独立的路径与命令合法性检查。
-
-共暴露 7 个工具：
-
-| 工具 | 说明 |
-| --- | --- |
-| `weaveprof_status` | 查看当前工作区受保护文件列表、基线 SHA-256、实时 SHA-256、已记录的有效 PASS 封签数、Edit 与 Stop 门禁是否已解锁、当前最优耗时。 |
-| `weaveprof_megakernel_audit` | 在独立影子副本中执行（或基于已采集 dump 执行）单 / 多文件 kernel 审计：并行编译 `L0` / `L_inst`（支持 `L0` 缓存）、运行 ABBA 测速、通过四道保真门禁、输出跨 SM 负载分析与瓶颈提示、生成 Perfetto trace 与 HMAC `seal.json`，并自动把有效封签注册到当前会话。 |
-| `weaveprof_profile` | 运行从 0 自动定位与闭环插桩剖析：生成 `probe.json` → 规则注入影子副本 → ABBA 测速与门禁验证 → 失败时自动循环外提 → 签发并注册 `seal.json`。 |
-| `weaveprof_plan_context` | 根据核函数源码、架构与寄存器 / 共享内存余量，规划低开销上下文模式（`WP_CTX_1R` 与 `WP_SMEM_ZREG` 的取舍）与编译参数建议。 |
-| `weaveprof_analyze` | 对已对齐的软硬 trace JSON 做瓶颈归因，输出算力 / 带宽利用摘要、跨 SM 偏斜统计，以及按收益排序的优化建议。 |
-| `weaveprof_compare_rounds` | 对比上一轮与当前轮的分析报告，识别已消除 / 残留 / 新增的瓶颈，给出继续优化或回退的建议。 |
-| `weaveprof_verify_seal` | 使用工作区外的会话密钥对指定 `seal.json` 做防伪验证（HMAC + 绑定产物摘要 + 开销上限检查），通过后注册到会话。 |
+- **调用工具前（`PreToolUse`）**：禁止读取签名密钥与校验脚本；禁止在获得基线通过签名之前修改受保护的算子源码；即使解锁编辑后，也禁止直接往生产源码里写入 `wp_lite.cuh`、`WP_OPEN`、`WP_B(` 等插桩代码；禁止修改或删除签名文件与 Hook 配置。
+- **调用工具后（`PostToolUse`）**：实时检查受保护源码哈希；若未获基线签名就被命令偷偷修改，自动从外部备份还原并报错；若源码中混入插桩代码立即拦截。
+- **结束任务前（`Stop` / `SubagentStop`）**：确认当前受保护源码与某个已签名通过的版本字节一致，且无插桩代码残留。
 
 ---
 
-## 五、Hook 三阶段完整规则
-
-实现位于 `weaveprof/guard_hook.py`。`install-agent` 会自动同时写入 Claude Code（`.claude/settings.json`）与 OpenAI Codex CLI（`.codex/hooks.json`，并在 `.codex/config.toml` 中开启 `hooks = true`）。两端遵循统一协议：从 stdin 读取 JSON，放行时退出码 `0`，拦截时把明确原因输出到 stderr 并退出码 `2`。
-
-所有会话状态与密钥存放在工作区之外的 `~/.cache/weaveprof/sessions/<workspace_hash>/`，包含 `.supervisor.key`、`session.json` 与 `backups/`（基线字节备份）。
-
-### 阶段 1：`PreToolUse`（工具调用前拦截）
-
-- 禁止读取或访问 `.supervisor.key`、会话存储目录、`guard_hook.py`、`mcp_server.py` 及相关环境变量。
-- 禁止在任何命令或参数中设置 `WP_SAMPLE` / `FI_SAMPLE > 1`；禁止重跑 `install-agent` / `guard-exec` 重置基线；禁止修改或删除 `seal.json` / `verify.json` / `episode_ledger.json`，以及 `.claude/` / `.codex/` / `.mcp.json` / `~/.claude/` / `~/.codex/`。上述规则同样覆盖 MCP 工具传入的 `bench_cmd`、`build_cmd`、`out_dir` 等字段。
-- 在尚无 HMAC 验证通过的基线 `PASS` 封签之前，禁止通过 `Edit` / `Write` / `apply_patch` / `Bash` 修改任何受保护的算子文件。
-- 即使编辑已解锁，也禁止向生产算子源码插入 `wp_lite.cuh`、`WP_OPEN`、`WP_B(`、`FI_OPEN` 等探针代码；插桩只能在影子副本中进行。
-
-### 阶段 2：`PostToolUse`（工具调用后兜底）
-
-- 校验受保护文件的实时 SHA-256：若在获得有效 `PASS` 封签之前被 `Bash` 或脚本静默改动，立即从工作区外的 `backups/` 按原始字节还原，并报错阻断。
-- 扫描受保护文件是否混入新增探针宏，发现即阻断。
-
-### 阶段 3：`Stop` / `SubagentStop`（结束回合前验签）
-
-- 要求会话中至少存在一个 HMAC 验真通过的 `PASS` 封签，且受保护文件的当前字节必须与某个已封签的 `PASS` 版本一致：改动代码后必须重新通过审计封签，或回退到已封签版本；同时文件中不得含探针宏。
-- 带单轮防死循环计数：同一停止序列连续阻断 3 次后，第 4 次放行并立即清零计数器，下一轮重新生效，不会永久关闭门禁。
-
----
-
-## 六、目录结构
+## 五、目录结构与本地测试
 
 ```text
 WeaveProfiler/
@@ -205,88 +151,15 @@ WeaveProfiler/
 ├── pyproject.toml         # Python 包配置与 weaveprof CLI 入口
 ├── plugin.json            # Agent 插件与工具清单
 ├── run.py                 # 统一命令行入口
-├── recorders/             # 核内录制器前端（cuda_cpp / hip_cpp / cutedsl / triton）
-├── weaveprof/             # 核心 Python 包（mcp_server / guard_hook / agent_installer / megakernel / causal / harness / api / cli + pipeline/{core,scan,instrument,capture,validate}/）
-├── configs/               # 硬件卡档（H20/B300/MI308X）、硬件指标、语言匹配模式、算子语义、配方与 Schema
-├── docs/                  # 设计说明与各平台硬件采样指南
+├── recorders/             # 各语言核内记录器（wp_lite.cuh / wp_lite_hip.h / wp_cute.py / wp_triton.py / wp_triton_amd.py）
+├── weaveprof/             # 核心后端、MCP 服务、Hook 防护、自动插桩、对齐与绘图模块
+├── configs/               # H20/B300/MI308X 硬件配置、硬件指标定义、跨语言示例库与配方
+├── docs/                  # 真实案例报告与各平台硬件采集说明
 ├── examples/              # 各语言最小插桩参考示例
-└── tests/                 # 离线单元、结构契约与对抗安全测试套件
+└── tests/                 # 离线单元、结构契约与安全对抗测试
 ```
 
----
-
-## 七、真实案例与 H20 实卡验证结果
-
-### 7.1 论文核心案例：8×H20 生产级 DeepGEMM MegaMoE 端到端优化（1.47× 加速）
-
-在 $8\times$NVIDIA H20（`sm_90a`，78 SM，NVLink 全互联）生产级 **Qwen3.5-397B DeepGEMM MegaMoE**（`EP=8`，`S=1024`）上，WeaveProfiler 软硬同轴时间线直接定位出两类主瓶颈，并指导重构取得 **`1.47×` 端到端加速**（完整分析见 [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)）：
-
-![8×H20 DeepGEMM MegaMoE 优化前后软硬同轴时间线对比](docs/images/case_h20_megamoe_1p47x.png)
-
-| 版本 | 端到端耗时 | FP8 Tensor Core（均值 / 峰值） | HBM 带宽（均值 / 峰值） | 关键诊断与改动 |
-| --- | ---: | ---: | ---: | --- |
-| 原始分核 DeepGEMM（图 a） | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` | ① GEMM1/GEMM2 分核间约 65 µs 屏障空泡；② GEMM2 同步 `Scatter` 阻塞计算组 |
-| **优化后融合 Megakernel（图 b）** | **`416.4 µs`（`1.47×`）** | **`41.8%` / `62.6%`** | **`55.7%` / `81.5%`** | ① 单核持久化融合 + 动态队列（94.0% 活跃 SM）；② 异步 `Scatter` 卸载至空闲 `Disp` 线程束 |
-
-### 7.2 主流开源算子库零签名修改三联图直出（FlashInfer Hopper FA3）
-
-在不改动 FlashInfer 0.6.8 任何上层调用签名与模板接口的前提下，跨三头文件（`prefill_sm90.cuh` + `mainloop.cuh` + `mainloop_mma.cuh`）自动覆盖全 12 个物理 Warp 并直出同次 200.3 kHz `nsys` 软硬对齐三联 PNG 图：
-
-![FlashInfer 0.6.8 Hopper FA3 H20 三联对齐图](docs/images/case_h20_flashinfer_fa3.png)
-
-### 7.3 GLM-5.3 SparseMLA Decode 与 Qwen3.8-Next GDN Prefill（H20 全 78 SM）
-
-![H20 GLM-5.3 SparseMLA Decode 全 78 SM 诊断图](docs/images/case_h20_glm53_sparse_mla.png)
-
-| 指标 | GLM-5.3 SparseMLA Decode（CuTeDSL，78 SM × 12 Warp） | Qwen3.8-Next GDN Prefill（CUDA C++，78 SM × 16 Warp） |
-| --- | --- | --- |
-| 热态开销 | **`+4.99%`**（`768.0 µs`，清除 6 处 64 ns 空桩） | **`+0.026%`**（`223.29 → 223.35 ms`，128-reg / 232 KB SMEM） |
-| 输出一致性 | 14,303,232 B 输出，0 字节差异 | 全张量 0 字节差异 |
-| 软硬对齐偏差 | `1.15 µs`（200 kHz `nsys`） | `2.57 µs`（`0.001%`，200 kHz `nsys`） |
-| 暴露的核心瓶颈 | `CTA 50..77`（28 SM）在栅栏空等 `185.7 µs`（49.3%），Tensor 从 ~90% 跌至 ~55% | `P5 GDN` 阶段 `28 SM` 提前完工并在栅栏空等约 `4.0 ms` |
-
-### 7.4 CUDA `.so` Sparse TopK MQA 优化闭环
-
-| 版本 | 耗时 | 开销 | 寄存器 / spill | 跨 SM 负载 spread |
-| --- | --- | --- | --- | --- |
-| V0 | 689.0 us | +1.55% | 32 → 32 寄存器，0 spill | 518.8 us（50 vs 28 SM 负载不均） |
-| V1（改为动态 Tile 队列） | 495.0 us | +0.064% | — | 83.3 us |
-
-V1 相对 V0 为 1.392x 加速。Hook 对未封签编辑、Bash 篡改回滚、手工插桩、未重封结束四类行为均拦截成功。
-
-### 运行时 `.cubin` `cudaLibrary_t` JIT（`weave` 风格）
-
-| 指标 | 结果 |
-| --- | --- |
-| 入口数 | `STO_ENTRY == 1`，零 `__global__` 签名改动 |
-| 编译 + 加载 + 运行 + 解码 | 2.83 s |
-| 数值误差 | `max_ref_abs_err = 8e-6` |
-| 记录质量 | 15,840 记录 / 0 overflow / 0 解码错误 |
-
----
-
-## 八、常用命令与离线验证
-
-### 常用命令
-
-```bash
-# 安装 Agent 配置（MCP / Hook / Skill 一次写入）
-python3 -B WeaveProfiler/run.py install-agent \
-  --workspace /path/to/your_kernel_repo \
-  --protect kernel.cu \
-  --card h20
-
-# 包装任意命令行 Agent 运行
-python3 -B WeaveProfiler/run.py guard-exec \
-  --workspace /path/to/your_kernel_repo \
-  -- codex exec "对基线 kernel 采样并分析跨 SM 负载不均"
-```
-
-安装完成后，在算子目录中直接运行 `claude` 或 `codex`，通过 MCP 工具执行审计、剖析、分析与轮次对比。
-
-### 离线验证
-
-以下命令不需要 GPU，可用于检查包结构、MCP / Hook / 安装器行为与对抗安全用例：
+### 离线测试（无需 GPU）
 
 ```bash
 python3 -B tests/package_structure.py

@@ -44,20 +44,22 @@
 
 ---
 
-## 四、更多 H20 真卡实测案例
+## 四、更多主流开源算子库 H20 实测（Skill 直出三联 PNG 图）
 
-### 1. 主流开源算子库零签名修改三联图直出（FlashInfer Hopper FA3）
+### 1. FlashInfer 0.6.8 Hopper FA3 Prefill（H20，全 12 物理 Warp，`S=512`）
 
-不改动 FlashInfer 0.6.8 的任何 Python 封装、TVM-FFI 接口与模板签名，通过跨三头文件（`prefill_sm90.cuh` + `mainloop.cuh` + `mainloop_mma.cuh`）进度槽接力，覆盖全部 12 个物理 Warp（`W00` TMA 预取、`W01..W03` 早退空闲、`W04..W11` 双计算 WarpGroup 交替执行 `Wait -> WGMMA -> Online Softmax -> Epilogue`）：
+不改动 FlashInfer 0.6.8 的任何 Python 封装、TVM-FFI 接口与模板签名，通过跨三头文件（`prefill_sm90.cuh` + `mainloop.cuh` + `mainloop_mma.cuh`）进度槽接力，覆盖全部 12 个物理 Warp（`W00` TMA 预取、`W01..W03` 早退空闲、`W04..W11` 双计算组交替执行 `Wait -> WGMMA -> Online Softmax -> Epilogue`）：
 
 ![FlashInfer 0.6.8 Hopper FA3 H20 三联对齐图](../images/case_h20_flashinfer_fa3.png)
 
-### 2. H20 生产级大模型融合核跨 SM 负载倾斜定位
+### 2. FlashInfer 0.6.8 Hopper FlashMLA（H20，全 8 物理 Warp，`KV=512`，`+8.25%`）
 
-- **GLM-5.3 SparseMLA Decode（CuTeDSL，78 SM × 12 Warp，开销 `+4.99%`）**：清除既有手写插桩中 6 处 64 ns 空桩并扩展至全 78 SM 后，直接定位到 `CTA 50..77`（28 个 SM）在 `P4` 完成后被迫在全局栅栏空等 **185.7 µs**（占该阶段 49.3%），与上联 200 kHz `nsys` 硬件 `Tensor Active` 从 ~90% 跌至 ~55% 精确吻合：
+在 DeepSeek-V3 页式 MLA（`mla_hopper.cuh`，`B=64, H=128, KV=512`）上实现 0 字节溢出与全 8 物理 Warp 覆盖，三联图直观对齐 `128 = 78 + 50` 双波次硬件 Tensor 利用率台阶与每分块的 `Load / WGMMA / Softmax / Epilogue`：
 
-![H20 GLM-5.3 SparseMLA Decode 全 78 SM 诊断图](../images/case_h20_glm53_sparse_mla.png)
+![FlashInfer 0.6.8 Hopper FlashMLA H20 三联对齐图](../images/case_h20_flashmla.png)
 
-- **Qwen3.8-Next GDN Prefill SerialMK（CUDA C++，78 SM × 16 Warp，开销 `+0.026%`）**：在 232 KB SMEM、128 寄存器封顶压力下，全 78 SM Warp 级插桩仅带来 **+0.026%** 端到端开销，精确定位 `P5 GDN` 阶段 `128 heads / 78 SMs` 导致 28 个 SM 提前完工并在栅栏空等约 **4.0 ms**：
+### 3. vLLM FLA FlashKDA（H20，Triton 3.6，全 4 物理 Warp，`T=512`，`+6.74%`）
 
-![H20 Qwen3.8-Next GDN Prefill 全 78 SM 诊断图](../images/case_h20_qwen38_gdn_prefill.png)
+在 vLLM Triton 3.6 `chunk_delta_h.py` 上经透明包装代理固定最优调优配置（`best_config`），稳态开销 `+6.74%`，清晰分解初始状态加载、8 轮分块矩阵乘与状态衰减更新及最终状态写回：
+
+![vLLM FLA FlashKDA H20 三联对齐图](../images/case_h20_flashkda.png)

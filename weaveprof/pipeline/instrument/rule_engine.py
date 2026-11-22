@@ -1014,7 +1014,7 @@ def _lower_triton_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) ->
             f"for _fi_d in (_fi_os.environ.get('WEAVEPROFILER_TRITON_DIR', ''), {triton_dir!r}):\n"
             "    if _fi_d and _fi_os.path.isdir(_fi_d) and _fi_d not in _fi_sys.path:\n"
             "        _fi_sys.path.insert(0, _fi_d)\n"
-            "from fi_triton import (\n"
+            "from wp_triton import (\n"
             "    FiCfg as FiAutoCfg, FiBuffer as FiAutoBuffer,\n"
             "    fi_attach, fi_get_attached, _FiTritonProxy,\n"
             "    fi_open as _fi_open, fi_b as _fi_b, fi_e as _fi_e, fi_close as _fi_close,\n"
@@ -1037,7 +1037,7 @@ def _lower_triton_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) ->
             f"for _fi_d in (_fi_os.environ.get('WEAVEPROFILER_TRITON_DIR', ''), {triton_dir!r}):\n"
             "    if _fi_d and _fi_os.path.isdir(_fi_d) and _fi_d not in _fi_sys.path:\n"
             "        _fi_sys.path.insert(0, _fi_d)\n"
-            "from fi_triton_amd import (\n"
+            "from wp_triton_amd import (\n"
             "    FiPackedBuffer as FiAutoBuffer, fi_attach, fi_get_attached, _FiTritonProxy,\n"
             "    fi_open_16b as _fi_open_16b, fi_b_16b as _fi_b_16b, fi_e_16b as _fi_e_16b, fi_close_16b as _fi_close_16b,\n"
             ")\n"
@@ -1060,7 +1060,7 @@ def _lower_triton_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) ->
     specialized = _specialized_roles(probe_spec)
     if paper:
         nv = platform != "amd"
-        module = "fi_triton" if nv else "fi_triton_amd"
+        module = "wp_triton" if nv else "wp_triton_amd"
         if nv:
             import_block += f"from {module} import WP_B, WP_E, WP_TRANS, _WpTritonProxy, wp_attach\n"
         else:
@@ -1077,7 +1077,7 @@ def _lower_triton_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) ->
                 pred = re.sub(r"\bwarp_id\b", "_wp_warp_id", role["predicate"])
                 open_block += f"{body_indent}_wp_role = tl.where({pred}, {role['role_id']}, _wp_role)\n"
         if specialized and nv:
-            import_block += "from fi_triton import wp_open_by, wp_close_by, wp_b_by, wp_e_by\n"
+            import_block += "from wp_triton import wp_open_by, wp_close_by, wp_b_by, wp_e_by\n"
             open_block += f"{body_indent}_wp_lane0 = (_wp_tid % 32) == 0\n"
             for role in probe_spec["warp_roles"]:
                 rid = role["role_id"]
@@ -1271,7 +1271,7 @@ def _lower_cutedsl_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -
         f"for _fi_d in (_fi_os.environ.get('WEAVEPROFILER_CUTEDSL_DIR', ''), {cute_dir!r}):\n"
         "    if _fi_d and _fi_os.path.isdir(_fi_d) and _fi_d not in _fi_sys.path:\n"
         "        _fi_sys.path.insert(0, _fi_d)\n"
-        "from fi_cute import (\n"
+        "from wp_cute import (\n"
         "    FiBuffer as FiAutoBuffer, fi_attach, fi_get_attached, _FiCuteProxy, _FiCuteDescriptor,\n"
         "    fi_open as _fi_open, fi_b as _fi_b, fi_e as _fi_e, fi_close as _fi_close,\n"
         ")\n"
@@ -1296,7 +1296,7 @@ def _lower_cutedsl_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -
 
     specialized = _specialized_roles(probe_spec)
     if paper:
-        import_block += "from fi_cute import WP_B, WP_E, _WpCuteProxy, _WpCuteDescriptor, wp_attach\n"
+        import_block += "from wp_cute import WP_B, WP_E, _WpCuteProxy, _WpCuteDescriptor, wp_attach\n"
         open_block = "".join(open_block.splitlines(keepends=True)[:-2])
         if specialized:
             open_block += f"{body_indent}_wp_role = cutlass.Int32(-1)\n"

@@ -163,12 +163,12 @@
   "platform_notes": {
     "triton_nvidia": {
       "path": "configs/recipes/nv/h20/triton.json and configs/recipes/nv/b300/triton.json",
-      "frontend": "recorders/triton/fi_triton.py",
+      "frontend": "recorders/triton/wp_triton.py",
       "backend": "NVIDIA PTX, warp32"
     },
     "triton_amd": {
       "path": "configs/recipes/amd/mi308x/triton.json",
-      "frontend": "recorders/triton/fi_triton_amd.py",
+      "frontend": "recorders/triton/wp_triton_amd.py",
       "backend": "gfx942 AMDGCN, wave64"
     },
     "cutedsl": "NVIDIA only: H20 and B300 recipes; no MI308X CuTeDSL recipe.",

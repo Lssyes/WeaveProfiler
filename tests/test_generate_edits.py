@@ -229,7 +229,7 @@ class GenerateEditsTest(unittest.TestCase):
         scan, selection = self.triton_fixture()
         scan["route"]["target"] = {"platform": "amd", "card": "mi308x"}
         scan["route"]["recorder"] = (
-            "recorders/triton/fi_triton_amd.py"
+            "recorders/triton/wp_triton_amd.py"
         )
 
         generated = generate_edits_module.generate_edits(scan, selection)

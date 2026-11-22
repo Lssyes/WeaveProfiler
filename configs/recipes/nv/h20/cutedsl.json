@@ -59,7 +59,7 @@
     }
   },
   "recorder": {
-    "path": "recorders/cutedsl/fi_cute.py",
+    "path": "recorders/cutedsl/wp_cute.py",
     "api_family": "FI_B / FI_E / FI_M / FI_OPEN / FI_CLOSE",
     "backend": "nvidia_globaltimer",
     "build_gates": "FI_LEVEL, FI_GRAN",

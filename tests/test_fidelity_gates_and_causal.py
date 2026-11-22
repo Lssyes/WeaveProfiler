@@ -61,7 +61,7 @@ PLACER = _load("weaveprof/pipeline/scan/llm_probe_placer.py", "fg_placer")
 
 class TestFidelityGatesAndCausal(unittest.TestCase):
     def test_fi_lite_cuh_smem_zreg_and_role_switch_decode(self) -> None:
-        hdr = (ROOT / "recorders" / "cuda_cpp" / "fi_lite.cuh").read_text(encoding="utf-8")
+        hdr = (ROOT / "recorders" / "cuda_cpp" / "wp_lite.cuh").read_text(encoding="utf-8")
         for token in (
             "FI_SMEM_ZREG",
             "struct FiSmemCtx",

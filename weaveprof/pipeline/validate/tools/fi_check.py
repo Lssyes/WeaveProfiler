@@ -589,8 +589,8 @@ AMD_KERNEL_HDR_RE = re.compile(r"^[0-9a-fA-F]+ <([^>]+)>:")
 AMD_INSN_RE = re.compile(r"^\s*([A-Za-z0-9_.]+)\b")
 # 指令类：类名 -> 匹配反汇编 opcode 的正则（匹配对象是 AMD_INSN_RE 抓到的 opcode 本身，不含操作数）。
 # FI 的记录写有**两种**签名，取决于用哪个前端：
-#   recorders/hip_cpp/fi_lite_hip.h         -> 16B AoS 一条：global_store_dwordx3/x4（record_store）
-#   recorders/triton/fi_triton_amd.py -> SoA 三条 tl.store：时间戳 global_store_dwordx2、
+#   recorders/hip_cpp/wp_lite_hip.h         -> 16B AoS 一条：global_store_dwordx3/x4（record_store）
+#   recorders/triton/wp_triton_amd.py -> SoA 三条 tl.store：时间戳 global_store_dwordx2、
 #                                    tag 与 aux 各一条 global_store_dword（record_store_soa_*）
 # 只认 AoS 会让 Triton 路线必然多一条“找不到 FI 探针”的结构性 FAIL，而报错还把用户指向
 # FI_LEVEL/kernel 正则这种错方向（fi_bugs_amd-sk-qwen B17：实测 base 32 条 global_store_short，
@@ -1040,8 +1040,8 @@ def check_c1_amd(a, binsim_hip_mod=None) -> Dict[str, object]:
                          "timer_read_delta": timer_delta, "record_store_delta": store_delta,
                          "record_store_deltas_by_signature": store_deltas or None,
                          "record_store_signatures": {
-                             "record_store": "recorders/hip_cpp/fi_lite_hip.h 的 16B AoS 写（global_store_dwordx3/x4）",
-                             "record_store_soa_time": "recorders/triton/fi_triton_amd.py 的 SoA 时间戳写（global_store_dwordx2）",
+                             "record_store": "recorders/hip_cpp/wp_lite_hip.h 的 16B AoS 写（global_store_dwordx3/x4）",
+                             "record_store_soa_time": "recorders/triton/wp_triton_amd.py 的 SoA 时间戳写（global_store_dwordx2）",
                              "record_store_soa_word": "同前端的 SoA tag/aux 写（global_store_dword）"},
                          "note": "SoA 的 dwordx2/dword 宽度业务代码里也有，强信号是 s_memrealtime/s_memtime 读的增量"},
     })

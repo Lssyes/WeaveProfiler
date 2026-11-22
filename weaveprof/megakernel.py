@@ -121,7 +121,7 @@ def load_wp_decode() -> Any:
 class WpSoController:
     """ctypes controller for ``.so`` / ``.dll`` megakernels built with ``-DWP_DEFINE_HOST_API``.
 
-    Exports (fi_lite.cuh): ``int wp_init(u32 n_ctas, u32 warps_per_cta, u32 cap)``,
+    Exports (wp_lite.cuh): ``int wp_init(u32 n_ctas, u32 warps_per_cta, u32 cap)``,
     ``int wp_reset(u64 stream)``, ``int wp_dump(const char* path, const char* meta_json)``,
     ``void wp_free()``.  ``wp_dump`` returns the overflow bits (>= 0) or a negative error.
     """

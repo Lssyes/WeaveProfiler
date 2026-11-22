@@ -382,7 +382,7 @@ class ProbePipelineTests(unittest.TestCase):
             "}\n"
         )
         cpp_inst = (
-            '#include "fi_lite.cuh"\n'
+            '#include "wp_lite.cuh"\n'
             "__device__ uint64_t get_hw_timer() {\n"
             "    return (uint64_t)clock64();\n"
             "}\n"
@@ -418,8 +418,8 @@ class ProbePipelineTests(unittest.TestCase):
         )
         self.assertIsNone(DIRECT_AGENT.incremental_inherit_probes(cpp_curr, cpp_prev, conflict_inst))
 
-        # CPython 3.14 + NumPy 2.x `~nonzero` temporary elision guard in fi_cute.py (#85 regression)
-        fi_cute_src = (ROOT / "recorders" / "cutedsl" / "fi_cute.py").read_text(encoding="utf-8")
+        # CPython 3.14 + NumPy 2.x `~nonzero` temporary elision guard in wp_cute.py (#85 regression)
+        fi_cute_src = (ROOT / "recorders" / "cutedsl" / "wp_cute.py").read_text(encoding="utf-8")
         self.assertNotIn("np.any(~nonzero", fi_cute_src)
         self.assertNotIn("np.argmax(~nonzero", fi_cute_src)
         self.assertIn("is_zero = tag == np.uint32(0)", fi_cute_src)
@@ -429,7 +429,7 @@ class ProbePipelineTests(unittest.TestCase):
             src_f = Path(td) / "kern.cu"
             inst_f = Path(td) / "inst_kern.cu"
             src_code = "#include <cuda_runtime.h>\n__global__ void k() { int x = 1; }\n"
-            inst_code = '#include <cuda_runtime.h>\n#include "fi_lite.cuh"\n__global__ void k() { FI_KERNEL_SCOPE(0); FI_B(4u, 0u); int x = 1; FI_E(4u, 0u); }\n'
+            inst_code = '#include <cuda_runtime.h>\n#include "wp_lite.cuh"\n__global__ void k() { FI_KERNEL_SCOPE(0); FI_B(4u, 0u); int x = 1; FI_E(4u, 0u); }\n'
             src_f.write_text(src_code, encoding="utf-8")
             inst_f.write_text(inst_code, encoding="utf-8")
 
@@ -458,7 +458,7 @@ class ProbePipelineTests(unittest.TestCase):
         kb_hip = {"language": "hip_cpp", "card": "mi308x", "arch": "gfx942"}
         p_hip = DIRECT_AGENT.build_direct_search_replace_prompt("void k(){}", kb_hip)
         txt_hip = p_hip[1]["content"]
-        self.assertIn("fi_lite_hip.h", txt_hip)
+        self.assertIn("wp_lite_hip.h", txt_hip)
         self.assertIn("FI_KERNEL_SCOPE(role);", txt_hip)
         self.assertIn("FI_B(stage_id, aux);", txt_hip)
 
@@ -486,7 +486,7 @@ class ProbePipelineTests(unittest.TestCase):
 
     def test_extract_probe_spec_numeric_and_pred(self):
         sample_code = (
-            '#include "fi_lite.cuh"\n'
+            '#include "wp_lite.cuh"\n'
             '__global__ void k() {\n'
             '    FI_KERNEL_SCOPE(1);\n'
             '    FI_B(1u, 0u);\n'

@@ -53,7 +53,7 @@ REG_RE = re.compile(r"\b(?:U?R\d+|P\d+|B\d+|SB\d+)\b")
 DEST_RE = re.compile(r"^\s*(?:@!?U?P\d+\s+)?(?:U?R\d+|P\d+|B\d+)\b")
 TIMER_SR_RE = re.compile(r"SR_(GLOBALTIMER(?:LO|HI)?|CLOCK(?:LO|HI)?|SMID|VIRTUALSMID)\b", re.I)
 STG_RE = re.compile(r"^(?:@!?U?P\d+\s+)?STG\b", re.I)
-# FILITE02 的 16B 记录写在源码里是 st.global.cs.v4.u32（recorders/cuda_cpp/fi_lite.cuh、recorders/triton/fi_triton.py），
+# FILITE02 的 16B 记录写在源码里是 st.global.cs.v4.u32（recorders/cuda_cpp/wp_lite.cuh、recorders/triton/wp_triton.py），
 # 落到 SASS 必然带 .128。旧正则的第二分支“方括号地址 + 末尾源寄存器”会把输出 tile 的
 # STG.E.U16/STG.E.64 也算进来：bf16 输出写的源寄存器恰好与计时器污点链重合时就被误报成探针
 # （fi_bugs_h20-sk-ds 第 5 条实测：真探针 @P0 STG.E.EF.128 漏掉，两条 STG.E.U16 被当成探针）。

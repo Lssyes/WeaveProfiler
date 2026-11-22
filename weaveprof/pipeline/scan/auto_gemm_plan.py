@@ -307,7 +307,7 @@ def instrument_cpp_gemm(
     kernel_name: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     """Automatically analyze and instrument an uninstrumented CUDA/HIP C++ GEMM file."""
-    header_name = "fi_lite.cuh" if language == "cuda_cpp" else "fi_lite_hip.h"
+    header_name = "wp_lite.cuh" if language == "cuda_cpp" else "wp_lite_hip.h"
     if header_name in src and "FI_OPEN" in src:
         # Already instrumented: extract metadata without double-injecting
         kname = kernel_name or "gemm_kernel"
@@ -898,7 +898,7 @@ def instrument_triton_gemm(
             "    if _fi_cand and _fi_os.path.isdir(_fi_cand) and _fi_cand not in _fi_sys.path:\n"
             "        _fi_sys.path.insert(0, _fi_cand)\n"
             "        break\n"
-            "from fi_triton import FiCfg as FiAutoCfg, FiBuffer as FiAutoBuffer, "
+            "from wp_triton import FiCfg as FiAutoCfg, FiBuffer as FiAutoBuffer, "
             "fi_open as _fi_open, fi_b as _fi_b, fi_e as _fi_e, fi_close as _fi_close\n"
             "_FI_EV_LOAD = tl.constexpr(1)\n"
             "_FI_EV_MMA = tl.constexpr(3)\n"
@@ -944,7 +944,7 @@ def instrument_triton_gemm(
             "    if _fi_cand and _fi_os.path.isdir(_fi_cand) and _fi_cand not in _fi_sys.path:\n"
             "        _fi_sys.path.insert(0, _fi_cand)\n"
             "        break\n"
-            "from fi_triton_amd import FiPackedBuffer as FiAutoBuffer, "
+            "from wp_triton_amd import FiPackedBuffer as FiAutoBuffer, "
             "fi_open_16b as _fi_open_16b, fi_b_16b as _fi_b_16b, fi_e_16b as _fi_e_16b, fi_close_16b as _fi_close_16b\n"
         )
         extra_params_body = (
@@ -1090,13 +1090,13 @@ def instrument_cutedsl_gemm(
                 if has_loop:
                     kernel_fns.append(node)
 
-    if "fi_cute" in src or not kernel_fns:
+    if "wp_cute" in src or not kernel_fns:
         kname = kernel_fns[0].name if kernel_fns else (kernel_name or "cute_gemm_kernel")
         phases = ["gemm", "load", "wait", "mma", "store"]
         names = build_names_doc(phases, card=card, arch=arch, language="cutedsl", kernel_name=kname)
         plan = {
             "schema": "weaveprofiler.auto-gemm-plan/v1",
-            "already_instrumented": ("fi_cute" in src),
+            "already_instrumented": ("wp_cute" in src),
             "kernel": kname,
             "language": "cutedsl",
             "card": card,
@@ -1157,7 +1157,7 @@ def instrument_cutedsl_gemm(
         "_fi_cute_dir = _fi_os.environ.get('WEAVEPROFILER_CUTEDSL_DIR', '')\n"
         "if _fi_cute_dir and _fi_cute_dir not in _fi_sys.path:\n"
         "    _fi_sys.path.insert(0, _fi_cute_dir)\n"
-        "from fi_cute import FiBuffer as FiAutoBuffer, fi_open as _fi_open, "
+        "from wp_cute import FiBuffer as FiAutoBuffer, fi_open as _fi_open, "
         "fi_b as _fi_b, fi_e as _fi_e, fi_close as _fi_close\n"
     )
     extra_params_body = (

@@ -17,14 +17,14 @@ class RegistryLanguageTests(unittest.TestCase):
     def test_mi308x_has_one_cpp_route(self) -> None:
         exact = registry.resolve(card="mi308x", arch="gfx942", language="hip_cpp")
         self.assertEqual(exact["language"], "hip_cpp")
-        self.assertEqual(exact["recorder"], "recorders/hip_cpp/fi_lite_hip.h")
+        self.assertEqual(exact["recorder"], "recorders/hip_cpp/wp_lite_hip.h")
         self.assertNotIn("cuda_cpp", registry.CARD_SPECS["mi308x"]["languages"])
 
     def test_explicit_cuda_style_amd_language_routes_to_hip(self) -> None:
         route = registry.resolve(card="mi308x", arch="gfx942", language="cuda_cpp")
         self.assertEqual(route["language"], "hip_cpp")
         self.assertEqual(route["requested_language"], "cuda_cpp")
-        self.assertEqual(route["recorder"], "recorders/hip_cpp/fi_lite_hip.h")
+        self.assertEqual(route["recorder"], "recorders/hip_cpp/wp_lite_hip.h")
         self.assertEqual(route["device_clock"], "s_memrealtime")
 
     def test_auto_detected_cuda_source_on_amd_routes_to_hip(self) -> None:
@@ -34,13 +34,13 @@ class RegistryLanguageTests(unittest.TestCase):
             file_paths=["kernel.cu"],
         )
         self.assertEqual(route["language"], "hip_cpp")
-        self.assertEqual(route["recorder"], "recorders/hip_cpp/fi_lite_hip.h")
+        self.assertEqual(route["recorder"], "recorders/hip_cpp/wp_lite_hip.h")
         self.assertIn(".cu", route["source_extensions"])
 
     def test_nvidia_cuda_remains_cuda(self) -> None:
         route = registry.resolve(card="h20", arch="sm_90", language="cuda_cpp")
         self.assertEqual(route["language"], "cuda_cpp")
-        self.assertEqual(route["recorder"], "recorders/cuda_cpp/fi_lite.cuh")
+        self.assertEqual(route["recorder"], "recorders/cuda_cpp/wp_lite.cuh")
         self.assertNotIn("requested_language", route)
 
 

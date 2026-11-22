@@ -809,30 +809,30 @@ def _build_readonly_probe_prompt(
 def _recorder_signature_hint(language: str, platform: str) -> str:
     if language == "cuda_cpp":
         return (
-            '#include "fi_lite.cuh"\n'
+            '#include "wp_lite.cuh"\n'
             "// Macros: FI_OPEN(role_id); FI_OPEN_BY(pred, role_id); "
             "FI_B(event_id, aux); FI_E(event_id, aux); FI_CLOSE();\n"
             "// Canonical event_ids: 1=load, 2=wait, 3=mma, 4=compute, 5=epilogue, 6=store, 7=barrier, 8=dispatch, 9=communication, 10=gemm"
         )
     if language == "hip_cpp":
         return (
-            '#include "fi_lite_hip.h"\n'
+            '#include "wp_lite_hip.h"\n'
             "// Macros: FI_OPEN(role_id); FI_OPEN_BY(pred, role_id); "
             "FI_B(event_id, aux); FI_E(event_id, aux); FI_CLOSE();\n"
             "// Canonical event_ids: 1=load, 2=wait, 3=mma, 4=compute, 5=epilogue, 6=store, 7=barrier, 8=dispatch, 9=communication, 10=gemm"
         )
     if language == "triton" and platform == "amd":
         return (
-            "from fi_triton_amd import FiPackedBuffer as FiAutoBuffer, fi_open_16b, fi_b_16b, fi_e_16b, fi_close_16b\n"
+            "from wp_triton_amd import FiPackedBuffer as FiAutoBuffer, fi_open_16b, fi_b_16b, fi_e_16b, fi_close_16b\n"
             "# Event IDs: 1=load, 2=wait, 3=mma, 4=compute, 5=epilogue, 6=store, 7=barrier, 8=dispatch, 9=communication, 10=gemm"
         )
     if language == "triton":
         return (
-            "from fi_triton import FiCfg as FiAutoCfg, FiBuffer as FiAutoBuffer, fi_open, fi_b, fi_e, fi_close\n"
+            "from wp_triton import FiCfg as FiAutoCfg, FiBuffer as FiAutoBuffer, fi_open, fi_b, fi_e, fi_close\n"
             "# Event IDs: 1=load, 2=wait, 3=mma, 4=compute, 5=epilogue, 6=store, 7=barrier, 8=dispatch, 9=communication, 10=gemm"
         )
     return (
-        "from fi_cute import FiBuffer as FiAutoBuffer, fi_open, fi_b, fi_e, fi_close\n"
+        "from wp_cute import FiBuffer as FiAutoBuffer, fi_open, fi_b, fi_e, fi_close\n"
         "# Event IDs: 1=load, 2=wait, 3=mma, 4=compute, 5=epilogue, 6=store, 7=barrier, 8=dispatch, 9=communication, 10=gemm"
     )
 
@@ -1146,7 +1146,7 @@ def identify_source(source_path, *, model="qwen4-max", card="auto", offline_heur
             raise ValueError("No deterministic loop refinement for this feedback")
         spec = _offline_probe_spec(text, language)
     else:
-        eff = reasoning_effort or ("max" if feedback is not None else "low")
+        eff = reasoning_effort or "max"
         data = place_probes(source_path, card=route["card"], language=language, model=model,
                             reasoning_effort=eff, prev_spec=previous, diagnostics=feedback,
                             llm_caller=llm_caller)

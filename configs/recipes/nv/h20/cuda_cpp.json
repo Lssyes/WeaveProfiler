@@ -64,7 +64,7 @@
     }
   },
   "recorder": {
-    "path": "recorders/cuda_cpp/fi_lite.cuh",
+    "path": "recorders/cuda_cpp/wp_lite.cuh",
     "api_family": "FI_B / FI_E / FI_M / FI_BG_PRED / FI_EG_PRED / FI_OPEN / FI_CLOSE",
     "backend": "nvidia_globaltimer",
     "build_gates": "FI_LEVEL, FI_TIMER, FI_GRAN, FI_GROUPS",

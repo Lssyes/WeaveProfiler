@@ -247,7 +247,7 @@ FRAMEWORK_DEVICE_REFS = {
     "triton": ["examples/triton/profiler.py", "examples/triton/load.py",
                "examples/triton/mma.py", "examples/triton/barrier.py",
                "examples/triton/dispatch.py", "examples/triton/scatter.py"],
-    "hip_cpp": ["recorders/hip_cpp/fi_lite_hip.h", "examples/demo/demo_two_roles_hip.cpp",
+    "hip_cpp": ["recorders/hip_cpp/wp_lite_hip.h", "examples/demo/demo_two_roles_hip.cpp",
                 "docs/amd_mi308x.md"],
     "cuda_cpp": ["examples/cuda_cpp/profiler.cuh", "examples/cuda_cpp/load.cu",
                  "examples/cuda_cpp/mma.cu", "examples/cuda_cpp/barrier.cu",

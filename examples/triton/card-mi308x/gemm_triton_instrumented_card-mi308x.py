@@ -34,7 +34,7 @@ SKILL_ROOT = Path(os.environ.get(
 RECORDER = SKILL_ROOT / "recorders" / "triton"
 if str(RECORDER) not in sys.path:
     sys.path.insert(0, str(RECORDER))
-from fi_triton_amd import FiBuffer, fi_b, fi_close, fi_e, fi_open  # noqa: E402
+from wp_triton_amd import FiBuffer, fi_b, fi_close, fi_e, fi_open  # noqa: E402
 
 CARD_FILE_TOKEN = "card-mi308x"
 DEFAULT_M = 2048

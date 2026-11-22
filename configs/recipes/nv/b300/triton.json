@@ -26,7 +26,7 @@
   },
   "language": "triton",
   "language_display_name": "Triton",
-  "platform_note": "B300 has two machine targets. Compile and label sm_100a and sm_103a separately; never merge their captures or evidence. On B300 sm_103a (148 SMs, 267 GB HBM3e), fi_triton.py uses predicated inline PTX @p_rec single-16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atomic.or.b32 in fi_close, measuring 501.28 TFLOPS (68.54 us), sample1 overhead +1.38%, full (fi-l2-s0) 66,048 spans, and 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1.",
+  "platform_note": "B300 has two machine targets. Compile and label sm_100a and sm_103a separately; never merge their captures or evidence. On B300 sm_103a (148 SMs, 267 GB HBM3e), wp_triton.py uses predicated inline PTX @p_rec single-16B st.global.cs.v4.u32 with CTA-local warp IDs (shr.u32 warp, tid, 5;) and hoisted overflow atomic.or.b32 in fi_close, measuring 501.28 TFLOPS (68.54 us), sample1 overhead +1.38%, full (fi-l2-s0) 66,048 spans, and 200 kHz cold-HBM [Throughput %] curves at pid=1 / upid=1.",
   "machine_profiles": [
     "configs/cards/b300_sm_100a.json",
     "configs/cards/b300_sm_103a.json"
@@ -68,7 +68,7 @@
     }
   },
   "recorder": {
-    "path": "recorders/triton/fi_triton.py",
+    "path": "recorders/triton/wp_triton.py",
     "api_family": "FI_B / FI_E / FI_M / FI_OPEN / FI_CLOSE",
     "backend": "nvidia_globaltimer",
     "build_gates": "FiCfg(level, timer, gran, groups)",
@@ -83,7 +83,7 @@
     ],
     "notes": [
       "Use one logical begin/end pair per selected semantic interval.",
-      "Pillar I-IV (v14 <= 10% perturbation engine): Predicated inline PTX @p_rec/@p_store single-16B st.global.cs.v4.u32 in fi_triton.py supports FI_TIMER=1 dual-anchor affine %clock64 calibration, hoisted atom.global.or.b32 overflow reporting in fi_close, and closed-loop stride selection S in {full(1), stride4(4), stride8(8)} guaranteeing Measured_Overhead(S*) <= 10.0% (fi_trace_gate.py G1-G5).",
+      "Pillar I-IV (v14 <= 10% perturbation engine): Predicated inline PTX @p_rec/@p_store single-16B st.global.cs.v4.u32 in wp_triton.py supports FI_TIMER=1 dual-anchor affine %clock64 calibration, hoisted atom.global.or.b32 overflow reporting in fi_close, and closed-loop stride selection S in {full(1), stride4(4), stride8(8)} guaranteeing Measured_Overhead(S*) <= 10.0% (fi_trace_gate.py G1-G5).",
       "Compute CTA-local warp IDs via 'shr.u32 warp, tid, 5;' rather than physical %warpid (0..63) so multi-CTA residency never drops CTAs.",
       "Keep aux stable between pair members so waits and phases can be correlated.",
       "The device recorder can only carry a 32-bit aux; move larger descriptors to names.json or the capture metadata."
@@ -249,7 +249,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_LOAD, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -361,7 +361,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_WAIT, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -444,7 +444,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_MMA, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -569,7 +569,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_COMPUTE, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -652,7 +652,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_EPILOGUE, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -764,7 +764,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_STORE, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -867,7 +867,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_BARRIER, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -968,7 +968,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_DISPATCH, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1057,7 +1057,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_COMMUNICATION, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1140,7 +1140,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_GEMM, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1223,7 +1223,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_ATTENTION, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1306,7 +1306,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_REDUCTION, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1390,7 +1390,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_MOE, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1473,7 +1473,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_CONVOLUTION, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1556,7 +1556,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_MEGAKERNEL, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "Event constants must be tl.constexpr; keep and return the loop-carried n from every fi_* call."
         ]
       },
@@ -1638,7 +1638,7 @@
         "mark": "n = fi_m(rec_ptr, ovf_ptr, pid, n, FI, EV_SOFTMAX, aux)",
         "guard": "n = fi_open(rec_ptr, ovf_ptr, pid, FI, role); /* ... */ n = fi_close(rec_ptr, ovf_ptr, pid, n, FI)",
         "notes": [
-          "Import the NVIDIA frontend from recorders/triton/fi_triton.py.",
+          "Import the NVIDIA frontend from recorders/triton/wp_triton.py.",
           "EV_SOFTMAX must be a tl.constexpr from the canonical event constants; keep and return the loop-carried n."
         ]
       },

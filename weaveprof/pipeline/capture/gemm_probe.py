@@ -431,7 +431,7 @@ def build_cache_key(source: Path, arch: str, nvcc_version: str) -> str:
     digest.update(arch.encode("utf-8"))
     digest.update(b"\0nvcc\0")
     digest.update(nvcc_version.encode("utf-8"))
-    for label, path in (("source", source), ("recorder", RECORDER_DIR / "fi_lite.cuh")):
+    for label, path in (("source", source), ("recorder", RECORDER_DIR / "wp_lite.cuh")):
         digest.update(("\0" + label + "\0").encode("utf-8"))
         digest.update(sha256_file(path).encode("ascii"))
     for variant in VARIANT_ORDER:
@@ -631,7 +631,7 @@ def build_variants(source: Path, arch: str, cache_root: Path,
                 "cache_key": cache_key,
                 "source": str(source),
                 "source_sha256": sha256_file(source),
-                "recorder_sha256": sha256_file(RECORDER_DIR / "fi_lite.cuh"),
+                "recorder_sha256": sha256_file(RECORDER_DIR / "wp_lite.cuh"),
                 "arch": arch,
                 "nvcc": nvcc,
                 "nvcc_version": nvcc_version,
@@ -1268,7 +1268,7 @@ def execute(args: argparse.Namespace) -> Dict[str, Any]:
     if not source.is_file():
         raise ProbeError("GEMM source does not exist: {}".format(source))
     for path in (DEFAULT_NAMES, DEFAULT_METRICS_CONFIG, DEFAULT_METRICS_ALLOWLIST,
-                 RECORDER_DIR / "fi_lite.cuh", DECODER, ALIGNER, CAPTURE, EXTRACT):
+                 RECORDER_DIR / "wp_lite.cuh", DECODER, ALIGNER, CAPTURE, EXTRACT):
         if not path.is_file():
             raise ProbeError("required skill asset is missing: {}".format(path))
     run_dir = Path(args.out).expanduser().resolve() if args.out else (
