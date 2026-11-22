@@ -215,21 +215,37 @@ WeaveProfiler/
 
 ---
 
-## 七、H20 实卡验证结果
+## 七、真实案例与 H20 实卡验证结果
 
-### GLM-5.3 SparseMLA Decode（CuTeDSL，78 SMs × 12 warps）
+### 7.1 论文核心案例：8×H20 生产级 DeepGEMM MegaMoE 端到端优化（1.47× 加速）
 
-| 指标 | 结果 |
-| --- | --- |
-| `install-agent` | 320 ms |
-| `WPLITE02` 206k 记录读取 | 101.9 ms |
-| 200 kHz `nsys` SQLite 抽取 | 24.2 ms（148 点，`sm_active=99.4%`） |
-| MCP 审计往返 | 4.31 s |
-| 输出一致性 | 14,303,232 B 输出，0 字节差异 |
-| 热态开销 | +4.996%（747.3 us） |
-| 空壳探针 | 64 ns 空壳探针拒收 |
+在 $8\times$NVIDIA H20（`sm_90a`，78 SM，NVLink 全互联）生产级 **Qwen3.5-397B DeepGEMM MegaMoE**（`EP=8`，`S=1024`）上，WeaveProfiler 软硬同轴时间线直接定位出两类主瓶颈，并指导重构取得 **`1.47×` 端到端加速**（完整分析见 [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)）：
 
-### CUDA `.so` Sparse TopK MQA 优化闭环
+![8×H20 DeepGEMM MegaMoE 优化前后软硬同轴时间线对比](docs/images/case_h20_megamoe_1p47x.png)
+
+| 版本 | 端到端耗时 | FP8 Tensor Core（均值 / 峰值） | HBM 带宽（均值 / 峰值） | 关键诊断与改动 |
+| --- | ---: | ---: | ---: | --- |
+| 原始分核 DeepGEMM（图 a） | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` | ① GEMM1/GEMM2 分核间约 65 µs 屏障空泡；② GEMM2 同步 `Scatter` 阻塞计算组 |
+| **优化后融合 Megakernel（图 b）** | **`416.4 µs`（`1.47×`）** | **`41.8%` / `62.6%`** | **`55.7%` / `81.5%`** | ① 单核持久化融合 + 动态队列（94.0% 活跃 SM）；② 异步 `Scatter` 卸载至空闲 `Disp` 线程束 |
+
+### 7.2 主流开源算子库零签名修改三联图直出（FlashInfer Hopper FA3）
+
+在不改动 FlashInfer 0.6.8 任何上层调用签名与模板接口的前提下，跨三头文件（`prefill_sm90.cuh` + `mainloop.cuh` + `mainloop_mma.cuh`）自动覆盖全 12 个物理 Warp 并直出同次 200.3 kHz `nsys` 软硬对齐三联 PNG 图：
+
+![FlashInfer 0.6.8 Hopper FA3 H20 三联对齐图](docs/images/case_h20_flashinfer_fa3.png)
+
+### 7.3 GLM-5.3 SparseMLA Decode 与 Qwen3.8-Next GDN Prefill（H20 全 78 SM）
+
+![H20 GLM-5.3 SparseMLA Decode 全 78 SM 诊断图](docs/images/case_h20_glm53_sparse_mla.png)
+
+| 指标 | GLM-5.3 SparseMLA Decode（CuTeDSL，78 SM × 12 Warp） | Qwen3.8-Next GDN Prefill（CUDA C++，78 SM × 16 Warp） |
+| --- | --- | --- |
+| 热态开销 | **`+4.99%`**（`768.0 µs`，清除 6 处 64 ns 空桩） | **`+0.026%`**（`223.29 → 223.35 ms`，128-reg / 232 KB SMEM） |
+| 输出一致性 | 14,303,232 B 输出，0 字节差异 | 全张量 0 字节差异 |
+| 软硬对齐偏差 | `1.15 µs`（200 kHz `nsys`） | `2.57 µs`（`0.001%`，200 kHz `nsys`） |
+| 暴露的核心瓶颈 | `CTA 50..77`（28 SM）在栅栏空等 `185.7 µs`（49.3%），Tensor 从 ~90% 跌至 ~55% | `P5 GDN` 阶段 `28 SM` 提前完工并在栅栏空等约 `4.0 ms` |
+
+### 7.4 CUDA `.so` Sparse TopK MQA 优化闭环
 
 | 版本 | 耗时 | 开销 | 寄存器 / spill | 跨 SM 负载 spread |
 | --- | --- | --- | --- | --- |

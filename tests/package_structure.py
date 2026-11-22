@@ -310,10 +310,10 @@ def _check_source_hygiene(fails: list[str]) -> None:
             junk.append(rel)
             continue
         raw = path.read_bytes()
-        if b"\r\n" in raw:
-            crlf.append(rel)
         if path.suffix not in TEXT_EXT:
             continue
+        if b"\r\n" in raw:
+            crlf.append(rel)
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:

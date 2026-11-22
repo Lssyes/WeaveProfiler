@@ -148,11 +148,31 @@ WeaveProfiler/
 └── tests/                 # Offline unit tests, structural contract tests and adversarial security test suite
 ```
 
-## H20 Silicon Verification Summary
+## Real-World Case Studies & H20 Silicon Verification
 
-- GLM-5.3 SparseMLA Decode (CuTeDSL, 78 SMs × 12 warps): `install-agent` 320 ms; `WPLITE02` 206k-record read 101.9 ms; 200 kHz `nsys` SQLite extraction 24.2 ms (148 points, `sm_active=99.4%`); MCP audit round trip 4.31 s; 14,303,232 B output with 0-byte diff; hot-state overhead +4.996% (747.3 us); 64 ns hollow probe rejected.
-- CUDA `.so` Sparse TopK MQA optimization loop: V0 689.0 us (overhead +1.55%, 32->32 registers, 0 spill, 50 vs 28 SM load imbalance spread=518.8 us) -> V1 after switching to a dynamic tile queue: 495.0 us (1.392x speedup, spread reduced to 83.3 us, overhead +0.064%). The hooks successfully blocked unsigned edits, Bash tampering with rollback, manual instrumentation, and ending without a renewed seal.
-- Runtime `.cubin` `cudaLibrary_t` JIT (`weave`-style): `STO_ENTRY == 1`, zero `__global__` signature changes, compile+load+run+decode 2.83 s, `max_ref_abs_err = 8e-6`, 15,840 records / 0 overflow / 0 decode errors.
+### 1. Paper Case Study: 8×H20 Production DeepGEMM MegaMoE Optimization (`1.47×` Speedup)
+
+On an $8\times$NVIDIA H20 node (`sm_90a`, 78 SMs, full-mesh NVLink) running production **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8`, `S=1024`), WeaveProfiler's co-axial SW+HW timeline exposed two root bottlenecks and guided refactoring to a **`1.47×` end-to-end speedup** (`613.2 µs → 416.4 µs`, full walkthrough in [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)):
+
+![8×H20 DeepGEMM MegaMoE Before/After Co-Axial Timeline](docs/images/case_h20_megamoe_1p47x.png)
+
+| Variant | Latency | FP8 Tensor Core (Avg / Peak) | HBM BW (Avg / Peak) | Diagnosis & Optimization |
+| --- | ---: | ---: | ---: | --- |
+| Original split DeepGEMM (a) | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` | ① ~65 µs inter-kernel barrier bubble between GEMM1 & GEMM2; ② Synchronous `Scatter` blocks GEMM2 compute warpgroups |
+| **Optimized fused Megakernel (b)** | **`416.4 µs` (`1.47×`)** | **`41.8%` / `62.6%`** | **`55.7%` / `81.5%`** | ① Single-kernel fusion + dynamic expert queue (`94.0%` active SMs); ② Async `Scatter` offloaded onto idle `Disp` warps |
+
+### 2. Zero-Signature Instrumentation of Production Open-Source Libraries (FlashInfer Hopper FA3)
+
+Without modifying any FlashInfer 0.6.8 Python wrappers, TVM-FFI bindings, or kernel signatures, WeaveProfiler instruments across three C++ template headers (`prefill_sm90.cuh`, `mainloop.cuh`, `mainloop_mma.cuh`), captures all 12 physical warps (`W00..W11`), and directly renders a same-run 200.3 kHz `nsys` 3-panel PNG:
+
+![FlashInfer 0.6.8 Hopper FA3 H20 3-Panel Overview](docs/images/case_h20_flashinfer_fa3.png)
+
+### 3. Additional H20 Silicon Verification Highlights
+
+- **GLM-5.3 SparseMLA Decode** (CuTeDSL, 78 SMs × 12 warps, [full 78-SM figure](docs/images/case_h20_glm53_sparse_mla.png)): hot-state overhead **`+4.99%`** (`768.0 µs`, 6 hollow 64 ns stubs removed), 0-byte diff across 14.3 MB output, `1.15 µs` `nsys` alignment error — exposing 28/78 SMs idling `185.7 µs` (49.3%) at `grid_sync(5)`.
+- **Qwen3.8-Next GDN Prefill SerialMK** (CUDA C++, 78 SMs × 16 warps, [full 78-SM figure](docs/images/case_h20_qwen38_gdn_prefill.png)): **`+0.026%`** end-to-end overhead (`223.29 → 223.35 ms`) at 128 regs / 232 KB SMEM, exposing a `4.0 ms` 28-SM straggler barrier wait in `P5 GDN`.
+- **CUDA `.so` Sparse TopK MQA optimization loop**: V0 `689.0 µs` (overhead `+1.55%`, 32→32 registers, 0 spill, 50 vs 28 SM spread `518.8 µs`) → V1 dynamic tile queue `495.0 µs` (`1.392×` speedup, spread `83.3 µs`, overhead `+0.064%`).
+- **Runtime `.cubin` `cudaLibrary_t` JIT (`weave`-style)**: `STO_ENTRY == 1`, zero `__global__` signature changes, compile+load+run+decode `2.83 s`, `max_ref_abs_err = 8e-6`, 15,840 records / 0 overflow / 0 decode errors.
 
 ## CLI & Offline Tests
 
