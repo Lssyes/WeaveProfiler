@@ -516,8 +516,11 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
         (loffs[int(p["begin_line"])] for p in probes if root_kernel["open_ln"] <= int(p["begin_line"]) <= root_kernel["close_ln"]),
         default=rk_close,
     )
-    # Place scope init right after `{` unless there is an early `if (...) return;` before first probe
+    # Place scope init right after `{` unless there is an early `if (...) return;` before first probe,
+    # or role predicates reference kernel-entry local variables (e.g. `warp_idx`, `is_leader_cta`)
+    # or the kernel body opens with an arch guard (`#if defined(__CUDA_ARCH__) ... #else ... #endif`).
     scope_insert_pos = rk_open + 1
+    root_close_pos = rk_close
     early_ret_region = clean[rk_open + 1:first_probe_in_rk]
     last_early_ret = None
     for rm in re.finditer(r"\bif\s*\([^)]*\)\s*return\s*;", early_ret_region):
@@ -529,8 +532,9 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
     warp_shift = "6" if language == "hip_cpp" else "5"
     role_guards = {}
     if paper:
-        # Kernel-local identifiers may be declared after OPEN. Use the physical
-        # warp expression at entry and at each (possibly remote) endpoint.
+        # Kernel-local identifiers may be declared after `{`; advance OPEN past
+        # any leading `#if` arch guard and past top-level declarations of
+        # identifiers referenced by role predicates (never past first probe).
         warp = "((threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)) / warpSize)"
         role_sel = "65535u"
         for role in reversed(warp_roles):
@@ -538,9 +542,76 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
             pred = re.sub(r"\bwarp_id\b", warp, str(role.get("predicate") or "true"))
             role_guards[rid] = pred
             role_sel = f"(({pred}) ? {rid}u : {role_sel})"
+        _cpp_kw = {
+            "true", "false", "and", "or", "not", "threadIdx", "blockIdx",
+            "blockDim", "gridDim", "warpSize", "x", "y", "z", "u",
+        }
+        pred_idents = {
+            t for t in re.findall(r"\b[A-Za-z_]\w*\b", role_sel)
+            if t not in _cpp_kw and not t.endswith("u")
+        }
+        # Scan top-level lines in [rk_open+1, first_probe_in_rk) for leading `#if`
+        # and local declarations of any predicate identifier.
+        rk_open_ln = root_kernel["open_ln"]
+        first_probe_ln = min(
+            (int(p["begin_line"]) for p in probes if root_kernel["open_ln"] <= int(p["begin_line"]) <= root_kernel["close_ln"]),
+            default=root_kernel["close_ln"],
+        )
+        depth = 0
+        leading_pp_depth = 0
+        saw_code_stmt = False
+        decl_end_pos = scope_insert_pos
+        for ln_no in range(rk_open_ln + 1, first_probe_ln):
+            raw_ln = lines[ln_no - 1]
+            st = raw_ln.strip()
+            if not st or st.startswith("//"):
+                continue
+            if st.startswith("#"):
+                if re.match(r"^#\s*if\b", st):
+                    if not saw_code_stmt and depth == 0:
+                        leading_pp_depth += 1
+                        decl_end_pos = max(decl_end_pos, loffs[ln_no] + len(raw_ln) + 1)
+                elif re.match(r"^#\s*endif\b", st) and leading_pp_depth > 0 and not saw_code_stmt:
+                    leading_pp_depth -= 1
+                continue
+            saw_code_stmt = True
+            c_ln = clean[loffs[ln_no]:loffs[ln_no] + len(raw_ln)]
+            if depth == 0 and pred_idents:
+                for ident in pred_idents:
+                    if re.search(
+                        r"(?:^|[;{}])\s*(?:const\s+|constexpr\s+|static\s+|volatile\s+)*"
+                        r"(?:auto|bool|int|unsigned|uint\d+_t|int\d+_t|size_t)\s+(?:unsigned\s+|int\s+)?"
+                        + re.escape(ident) + r"\s*(?:=|;|\()",
+                        c_ln,
+                    ):
+                        # Advance past statement semicolon
+                        semi = clean.find(";", loffs[ln_no], first_probe_in_rk)
+                        if semi != -1:
+                            nl = source_text.find("\n", semi + 1)
+                            decl_end_pos = max(decl_end_pos, (nl + 1) if nl != -1 else (semi + 1))
+            depth += c_ln.count("{") - c_ln.count("}")
+            if depth < 0:
+                break
+        if decl_end_pos <= first_probe_in_rk:
+            scope_insert_pos = decl_end_pos
+        # If OPEN landed inside a kernel-wide `#if ... [#else ...] #endif` arch guard,
+        # place WP_CLOSE() right before the matching top-level `#else` or `#endif`
+        # so host/fallback compilation never sees an undeclared recorder context.
+        if leading_pp_depth > 0:
+            pp_lvl = 0
+            for ln_no in range(rk_open_ln + 1, root_kernel["close_ln"] + 1):
+                st = lines[ln_no - 1].strip()
+                if re.match(r"^#\s*if\b", st):
+                    pp_lvl += 1
+                elif re.match(r"^#\s*(?:else|elif|endif)\b", st):
+                    if pp_lvl == leading_pp_depth and loffs[ln_no] > scope_insert_pos:
+                        root_close_pos = loffs[ln_no]
+                        break
+                    if re.match(r"^#\s*endif\b", st) and pp_lvl > 0:
+                        pp_lvl -= 1
         scope_code = f"\n    const uint32_t wp_role_ = {role_sel};\n"
         recorder = "fi_recorder()" if language == "cuda_cpp" else "(fi_lane() == 0u)"
-        scope_code += f"    WP_OPEN_BY({recorder} && wp_role_ != 65535u && wp_g.rec != nullptr, wp_role_);\n"
+        scope_code += f"    WP_OPEN_BY({recorder} && wp_role_ != 65535u, wp_role_);\n"
     elif multi_role:
         role_expr_parts = []
         for r in warp_roles:
@@ -650,7 +721,29 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
         indent = indent_m.group(0) if indent_m else "    "
 
         if paper:
-            aux = f"(uint32_t)({pr['slot']})" if "slot" in pr else "0u"
+            slot_expr = str(pr["slot"]).strip() if "slot" in pr and pr["slot"] is not None else ""
+            if slot_expr:
+                # If begin_line itself declares a variable referenced by `slot` (e.g.
+                # `const uint32_t tma_stage_idx = s % 2;`), move WP_B right after that
+                # declaration so `slot` is in scope at WP_B (or fall back to 0u if b_ln == e_ln).
+                slot_idents = re.findall(r"\b[A-Za-z_]\w*\b", slot_expr)
+                b_line_clean = clean[loffs[b_ln]:loffs[b_ln] + len(lines[b_ln - 1])]
+                declared_on_begin = any(
+                    re.search(
+                        r"(?:const\s+|constexpr\s+|auto\s+|int\s+|uint\d+_t\s+|int\d+_t\s+|size_t\s+)"
+                        r"(?:(?:const|unsigned|int)\s+)*" + re.escape(si) + r"\s*=",
+                        b_line_clean,
+                    )
+                    for si in slot_idents
+                )
+                if declared_on_begin:
+                    semi = clean.find(";", loffs[b_ln], e_off)
+                    if b_ln < e_ln and semi != -1 and (semi + 1) < e_off:
+                        nl = source_text.find("\n", semi + 1)
+                        b_off = (nl + 1) if (nl != -1 and nl + 1 < e_off) else (semi + 1)
+                    else:
+                        slot_expr = ""
+            aux = f"(uint32_t)({slot_expr})" if slot_expr else "0u"
             bg = role_guards[int(pr["begin_role_id"])]
             eg = role_guards[int(pr["end_role_id"])]
             b_stmt = f"\n{indent}if ({bg}) {{ WP_B({ev_id}u, {aux}); }}\n"
@@ -698,7 +791,7 @@ def _lower_cpp_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -> st
 
     for pos, _, _, statement in sorted(stage_edits):
         edits.append((pos, pos, statement))
-    edits.append((rk_close, rk_close, root_end))
+    edits.append((root_close_pos, root_close_pos, root_end))
 
     indexed = list(enumerate(edits))
     indexed.sort(key=lambda item: (item[1][0], item[1][1], item[0]))
