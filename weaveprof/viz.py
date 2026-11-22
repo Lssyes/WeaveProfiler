@@ -118,6 +118,18 @@ def _classify_hw_metric(name: str) -> Optional[str]:
         return "dram_read"
     if "dram write" in low:
         return "dram_write"
+    if "nvlink" in low:
+        if "protocol" in low:
+            return None
+        if "rx" in low and "request" in low:
+            return "nvlink_rx_req"
+        if "rx" in low and "response" in low:
+            return "nvlink_rx_rsp"
+        if "tx" in low and "request" in low:
+            return "nvlink_tx_req"
+        if "tx" in low and "response" in low:
+            return "nvlink_tx_rsp"
+        return "nvlink_user"
     return None
 
 
@@ -202,6 +214,22 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
             for t, v in hw_curves.get(k, ()):
                 by_t[round(t, 3)] += v
         hw_curves["dram_bw"] = sorted(by_t.items())
+
+    # Combine NVLink RX/TX user data into peak directional link utilization curve
+    if any(k in hw_curves for k in ("nvlink_rx_req", "nvlink_rx_rsp", "nvlink_tx_req", "nvlink_tx_rsp", "nvlink_user")):
+        rx_t: Dict[float, float] = defaultdict(float)
+        tx_t: Dict[float, float] = defaultdict(float)
+        for k in ("nvlink_rx_req", "nvlink_rx_rsp"):
+            for t, v in hw_curves.get(k, ()):
+                rx_t[round(t, 3)] += v
+        for k in ("nvlink_tx_req", "nvlink_tx_rsp"):
+            for t, v in hw_curves.get(k, ()):
+                tx_t[round(t, 3)] += v
+        if rx_t or tx_t:
+            all_t = sorted(set(rx_t.keys()) | set(tx_t.keys()))
+            hw_curves["nvlink_bw"] = [(t, min(100.0, max(rx_t.get(t, 0.0), tx_t.get(t, 0.0)))) for t in all_t]
+        elif "nvlink_user" in hw_curves:
+            hw_curves["nvlink_bw"] = list(hw_curves["nvlink_user"])
 
     sw_end = max((s["end"] for s in sw_spans), default=0.0)
     k_dur = float(nsys_kernel["dur"]) if nsys_kernel and nsys_kernel.get("dur") else sw_end
@@ -316,7 +344,7 @@ def render_swhw_overview_png(
     n_sms = max(1, len(sms))
     n_rep_rows = rep_slot_count if use_cta_slots else max(1, len(rep_warps))
 
-    has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw"))
+    has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw", "nvlink_bw"))
     panel_c_h = max(2.1, min(4.8, (0.25 if n_rep_rows >= 8 else 0.40) * n_rep_rows + 0.95))
     panel_b_h = max(3.0, min(4.3, 0.036 * n_sms + 1.5))
     panel_a_h = 2.15 if has_hw else 0.0
@@ -409,10 +437,16 @@ def render_swhw_overview_png(
         ax_hw.axhline(100.0, color="#CFD8DC", linestyle="--", linewidth=0.8, zorder=1)
         ax_hw.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=2)
 
+        nvlink_pts = hw_curves.get("nvlink_bw") or []
+        has_active_nvlink = bool(nvlink_pts and max((p[1] for p in nvlink_pts if 0.0 <= p[0] <= k_dur), default=0.0) >= 0.5)
         curve_specs = [
             ("tensor_active", "Tensor Active / MMA Pipe %", "#1565C0", "-", 1.9, "Compute"),
-            ("dram_bw", "HBM / DRAM Bandwidth %", "#E65100", "-", 1.5, "DRAM BW"),
-            ("sm_issue", "SM Issue %", "#00897B", "-", 1.5, "SM Issue"),
+            ("dram_bw", "HBM / DRAM Bandwidth %", "#E65100", "-", 1.5, "HBM BW"),
+            (
+                ("nvlink_bw", "NVLink RX/TX User Data %", "#00897B", "-", 1.55, "NVLink")
+                if has_active_nvlink
+                else ("sm_issue", "SM Issue %", "#00897B", "-", 1.5, "SM Issue")
+            ),
             ("sm_active", "Active SMs %", "#37474F", "--", 1.35, "Active SMs"),
         ]
         chips: List[Tuple[str, str]] = []

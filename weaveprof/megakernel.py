@@ -82,6 +82,11 @@ _HW_METRIC_PATTERNS: Tuple[Tuple[str, re.Pattern], ...] = (
     ("warp_issue", re.compile(r"\bsm\s*issue|\bissue\s*(?:active|slot)", re.I)),
     ("dram_read", re.compile(r"dram\s*read", re.I)),
     ("dram_write", re.compile(r"dram\s*write", re.I)),
+    ("nvlink_rx_req", re.compile(r"nvlink\s*rx\s*requests?\s*user\s*data", re.I)),
+    ("nvlink_rx_rsp", re.compile(r"nvlink\s*rx\s*responses?\s*user\s*data", re.I)),
+    ("nvlink_tx_req", re.compile(r"nvlink\s*tx\s*requests?\s*user\s*data", re.I)),
+    ("nvlink_tx_rsp", re.compile(r"nvlink\s*tx\s*responses?\s*user\s*data", re.I)),
+    ("nvlink_user", re.compile(r"nvlink(?!.*protocol).*user\s*data", re.I)),
 )
 
 _WP_DECODE: Any = None
@@ -1139,7 +1144,10 @@ def _count_role_switches(d: Mapping[str, Any]) -> int:
 
 _HW_PID = 1
 _SW_PID_SHIFT = 100
-_HW_METRIC_ORDER = ("sm_active", "warp_issue", "tensor_active", "dram_read", "dram_write")
+_HW_METRIC_ORDER = (
+    "sm_active", "warp_issue", "tensor_active", "dram_read", "dram_write",
+    "nvlink_rx_req", "nvlink_rx_rsp", "nvlink_tx_req", "nvlink_tx_rsp", "nvlink_user",
+)
 
 
 def _hw_counter_events(hw: Mapping[str, Any]) -> List[Dict[str, Any]]:
