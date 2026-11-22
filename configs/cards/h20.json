@@ -23,9 +23,9 @@
     "primary": "nsys",
     "fallback": [],
     "sampling_model": "periodic_pm",
-    "preferred_sample_hz": 50000,
+    "preferred_sample_hz": 200000,
     "evidence": "measured_sampling_gap",
-    "note": "H20 measured at 200 kHz can contain gaps; 50 kHz can remain continuous. Final rate and gaps must come from the capture manifest."
+    "note": "Default 200 kHz (--gpu-metrics-frequency=200000) paired with --capture-range=cudaProfilerApi to avoid segmentation; final achieved rate and gaps must come from the capture manifest."
   },
   "languages": [
     "cuda_cpp",

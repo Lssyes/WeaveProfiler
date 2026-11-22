@@ -99,7 +99,7 @@ class ShadowWorkspace:
             ".git", ".weaveprof_cache", "__pycache__", ".venv", ".pytest_cache", "*.pyc",
             "*.perfetto-trace", "*.perfetto*", "*.gz", "*.sqlite", "*.nsys-rep",
             "*.fi02.bin", "*.wp02.bin", "*.out.bin", "*.cubin", "*.fatbin",
-            "build", "dist", "third_party", "node_modules", ".claude", ".codex", ".agents",
+            "build", "dist", "third_party", "node_modules", ".claude", ".codex", ".qwen", ".agents",
         )
         shutil.copytree(self.project, original, ignore=ignore)
         relative = self.source.relative_to(self.project)
@@ -121,6 +121,8 @@ class ShadowWorkspace:
         tree = directory / "L_inst"
         libs = ROOT / "recorders"
         env = dict(os.environ)
+        env.pop("WEAVEPROF_SUPERVISOR_KEY_FILE", None)
+        env.pop("WEAVEPROF_SUPERVISOR_HMAC_KEY", None)
         env.update(WEAVEPROF_ROOT=str(ROOT), WEAVEPROF_BASELINE_SOURCE=str(baseline),
                    WEAVEPROF_INSTRUMENTED_SOURCE=str(instrumented), WEAVEPROF_NAMES=str(directory / "names.json"),
                    WEAVEPROF_ROUND_DIR=str(directory), WEAVEPROF_L0_CACHE_DIR=str(self.l0_cache),

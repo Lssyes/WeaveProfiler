@@ -52,24 +52,7 @@ def _load_mod(rel_path: str, mod_name: str):
     return mod
 
 
-STAGE_EVENT_IDS: Dict[str, int] = {
-    "load": 1,
-    "wait": 2,
-    "mma": 3,
-    "compute": 4,
-    "epilogue": 5,
-    "store": 6,
-    "barrier": 7,
-    "dispatch": 8,
-    "communication": 9,
-    "gemm": 10,
-    "attention": 11,
-    "reduction": 12,
-    "moe": 13,
-    "convolution": 14,
-    "megakernel": 15,
-    "softmax": 16,
-}
+from weaveprof.contract import STAGES as STAGE_EVENT_IDS
 
 
 def sha256_text(text: str) -> str:
@@ -96,9 +79,9 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
     for pr in probe_spec.get("probes") or []:
         sem = str(pr.get("semantic_id") or "compute").strip().lower()
         ev_id = int(pr.get("event_id") or STAGE_EVENT_IDS.get(sem, 4))
-        events[str(ev_id)] = sem
-        semantics_map[str(ev_id)] = {"semantic_id": sem, "display_name": sem}
         probe_id = str(pr.get("id") or pr.get("probe_id") or sem)
+        events[str(ev_id)] = probe_id
+        semantics_map[str(ev_id)] = {"semantic_id": sem, "display_name": sem}
         probe_ids[str(ev_id)] = probe_id
         begin_role = int(pr.get("begin_role_id", pr.get("role_id", 0)))
         end_role = int(pr.get("end_role_id", begin_role))
@@ -1849,6 +1832,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     out_src = Path(args.out_source).expanduser().resolve()
+    if out_src == src_path:
+        print(json.dumps({"ok": False, "error": "Refusing to overwrite --source in-place; pass a distinct --out-source path"}))
+        return 2
     out_src.parent.mkdir(parents=True, exist_ok=True)
     out_src.write_bytes(res["instrumented_source"].replace("\r\n", "\n").encode("utf-8"))
 

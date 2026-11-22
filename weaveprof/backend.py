@@ -55,8 +55,9 @@ def _sequence(path, kernel, amd):
     return [ins.opcode_token for ins in candidates[0].instructions]
 
 
-def assess(directory, spec, limit, runtime=None):
+def assess(directory, spec, limit, runtime=None, *, policy=None):
     runtime = read_json(directory / "runtime.json") if runtime is None else runtime
+    pol = policy if isinstance(policy, HarnessPolicy) else HarnessPolicy()
     metrics, errors = {}, {}
     checks = dict.fromkeys(("assembly", "output", "pairing", "overhead"), False)
     fires, trace, summary = {}, None, {}
@@ -77,7 +78,16 @@ def assess(directory, spec, limit, runtime=None):
         order_change = max(0.0, 1.0 - binsim.bitset_lcs(*sequences) / max(1, mbag))
         core_seqs = [[op.split(".")[0] for op in seq if _CORE_OP_RE.match(op)] for seq in sequences]
         core_ratio = (binsim.bitset_lcs(*core_seqs) / len(core_seqs[0])) if core_seqs[0] else ratio
+        if core_seqs[0]:
+            cb_core, ci_core = Counter(core_seqs[0]), Counter(core_seqs[1])
+            core_multiset_ratio = (
+                sum(min(cb_core[k], ci_core[k]) for k in cb_core)
+                / max(len(core_seqs[0]), len(core_seqs[1]))
+            )
+        else:
+            core_multiset_ratio = ratio
         metrics.update(lcs_ratio=ratio, core_retention_ratio=core_ratio,
+                       core_multiset_ratio=core_multiset_ratio,
                        assembly_change_rate=1 - ratio, order_change_ratio=order_change)
         baseline = runtime.get("baseline_spill_bytes")
         instrumented = runtime.get("instrumented_spill_bytes", runtime.get("spill_bytes"))
@@ -116,15 +126,20 @@ def assess(directory, spec, limit, runtime=None):
         spill_gate = verify_compiler_spill_gate(
             l0_spill_stats,
             inst_spill_stats,
-            max_delta_spill_bytes=int(runtime.get("max_delta_spill_bytes", 0)),
-            max_delta_stack_bytes=int(runtime.get("max_delta_stack_bytes", 0)),
-            max_delta_stl=int(runtime.get("max_delta_stl", 4)),
-            max_delta_ldl=int(runtime.get("max_delta_ldl", 4)),
+            max_delta_spill_bytes=pol.max_delta_spill_bytes,
+            max_delta_stack_bytes=pol.max_delta_stack_bytes,
+            max_delta_stl=pol.max_delta_stl,
+            max_delta_ldl=pol.max_delta_ldl,
             has_setmaxnreg=bool(runtime.get("has_setmaxnreg", False)),
             smem_free_bytes=runtime.get("smem_free_bytes"),
         )
         metrics["compiler_spill_gate"] = spill_gate
-        code_preserved = (core_ratio >= 0.95 and ratio >= 0.60) if core_seqs[0] else (ratio >= 0.85)
+        # Preserve core math/memory opcodes strictly while tolerating scheduling-only `ptxas -O3`
+        # software-pipeline interleaving when core multiset is >=98% identical and spill_gate passes.
+        code_preserved = (
+            ((core_ratio >= 0.95) or (core_multiset_ratio >= 0.98 and core_ratio >= 0.85))
+            and ratio >= 0.60
+        ) if core_seqs[0] else (ratio >= 0.85)
         checks["assembly"] = code_preserved and delta <= 0 and smem <= 0 and spill_gate["ok"]
     except (OSError, ValueError, TypeError, KeyError) as exc:
         errors["assembly"] = str(exc)
@@ -147,15 +162,12 @@ def assess(directory, spec, limit, runtime=None):
         metrics["pairing_errors"] = summary["errors"]
         gran_gate = (
             {"ok": True, "code": None, "skipped": True}
-            if runtime.get("allow_single_stage_collapse") is True
-            else verify_stage_granularity(
-                trace,
-                min_active_us=float(runtime.get("min_collapse_active_us", 100.0)),
-            )
+            if pol.allow_single_stage_collapse
+            else verify_stage_granularity(trace, min_active_us=100.0)
         )
         warp_gate = (
             {"ok": True, "code": None, "skipped": True}
-            if runtime.get("allow_partial_warps") is True
+            if pol.allow_partial_warps
             else verify_warp_completeness(summary, trace, expected_warps=runtime.get("expected_warps_per_cta"))
         )
         metrics["granularity_gate"] = gran_gate
@@ -182,18 +194,24 @@ def assess(directory, spec, limit, runtime=None):
         ratio = inst / base - 1
         metrics.update(overhead_ratio=ratio, baseline_median_ns=base, instrumented_median_ns=inst,
                        paired_samples=len(samples[0]))
-        checks["overhead"] = ratio <= limit
+        checks["overhead"] = abs(ratio) <= limit + 1e-12
+        if ratio < -(limit + 1e-12):
+            errors["overhead"] = (
+                f"NEGATIVE_OVERHEAD_PERTURBATION: warm ratio {100.0 * ratio:.2f}% < -{100.0 * limit:.2f}% "
+                "(instrumentation altered compiler unrolling/scheduling relative to baseline)"
+            )
     except (ValueError, TypeError, KeyError) as exc:
         errors["overhead"] = str(exc)
     return checks, metrics, errors, fires, trace, summary
 
 
-def validate_trace_product(aligned, summary, spec, source_text, runtime):
+def validate_trace_product(aligned, summary, spec, source_text, runtime, *, policy=None):
     """Product-level gates inspired by fast-instrument v1 `validate_capability.py`:
     rejects single-CTA truncation, out-of-range warp indices (e.g. Warp 449),
     collapsed single-blob stages missing load/mma, missing cross-warp async handoffs,
     or missing hardware Compute / Memory utilization curves.
     """
+    pol = policy if isinstance(policy, HarnessPolicy) else HarnessPolicy()
     al = (aligned.get("otherData") or {}).get("alignment") or {}
     amd = (aligned.get("otherData") or {}).get("platform") == "amd"
     wpc = max(1, int(al.get("warps_per_cta") or summary.get("wpc") or 1))
@@ -265,6 +283,26 @@ def validate_trace_product(aligned, summary, spec, source_text, runtime):
             f"Degenerate stage coverage {sorted(sem_seen)}: trace must expose both 'load' and 'mma' stages "
             "(never wrap the entire K-loop into a single coarse 'compute' block)."
         )
+    has_online_softmax_src = bool(re.search(
+        r"\b(?:update_mdo_states|finalize_m|online_softmax|softmax_rescale|SinglePrefillWithKVCache|BatchPrefillWithKVCache)\b",
+        source_text or "",
+        re.I,
+    )) or kernel_class == "attention"
+    if has_online_softmax_src and "softmax" not in sem_seen:
+        failures.append(
+            f"MISSING_ATTENTION_SOFTMAX: attention kernel executes online softmax but trace stages {sorted(sem_seen)} "
+            "omit `softmax` (event_id 16). Instrument the softmax/rescale stage inside the KV loop."
+        )
+    has_epilogue_store_src = bool(re.search(
+        r"\b(?:write_o_reg_gmem|vosplit_write_o|tma_store|epilogue_store|store_epilogue)\b",
+        source_text or "",
+        re.I,
+    ))
+    if has_epilogue_store_src and not (sem_seen & {"store", "epilogue"}):
+        failures.append(
+            f"MISSING_EPILOGUE_STORE: kernel contains explicit output writeback but trace stages {sorted(sem_seen)} "
+            "omit `epilogue`/`store`."
+        )
     max_fires = max((int(v) for v in (summary.get("fires") or {}).values()), default=0)
     if max_fires < min_tile_fires:
         failures.append(
@@ -300,14 +338,11 @@ def validate_trace_product(aligned, summary, spec, source_text, runtime):
     if runtime.get("enforce_stub_gate") and not stub_report["ok"]:
         failures.append(f"Empty/self-latency stub probes detected: {[s['stage'] for s in stub_report['stubs']]}")
 
-    if runtime.get("allow_single_stage_collapse") is not True:
-        gran_rep = verify_stage_granularity(
-            aligned,
-            min_active_us=float(runtime.get("min_collapse_active_us", 100.0)),
-        )
+    if not pol.allow_single_stage_collapse:
+        gran_rep = verify_stage_granularity(aligned)
         if not gran_rep["ok"]:
             failures.append(gran_rep["message"])
-    if runtime.get("allow_partial_warps") is not True:
+    if not pol.allow_partial_warps:
         warp_rep = verify_warp_completeness(summary, aligned, expected_warps=wpc)
         if not warp_rep["ok"]:
             failures.append(warp_rep["message"])
@@ -337,7 +372,7 @@ def validate_trace_product(aligned, summary, spec, source_text, runtime):
     return {
         "ok": not failures,
         "failures": failures,
-        "kernel_class": "non_gemm" if is_non_gemm else "gemm_or_tensor",
+        "kernel_class": "non_gemm" if is_non_gemm else ("attention" if has_online_softmax_src else "gemm_or_tensor"),
         "ctas_observed": len(ctas_seen),
         "expected_ctas": expected_ctas,
         "warps_per_cta": wpc,
@@ -477,7 +512,7 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
         else:
             measure()
         rt = read_json(directory / "runtime.json")
-        gates, metrics, failures, fires, trace, summary = assess(directory, spec, limit, rt)
+        gates, metrics, failures, fires, trace, summary = assess(directory, spec, limit, rt, policy=active_policy)
         if region_lock_info is not None:
             metrics["region_lock"] = region_lock_info
         proto_ok, abba_info, proto_errs = guard.validate_runtime_protocol(rt, limit)
@@ -493,7 +528,7 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
                 aligned = merge.align(trace, summary, window, rt)
                 metrics["alignment"] = aligned["otherData"]["alignment"]
                 if rt.get("require_product_gate") or rt.get("grid_ctas"):
-                    product_report = validate_trace_product(aligned, summary, spec, source_text, rt)
+                    product_report = validate_trace_product(aligned, summary, spec, source_text, rt, policy=active_policy)
                     metrics["product_gate"] = product_report
                     if not product_report["ok"]:
                         gates["pairing"] = False
@@ -613,6 +648,7 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
             region_lock=region_lock_info,
             prev_seal_sha256=prev_seal_sha256,
             extra_artifacts=extra_arts,
+            mode="shadow_build_run",
         )
         document["seal_path"] = str(seal_file)
         document["seal_sha256"] = seal_doc["seal_sha256"]

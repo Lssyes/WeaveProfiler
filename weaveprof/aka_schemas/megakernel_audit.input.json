@@ -19,10 +19,9 @@
     },
     "inst_files": {"type": "object"},
     "inst_dir": {"type": "string"},
-    "dump_path": {"type": "string"},
-    "names": {"oneOf": [{"type": "string"}, {"type": "object"}]},
-    "runtime_metrics": {"oneOf": [{"type": "string"}, {"type": "object"}]},
     "nsys_sqlite": {"type": "string"},
+    "capture_nsys": {"type": "boolean"},
+    "nsys_freq_hz": {"type": "integer", "minimum": 1000, "maximum": 500000},
     "card": {"type": "string"},
     "arch": {"type": "string"},
     "total_sms": {"type": "integer", "minimum": 1},
@@ -32,5 +31,5 @@
     "use_l0_cache": {"type": "boolean"}
   },
   "required": ["workspace", "entry_source"],
-  "additionalProperties": true
+  "additionalProperties": false
 }

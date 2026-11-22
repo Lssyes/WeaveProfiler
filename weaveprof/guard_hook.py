@@ -58,12 +58,15 @@ SESSION_SCHEMA = "weaveprof.agent-session/v1"
 SESSION_FILE = "session.json"
 KEY_FILE = ".supervisor.key"
 BACKUP_DIRNAME = "backups"
+CONFIG_BACKUP_DIRNAME = "config_backups"
 STOP_BLOCK_LIMIT = 3
 EXIT_ALLOW = 0
 EXIT_BLOCK = 2
 TAG = "[WeaveProfiler wp guard]"
-SEALING_TOOLS_HINT = "`weaveprof_megakernel_audit` (fast shadow-copy megakernel audit) or `weaveprof_profile`"
+SEALING_TOOLS_HINT = "`weaveprof_megakernel_audit` (fast isolated-copy megakernel audit) or `weaveprof_profile`"
 
+# Legacy `fi_*` tokens are intentionally retained alongside `wp_*` so agents cannot bypass
+# probe-pollution checks via older header/macro spellings.
 PROBE_TOKENS: Tuple[str, ...] = (
     "wp_lite.cuh", "wp_lite_hip.h", "wp_cute", "wp_triton",
     "WP_OPEN", "WP_KERNEL_SCOPE", "WP_DEVICE_SCOPE", "WP_B(", "WP_E(",
@@ -72,7 +75,8 @@ PROBE_TOKENS: Tuple[str, ...] = (
     "%globaltimer", "s_memrealtime", "prof_interval_start",
 )
 SECRET_NEEDLES: Tuple[str, ...] = (
-    ".supervisor.key", ".supervisor.", "weaveprof/sessions", "weaveprof_supervisor_hmac_key",
+    ".supervisor.key", ".supervisor.", "weaveprof/sessions",
+    "weaveprof_supervisor_hmac_key", "weaveprof_supervisor_key_file",
     "weaveprof_sessions_dir", "guard_hook.py", "mcp_server.py",
 )
 
@@ -84,6 +88,7 @@ EDIT_TOOLS = {
 SHELL_TOOLS = {
     "bash", "shell", "local_shell", "exec", "exec_command", "container.exec", "run_shell_command",
     "run_command", "terminal", "powershell", "unified_exec", "run_terminal_cmd",
+    "write_stdin", "manage_task",
 }
 READ_ONLY_TOOLS = {
     "read", "read_file", "grep", "grep_search", "glob", "ls", "list_directory", "list_dir", "find_by_name",
@@ -91,9 +96,9 @@ READ_ONLY_TOOLS = {
     "view", "view_file", "view_file_outline", "view_code_item",
 }
 
-_AGY_TERMINAL_STOP_REASONS = {
-    "USER_CANCELED", "ERROR", "MAX_INVOCATIONS", "MAX_FORCED_INVOCATIONS", "MAX_TOKEN_BUDGET_EXCEEDED",
-}
+# Allowlist of normal Antigravity stop reasons that must pass the Stop gate; any other
+# reason (USER_CANCELED, ERROR, MAX_INVOCATIONS, MAX_STEPS_EXCEEDED, etc.) exits cleanly.
+_AGY_GATE_STOP_REASONS = {"", "NO_TOOL_CALL", "MODEL_STOP"}
 
 _SAMPLING_RE = re.compile(
     r"(?:\b(?:FI_SAMPLE|WP_SAMPLE|WEAVEPROF_SAMPLE|--fi-sample|--wp-sample|--sample-stride)\s*(?:=|:|\s)\s*['\"]?[+]?(?:0x[0-9a-f]+|[2-9]|\d{2,})"
@@ -112,20 +117,29 @@ def _shell_write_re(target: str) -> "re.Pattern[str]":
     tgt = r"[^\s\"';|&]*(?:" + target + r")"
     return re.compile(
         r"(?:(?<![0-9&])>{1,2}\s*[\"']?" + tgt
-        + r"|\b(?:tee|truncate|rm|del|erase|unlink|shred|touch|ln|Remove-Item|Set-Content|Add-Content|Out-File|New-Item)\b[^\n;|&]*" + tgt
+        + r"|\b(?:tee|truncate|rm|rmdir|rd|del|erase|unlink|shred|touch|ln|Remove-Item|Set-Content|Add-Content|Out-File|New-Item)\b[^\n;|&]*" + tgt
         + r"|\bdd\b[^\n;|&]*\bof=[\"']?" + tgt
         + r"|\b(?:sed|perl)\s+(?:-\w+\s+)*-\w*i\w*\b[^\n;|&]*" + tgt
-        + r"|\b(?:cp|mv|rsync|install|Copy-Item|Move-Item)\b[^\n;|&]*\s[\"']?" + tgt + r"[\"']?\s*(?:$|[;|&\n])"
-        + r"|(?:write_text|write_bytes|json\.dump|os\.remove|os\.unlink|os\.replace|os\.rename|shutil\.\w+|open\s*\([^)]*['\"][wa]b?\+?['\"])[^\n]*" + tgt
+        + r"|\b(?:cp|mv|rsync|install|Copy-Item|Move-Item|Rename-Item)\b[^\n;|&]*" + tgt
+        + r"|(?:write_text|write_bytes|json\.dump|os\.remove|os\.unlink|os\.replace|os\.rename|shutil\.\w+|IO\.File\]::Write\w*|open\s*\([^)]*['\"][wa]b?\+?['\"])[^\n]*" + tgt
         + r"|" + tgt + r"[^\n]*(?:write_text|write_bytes|['\"][wa]b?\+?['\"]\s*\)))",
         re.I | re.M,
     )
 
 
 _EVIDENCE_WRITE_RE = _shell_write_re(r"seal\.json|verify\.json|episode_ledger\.json")
-_CONFIG_WRITE_RE = _shell_write_re(
-    r"\.claude[/\\]settings[\w.]*\.json|\.codex[/\\][\w.]+|\.qwen[/\\][\w./\\-]+|"
-    r"\.agents[/\\](?:hooks\.json|plugins[/\\]weaveprofiler\b|skills[/\\]weaveprofiler\b)|\.mcp\.json"
+_CONFIG_DIR_OR_FILE = (
+    r"\.claude(?:[/\\][^\s\"';|&]*)?|"
+    r"\.codex(?:[/\\][^\s\"';|&]*)?|"
+    r"\.qwen(?:[/\\][^\s\"';|&]*)?|"
+    r"\.agents(?:[/\\](?:hooks\.json|plugins[/\\]weaveprofiler\b[^\s\"';|&]*|skills[/\\]weaveprofiler\b[^\s\"';|&]*))?|"
+    r"\.mcp\.json"
+)
+_CONFIG_WRITE_RE = re.compile(
+    _shell_write_re(_CONFIG_DIR_OR_FILE).pattern
+    + r"|\bgit\s+clean\b[^\n;|&]*-[^\s]*[dx]"
+    + r"|\b(?:cd|Set-Location|sl)\b[^\n;|&]*(?:\.claude|\.codex|\.qwen|\.agents)\b[^\n]*(?:rm|del|mv|Remove-Item|Set-Content|truncate|>|write_text|write_bytes|unlink|shutil)",
+    re.I | re.M,
 )
 
 
@@ -232,10 +246,10 @@ def session_lock(session_dir: os.PathLike | str, timeout: float = 10.0) -> Itera
                     lock.unlink()
                     continue
             if time.monotonic() > deadline:
-                break
+                raise TimeoutError(f"Timed out acquiring session lock {lock} after {timeout}s")
             time.sleep(0.02)
-        except OSError:
-            break
+        except OSError as exc:
+            raise OSError(f"Cannot acquire session lock {lock}: {exc}") from exc
     try:
         yield
     finally:
@@ -282,11 +296,60 @@ def _read_key(session_dir: os.PathLike | str) -> Optional[bytes]:
     return raw or None
 
 
+_POLICY_SIGNED_FIELDS: Tuple[str, ...] = (
+    "schema", "workspace", "protected", "config_files",
+    "require_final_seal", "max_overhead", "bench_cmd", "card", "arch", "skill_root",
+)
+
+
+def compute_policy_hmac(session_dir: os.PathLike | str, session: Dict[str, Any]) -> Optional[str]:
+    """Compute HMAC-SHA256 over immutable session policy & baseline fields."""
+    key = _read_key(session_dir)
+    if key is None:
+        return None
+    body = {k: session.get(k) for k in _POLICY_SIGNED_FIELDS}
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+    return hmac.new(key, raw, hashlib.sha256).hexdigest()
+
+
+def verify_session_policy(session_dir: os.PathLike | str, session: Optional[Dict[str, Any]]) -> Tuple[bool, str]:
+    """Fail-closed integrity check for session.json immutable policy fields."""
+    if not isinstance(session, dict):
+        return False, "Session JSON missing or invalid"
+    claimed = session.get("policy_hmac")
+    if not isinstance(claimed, str) or not claimed:
+        return False, "Session policy_hmac missing (session.json tampered or not provisioned with integrity protection)"
+    expected = compute_policy_hmac(session_dir, session)
+    if expected is None:
+        return False, "Session supervisor key missing; cannot verify session policy_hmac"
+    if not hmac.compare_digest(claimed, expected):
+        return False, "Session policy_hmac mismatch (immutable policy/baseline fields in session.json were tampered)"
+    return True, ""
+
+
 # ---------------------------------------------------------------------------
 # Seal verification & registration
 # ---------------------------------------------------------------------------
 
-_VERIFY_CACHE: Dict[Tuple[Any, ...], Tuple[bool, List[str], Optional[Dict[str, Any]]]] = {}
+_VERIFY_CACHE: Dict[Tuple[Any, ...], Tuple[bool, List[str], Optional[Dict[str, Any]], Tuple[Tuple[str, int, int], ...]]] = {}
+
+
+def _bound_artifact_stats(doc: Optional[Dict[str, Any]]) -> Optional[Tuple[Tuple[str, int, int], ...]]:
+    if not isinstance(doc, dict):
+        return None
+    artifacts = doc.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return ()
+    stats: List[Tuple[str, int, int]] = []
+    for name, entry in sorted(artifacts.items()):
+        if name == "source" or not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            continue
+        try:
+            st = Path(entry["path"]).stat()
+        except OSError:
+            return None
+        stats.append((entry["path"], st.st_mtime_ns, st.st_size))
+    return tuple(stats)
 
 
 def verify_seal_file(
@@ -312,7 +375,10 @@ def verify_seal_file(
     cache_key = (str(sp.resolve()), st.st_mtime_ns, st.st_size, int(bool(require_pass)), key_fp, lim_key)
     hit = _VERIFY_CACHE.get(cache_key)
     if hit is not None:
-        return hit
+        cached_ok, cached_errs, cached_doc, cached_stats = hit
+        live_stats = _bound_artifact_stats(cached_doc)
+        if live_stats is not None and live_stats == cached_stats:
+            return cached_ok, cached_errs, cached_doc
     from weaveprof.harness import verify_seal
 
     with supervisor_env(session_dir):
@@ -325,6 +391,8 @@ def verify_seal_file(
     if doc is None:
         errors = errors or ["Seal JSON unreadable"]
     else:
+        if doc.get("mode") == "precaptured":
+            errors.append("Precaptured seals cannot unlock supervised agent edits or Stop gates")
         claimed = doc.get("seal_hmac")
         expected = hmac.new(key, str(doc.get("seal_sha256") or "").encode("utf-8"), hashlib.sha256).hexdigest()
         if not isinstance(claimed, str) or not hmac.compare_digest(claimed, expected):
@@ -332,7 +400,9 @@ def verify_seal_file(
             if msg not in errors:
                 errors.append(msg)
     out = (not errors, errors, doc)
-    _VERIFY_CACHE[cache_key] = out
+    live_stats = _bound_artifact_stats(doc)
+    if live_stats is not None:
+        _VERIFY_CACHE[cache_key] = (*out, live_stats)
     return out
 
 
@@ -349,6 +419,9 @@ def register_seal(
     session = read_session(sd)
     if session is None:
         return {"registered": False, "errors": [f"No WeaveProfiler session at {sd}"]}
+    pol_ok, pol_err = verify_session_policy(sd, session)
+    if not pol_ok:
+        return {"registered": False, "errors": [f"SESSION_POLICY_TAMPERED: {pol_err}"]}
     sp = Path(seal_path).expanduser().resolve()
     ok_pass, errs_pass, doc = verify_seal_file(sd, sp, require_pass=True,
                                                max_overhead_limit=session.get("max_overhead"))
@@ -364,6 +437,12 @@ def register_seal(
     live = live_protected_shas(session)
     source_sha = src.get("sha256")
     covers = bool(source_sha) and source_sha in set(v for v in live.values() if v)
+    prior_valid = valid_pass_seals(sd, session)
+    baseline_shas = {str(e.get("baseline_sha256")) for e in session.get("protected") or [] if e.get("baseline_sha256")}
+    first_must_match_baseline = (status == "PASS" and covers and not prior_valid
+                                 and bool(baseline_shas) and source_sha not in baseline_shas)
+    if first_must_match_baseline:
+        covers = False
     ovh = doc.get("overhead_ratio")
     try:
         overhead_pct = round(float(ovh) * 100.0, 4) if ovh is not None else None
@@ -396,7 +475,10 @@ def register_seal(
 
     update_session(sd, _apply)
     note = None
-    if status == "PASS" and not covers:
+    if first_must_match_baseline:
+        note = ("First PASS seal must match the unmodified baseline SHA-256 of a protected kernel file; "
+                "restore the baseline and seal it before optimizing.")
+    elif status == "PASS" and not covers:
         note = ("PASS seal recorded but its source SHA-256 matches no protected file's current bytes; "
                 "it does not unlock edits/stop. Profile the protected kernel itself.")
     return {"registered": True, "status": status, "covers_protected": covers, "entry": entry, "note": note,
@@ -404,6 +486,9 @@ def register_seal(
 
 
 def valid_pass_seals(session_dir: os.PathLike | str, session: Dict[str, Any]) -> List[Dict[str, Any]]:
+    pol_ok, _ = verify_session_policy(session_dir, session)
+    if not pol_ok:
+        return []
     out = []
     for entry in session.get("seals") or []:
         if entry.get("status") != "PASS" or not entry.get("covers_protected"):
@@ -460,6 +545,31 @@ def mutated_since_baseline(session: Dict[str, Any]) -> List[str]:
             if sha256_file(e.get("path", "")) != e.get("baseline_sha256")]
 
 
+def mutated_config_files(session: Dict[str, Any]) -> List[str]:
+    return [str(e.get("rel")) for e in session.get("config_files") or []
+            if sha256_file(e.get("path", "")) != e.get("sha256")]
+
+
+def restore_config_files(session: Dict[str, Any], rels: Optional[Sequence[str]] = None) -> List[str]:
+    restored = []
+    for e in session.get("config_files") or []:
+        if rels is not None and e.get("rel") not in rels:
+            continue
+        backup = Path(e.get("backup", ""))
+        target = Path(e.get("path", ""))
+        try:
+            data = backup.read_bytes()
+        except OSError:
+            continue
+        if hashlib.sha256(data).hexdigest() != e.get("sha256"):
+            continue
+        if sha256_file(target) == e.get("sha256"):
+            continue
+        _atomic_write_bytes(target, data, 0o644)
+        restored.append(str(e.get("rel")))
+    return restored
+
+
 def incumbent(seals: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     timed = [s for s in seals if isinstance(s.get("kernel_us"), (int, float))]
     if not timed:
@@ -472,15 +582,26 @@ def incumbent(seals: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 def verify_session_completion(
     workspace: Optional[str] = None, *, session_dir: Optional[str] = None, sessions_root_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Exact Stop-gate verdict: >=1 verified PASS seal, probe-free sources, final bytes sealed."""
+    """Exact Stop-gate verdict: intact session policy, >=1 verified PASS seal, probe-free sources, final bytes sealed."""
     sd = resolve_session_dir(session_dir=session_dir, workspace=workspace, root=sessions_root_dir)
     session = read_session(sd)
     if session is None:
         return {"ok": False, "installed": False, "session_dir": str(sd),
                 "blockers": [f"SESSION_MISSING: no WeaveProfiler session at {sd}; run the wp installer."]}
+    pol_ok, pol_err = verify_session_policy(sd, session)
+    if not pol_ok:
+        return {"ok": False, "installed": True, "session_dir": str(sd), "workspace": session.get("workspace"),
+                "blockers": [f"SESSION_POLICY_TAMPERED: {pol_err}"], "valid_pass_seals": 0}
     valid = valid_pass_seals(sd, session)
     live = live_protected_shas(session)
     blockers: List[str] = []
+    cfg_mut = mutated_config_files(session)
+    if cfg_mut:
+        restored_cfg = restore_config_files(session, cfg_mut)
+        blockers.append(
+            f"SUPERVISOR_CONFIG_TAMPER: hook/MCP config files {cfg_mut} were modified or deleted "
+            f"(restored: {restored_cfg})."
+        )
     if not valid:
         blockers.append("NO_VERIFIED_PASS_SEAL: no HMAC-verified PASS seal of the protected kernel exists yet; call "
                         + SEALING_TOOLS_HINT + ".")
@@ -527,7 +648,7 @@ def status_report(session_dir: os.PathLike | str) -> Dict[str, Any]:
     session = read_session(sd)
     if session is None:
         return {"installed": False, "session_id": sd.name,
-                "hint": "Workspace not provisioned; run `python -B <skill_root>/run.py` agent install (wp installer)."}
+                "hint": "Workspace not provisioned; run `python -B <skill_root>/run.py install-agent --workspace <ws>`."}
     valid = valid_pass_seals(sd, session)
     latest = valid[-1] if valid else None
     comp = verify_session_completion(session_dir=str(sd))
@@ -771,12 +892,14 @@ def handle_pre(ctx: Context) -> None:
                             f"tool `{tool_name}` references protected supervisor state ({n!r}). The supervisor key, "
                             "session store, hook and MCP server are off-limits; use MCP `weaveprof_status` to inspect "
                             "session state.")
-    is_shell = short in SHELL_TOOLS
+    is_shell = (short in SHELL_TOOLS) or (not own and short not in EDIT_TOOLS and short not in READ_ONLY_TOOLS)
     cmd = _shell_command(tool_input)
-    if _SAMPLING_RE.search("\n".join(_strings(tool_input))):
+    all_vals_text = "\n".join(_strings(tool_input))
+    scan_text = all_vals_text if is_shell else cmd
+    if _SAMPLING_RE.search(all_vals_text):
         raise HookBlock("LOOP_SAMPLING_FORBIDDEN",
-                        "WP_SAMPLE / FI_SAMPLE > 1 violates the full-audit policy; keep WP_SAMPLE at 0 or 1.")
-    if cmd and _INSTALLER_RE.search(cmd):
+                        "WP_SAMPLE > 1 violates the full-audit policy; keep WP_SAMPLE at 0 or 1.")
+    if scan_text and _INSTALLER_RE.search(scan_text):
         raise HookBlock("SUPERVISOR_RECONFIG",
                         "the agent may not re-run the wp installer / guard-exec (that would reset the baseline). "
                         "Ask the user to re-provision if the protected set must change.")
@@ -791,6 +914,8 @@ def handle_pre(ctx: Context) -> None:
                             f"`{path.name}` is sealed harness evidence and cannot be written/deleted by the agent. "
                             "Use MCP `weaveprof_verify_seal` to check seals.")
         np = os.path.normcase(str(path)).replace("\\", "/")
+        # `.agents/hooks.json` is protected even when WeaveProfiler ships its hooks inside the native
+        # plugin bundle `.agents/plugins/weaveprofiler/hooks.json` so an agent cannot disable/override it.
         cfg = (np == ws_norm + "/.claude" or np.startswith(ws_norm + "/.claude/")
                or np == ws_norm + "/.codex" or np.startswith(ws_norm + "/.codex/")
                or np == ws_norm + "/.qwen" or np.startswith(ws_norm + "/.qwen/")
@@ -806,13 +931,12 @@ def handle_pre(ctx: Context) -> None:
         if cfg or _under(path, SKILL_ROOT) or _under(path, ctx.session_dir.parent):
             raise HookBlock("SUPERVISOR_CONFIG_TAMPER",
                             f"`{path}` is WeaveProfiler supervisor/agent configuration and is read-only for the agent.")
-    if cmd and _EVIDENCE_WRITE_RE.search(cmd):
+    if scan_text and _EVIDENCE_WRITE_RE.search(scan_text):
         raise HookBlock("EVIDENCE_TAMPER",
                         "command writes/moves/deletes seal.json / verify.json / episode_ledger.json evidence.")
-    if cmd and _CONFIG_WRITE_RE.search(cmd):
+    if scan_text and _CONFIG_WRITE_RE.search(scan_text):
         raise HookBlock("SUPERVISOR_CONFIG_TAMPER",
-                        "command modifies `.claude/settings*.json`, `.codex/*`, `.qwen/*`, `.agents/plugins/weaveprofiler/*`, "
-                        "`.agents/hooks.json`, or `.mcp.json` (hook/MCP wiring).")
+                        "command modifies `.claude/`, `.codex/`, `.qwen/`, `.agents/`, or `.mcp.json` (hook/MCP wiring).")
 
     if ctx.session is None:
         if short in READ_ONLY_TOOLS or own:
@@ -823,6 +947,10 @@ def handle_pre(ctx: Context) -> None:
                             "Ask the user to re-run the wp agent installer for this workspace.")
         return
 
+    pol_ok, pol_err = verify_session_policy(ctx.session_dir, ctx.session)
+    if not pol_ok and short not in READ_ONLY_TOOLS and not own:
+        raise HookBlock("SESSION_POLICY_TAMPERED", pol_err)
+
     # (b) probe pollution + (c) seal-before-optimize for protected files
     protected_hits = [(p, a, op, ctx.protected_entry(p)) for p, a, op in targets]
     protected_hits = [h for h in protected_hits if h[3] is not None]
@@ -832,22 +960,22 @@ def handle_pre(ctx: Context) -> None:
             raise HookBlock("PROBE_POLLUTION",
                             f"proposed edit to protected `{entry.get('rel')}` adds probe instrumentation {toks}. Keep "
                             "production kernel files clean; call MCP `weaveprof_megakernel_audit` or "
-                            "`weaveprof_profile`, which instrument a shadow copy.")
+                            "`weaveprof_profile`, which instrument an isolated temporary copy.")
     shell_hits: List[Dict[str, Any]] = []
-    if is_shell:
+    if is_shell and scan_text:
         for e in ctx.protected():
             base = re.escape(Path(e.get("path", "")).name)
-            if re.search(r"(?<![\w.-])" + base + r"(?![\w-])", cmd):
+            if re.search(r"(?<![\w.-])" + base + r"(?![\w-])", scan_text):
                 shell_hits.append(e)
         for e in shell_hits:
-            toks = [t for t in PROBE_TOKENS if t in cmd and t not in _read_text(e.get("backup", ""))]
+            toks = [t for t in PROBE_TOKENS if t in scan_text and t not in _read_text(e.get("backup", ""))]
             if toks:
                 raise HookBlock("PROBE_POLLUTION",
                                 f"shell command touching protected `{e.get('rel')}` carries probe tokens {toks}; keep "
                                 "production kernel source probe-free and use the MCP profilers.")
     if protected_hits or shell_hits:
         writing_shell = [e for e in shell_hits
-                         if _shell_write_re(re.escape(Path(e.get("path", "")).name)).search(cmd)]
+                         if _shell_write_re(re.escape(Path(e.get("path", "")).name)).search(scan_text)]
         if (protected_hits or writing_shell) and not ctx.valid_seals():
             rels = sorted({str(h[3].get("rel")) for h in protected_hits} | {str(e.get("rel")) for e in writing_shell})
             raise HookBlock("SEAL_BEFORE_OPTIMIZE",
@@ -856,8 +984,19 @@ def handle_pre(ctx: Context) -> None:
                             "unlock automatically once the seal is registered (check with `weaveprof_status`).")
 
 
+def _safe_int(val: Any) -> int:
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _is_stop_active(payload: Dict[str, Any]) -> bool:
-    return bool(payload.get("stop_hook_active") or payload.get("continuationActive"))
+    return bool(
+        payload.get("stop_hook_active")
+        or payload.get("continuationActive")
+        or _safe_int(payload.get("executionNum")) > 0
+    )
 
 
 def _detect_protocol(requested: Optional[str], payload: Dict[str, Any]) -> str:
@@ -866,7 +1005,7 @@ def _detect_protocol(requested: Optional[str], payload: Dict[str, Any]) -> str:
         return req
     if req == "antigravity":
         return "agy"
-    if any(k in payload for k in ("hookEventName", "toolCall", "continuationActive", "workspacePaths")):
+    if any(k in payload for k in ("hookEventName", "toolCall", "continuationActive", "executionNum", "workspacePaths")):
         return "agy"
     if os.environ.get("QWEN_PROJECT_DIR"):
         return "qwen"
@@ -898,6 +1037,23 @@ def _pop_pending_post_alert(session_dir: Path) -> Optional[str]:
 def handle_post(ctx: Context, *, protocol: str = "claude") -> None:
     if ctx.session is None:
         return
+    pol_ok, pol_err = verify_session_policy(ctx.session_dir, ctx.session)
+    if not pol_ok:
+        blk = HookBlock("SESSION_POLICY_TAMPERED", pol_err)
+        if protocol == "agy":
+            _set_pending_post_alert(ctx.session_dir, str(blk))
+        raise blk
+    cfg_mut = mutated_config_files(ctx.session)
+    if cfg_mut:
+        restored_cfg = restore_config_files(ctx.session, cfg_mut)
+        blk = HookBlock(
+            "SUPERVISOR_CONFIG_TAMPER",
+            f"hook/MCP configuration file(s) {cfg_mut} were modified or deleted; exact installed copies "
+            f"were restored ({restored_cfg}). Supervisor wiring is read-only for the agent.",
+        )
+        if protocol == "agy":
+            _set_pending_post_alert(ctx.session_dir, str(blk))
+        raise blk
     mutated = mutated_since_baseline(ctx.session)
     if mutated and not ctx.valid_seals():
         restored = restore_protected(ctx.session, mutated)
@@ -919,7 +1075,7 @@ def handle_post(ctx: Context, *, protocol: str = "claude") -> None:
         blk = HookBlock(
             "PROBE_POLLUTION",
             f"protected kernel source now contains probe macros {polluted}. Remove them: production "
-            "kernel source must stay probe-free; profiling instruments a shadow copy via "
+            "kernel source must stay probe-free; profiling instruments an isolated temporary copy via "
             + SEALING_TOOLS_HINT + ".",
         )
         if protocol == "agy":
@@ -939,10 +1095,44 @@ def handle_post_invocation(ctx: Context) -> Dict[str, Any]:
     }
 
 
+def handle_subagent_stop(ctx: Context, *, protocol: str = "claude") -> None:
+    """SubagentStop checks only unauthorized mutations, config integrity, and probe pollution
+    (subagents do not own top-level session sealing and must not share `stop_blocks`)."""
+    if ctx.session is None:
+        return
+    pol_ok, pol_err = verify_session_policy(ctx.session_dir, ctx.session)
+    if not pol_ok:
+        raise HookBlock("SESSION_POLICY_TAMPERED", pol_err)
+    cfg_mut = mutated_config_files(ctx.session)
+    if cfg_mut:
+        restored_cfg = restore_config_files(ctx.session, cfg_mut)
+        raise HookBlock(
+            "SUPERVISOR_CONFIG_TAMPER",
+            f"subagent modified/deleted supervisor config file(s) {cfg_mut}; restored ({restored_cfg}).",
+        )
+    mutated = mutated_since_baseline(ctx.session)
+    if mutated and not ctx.valid_seals():
+        restored = restore_protected(ctx.session, mutated)
+        raise HookBlock(
+            "UNAUTHORIZED_PRE_PROFILE_MUTATION",
+            f"subagent modified protected kernel file(s) {mutated} before any verified PASS seal; restored ({restored}).",
+        )
+    polluted = {}
+    for e in ctx.protected():
+        toks = new_probe_tokens(e)
+        if toks:
+            polluted[str(e.get("rel"))] = toks
+    if polluted:
+        raise HookBlock(
+            "PROBE_POLLUTION",
+            f"subagent left probe macros {polluted} in protected kernel source; strip them before finishing.",
+        )
+
+
 def handle_stop(ctx: Context, *, protocol: str = "claude") -> None:
     if protocol == "agy":
         term = str(ctx.payload.get("terminationReason") or "").strip().upper()
-        if term in _AGY_TERMINAL_STOP_REASONS:
+        if term not in _AGY_GATE_STOP_REASONS:
             return
     stop_active = _is_stop_active(ctx.payload)
     if ctx.session is None:
@@ -1022,13 +1212,13 @@ def _emit_block(protocol: str, event: str, message: str) -> int:
                 },
             })
             return EXIT_ALLOW
-        if event == "PostToolUse":
+        if event in ("PostToolUse", "PostToolUseFailure"):
             _emit_json({
                 "decision": "block",
                 "reason": message,
                 "systemMessage": message,
                 "hookSpecificOutput": {
-                    "hookEventName": "PostToolUse",
+                    "hookEventName": event,
                     "additionalContext": message,
                 },
             })
@@ -1047,43 +1237,52 @@ def _emit_block(protocol: str, event: str, message: str) -> int:
     return EXIT_BLOCK
 
 
-def _read_payload() -> Dict[str, Any]:
+def _read_payload() -> Tuple[Dict[str, Any], Optional[str]]:
     try:
         raw = sys.stdin.buffer.read().decode("utf-8", "replace")
-    except (OSError, ValueError, AttributeError):
-        raw = ""
+    except (OSError, ValueError, AttributeError) as exc:
+        return {}, f"stdin read error: {exc}"
     if not raw.strip():
-        return {}
+        return {}, None
     try:
         doc = json.loads(raw)
-    except ValueError:
-        return {}
-    return doc if isinstance(doc, dict) else {}
+    except ValueError as exc:
+        return {}, f"invalid JSON hook payload: {exc}"
+    if not isinstance(doc, dict):
+        return {}, "hook payload JSON root must be an object"
+    return doc, None
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="WeaveProfiler (wp) Claude Code / Codex CLI / Qwen Code / Antigravity enforcement hook"
     )
-    ap.add_argument("--event", choices=("PreToolUse", "PostToolUse", "PostInvocation", "Stop", "SubagentStop"))
+    ap.add_argument(
+        "--event",
+        choices=("PreToolUse", "PostToolUse", "PostToolUseFailure", "PostInvocation", "Stop", "SubagentStop"),
+    )
     ap.add_argument("--protocol", default="auto", choices=("auto", "claude", "codex", "qwen", "agy", "antigravity"))
     ap.add_argument("--workspace")
     ap.add_argument("--session-dir")
     ap.add_argument("--sessions-root")
     args = ap.parse_args(list(argv) if argv is not None else None)
-    payload = _read_payload()
+    payload, parse_err = _read_payload()
     event = args.event or str(payload.get("hookEventName") or payload.get("hook_event_name") or "")
     protocol = _detect_protocol(args.protocol, payload)
     try:
+        if parse_err is not None:
+            raise HookBlock("MALFORMED_HOOK_PAYLOAD", parse_err)
         ctx = Context(payload, args)
         extra: Optional[Dict[str, Any]] = None
         if event == "PreToolUse":
             handle_pre(ctx)
-        elif event == "PostToolUse":
+        elif event in ("PostToolUse", "PostToolUseFailure"):
             handle_post(ctx, protocol=protocol)
         elif event == "PostInvocation":
             extra = handle_post_invocation(ctx)
-        elif event in ("Stop", "SubagentStop"):
+        elif event == "SubagentStop":
+            handle_subagent_stop(ctx, protocol=protocol)
+        elif event == "Stop":
             handle_stop(ctx, protocol=protocol)
         return _emit_allow(protocol, event, extra)
     except HookBlock as blk:

@@ -7,9 +7,9 @@
 //   -DWP_TIMER=0|1          0 = %globaltimer per event, 1 = %clock64 per event + OPEN/CLOSE anchors
 //   -DWP_GRAN=0|1           0 = one lane per warp (lane 0 records), 1 = one lane per CTA (thread 0 records)
 //   -DWP_GROUPS=<mask>      event-group bitmask for WP_BG/WP_EG/WP_MG (default: all groups)
-//   -DWP_CTX_1R             1-register bit-packed recorder context (0 B SMEM)
-//   -DWP_CTX_1R_NOINLINE    WP_CTX_1R + __noinline__ cold-path helpers
-//   -DWP_SMEM_ZREG          16 B static __shared__ context + __noinline__ helpers (0 live registers)
+//   -DWP_CTX_REG            1-register bit-packed recorder context (0 B SMEM)
+//   -DWP_CTX_REG_NOINLINE   WP_CTX_REG + __noinline__ cold-path helpers
+//   -DWP_CTX_SMEM           16 B static __shared__ context + __noinline__ helpers (0 live registers)
 //   -DWP_DEFINE_HOST_API    export extern "C" wp_init / wp_reset / wp_dump / wp_free for ctypes .so builds
 //
 // Device API:  WP_OPEN / WP_OPEN_BY / WP_B / WP_E / WP_M / WP_BG / WP_EG / WP_MG / *_PRED / WP_TRANS_PRED /
@@ -125,6 +125,10 @@ __constant__ FiBuf wp_fi_c;
 }
 #endif
 
+__device__ __forceinline__ FiBuf wp_active_buf() {
+    return (wp_fi_c.rec != nullptr) ? wp_fi_c : fi_g;
+}
+
 __device__ __forceinline__ uint64_t fi_gtimer() {
     uint64_t t;
     asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
@@ -169,7 +173,8 @@ __device__ __forceinline__ bool fi_recorder() {
 __device__ __forceinline__ void fi_store(FiCtx& c, uint64_t t, uint32_t tag, uint32_t aux) {
     if (c.p == nullptr) return;
     if (c.n >= c.cap) {
-        if (c.n == c.cap && fi_g.overflow != nullptr) atomicOr(fi_g.overflow, 1u);
+        const FiBuf b = wp_active_buf();
+        if (c.n == c.cap && b.overflow != nullptr) atomicOr(b.overflow, 1u);
         c.n = c.cap + 1u;  // 只报一次
         return;
     }
@@ -290,7 +295,7 @@ __device__ __forceinline__ FiCtx fi_open(bool recorder, uint32_t role) {
     c.n = 0;
     c.cap = 0;
     c.slot = 0;
-    const FiBuf b = fi_g;
+    const FiBuf b = wp_active_buf();
     if (!recorder || b.rec == nullptr) return c;
     const uint32_t cta = fi_cta_id();
 #if FI_GRAN == 1
@@ -301,7 +306,7 @@ __device__ __forceinline__ FiCtx fi_open(bool recorder, uint32_t role) {
     const uint32_t s = cta * b.warps_per_cta + w;  // warp 粒度：每 warp 一条泳道
     if (w >= b.warps_per_cta || s >= b.n_slots) {
 #endif
-        atomicOr(b.overflow, 2u);
+        if (b.overflow != nullptr) atomicOr(b.overflow, 2u);
         return c;
     }
     c.p = b.rec + (size_t)s * b.cap;
@@ -324,7 +329,7 @@ __device__ __forceinline__ FiCtx fi_open_subscope(bool recorder) {
     c.n = 0;
     c.cap = 0;
     c.slot = 0;
-    const FiBuf b = fi_g;
+    const FiBuf b = wp_active_buf();
     if (!recorder || b.rec == nullptr || b.cur == nullptr) return c;
     const uint32_t cta = fi_cta_id();
 #if FI_GRAN == 1
@@ -343,7 +348,8 @@ __device__ __forceinline__ FiCtx fi_open_subscope(bool recorder) {
 }
 __device__ __forceinline__ void fi_close(FiCtx& c) {
     if (c.p == nullptr) return;
-    if (c.n > c.cap && fi_g.overflow != nullptr) atomicOr(fi_g.overflow, 1u);
+    const FiBuf b = wp_active_buf();
+    if (c.n > c.cap && b.overflow != nullptr) atomicOr(b.overflow, 1u);
     const uint64_t g = fi_gtimer();
 #if FI_TIMER == 1
     const uint64_t k = fi_clk();
@@ -352,11 +358,11 @@ __device__ __forceinline__ void fi_close(FiCtx& c) {
 #if FI_TIMER == 1
     fi_store(c, k, FI_TAG_CLK, 1u);
 #endif
-    if (fi_g.cur != nullptr) fi_g.cur[c.slot] = c.n;
+    if (b.cur != nullptr) b.cur[c.slot] = c.n;
 }
 
 // §3.2 (2a) Zero Call-Chain Signature Edits RAII Guard:
-// Caches per-warp cursor `fi_g.cur[slot]` in a Lane-0 local register on scope entry and writes
+// Caches per-warp cursor `b.cur[slot]` in a Lane-0 local register on scope entry and writes
 // back on scope exit (`~FiScope`), so neither `__global__` kernels NOR inner `__device__`
 // subfunctions (`mma_mainloop()`, etc.) ever modify their parameter signatures!
 struct FiScope {
@@ -365,16 +371,19 @@ struct FiScope {
     __device__ __forceinline__ FiScope(bool recorder, uint32_t role, bool root)
         : ctx(root ? fi_open(recorder, role) : fi_open_subscope(recorder)), is_root(root) {}
     __device__ __forceinline__ void sync_out() {
-        if (ctx.p != nullptr && fi_g.cur != nullptr) fi_g.cur[ctx.slot] = ctx.n;
+        const FiBuf b = wp_active_buf();
+        if (ctx.p != nullptr && b.cur != nullptr) b.cur[ctx.slot] = ctx.n;
     }
     __device__ __forceinline__ void sync_in() {
-        if (ctx.p != nullptr && fi_g.cur != nullptr) ctx.n = fi_g.cur[ctx.slot];
+        const FiBuf b = wp_active_buf();
+        if (ctx.p != nullptr && b.cur != nullptr) ctx.n = b.cur[ctx.slot];
     }
     __device__ __forceinline__ ~FiScope() {
         if (is_root) {
             fi_close(ctx);
-        } else if (ctx.p != nullptr && fi_g.cur != nullptr) {
-            fi_g.cur[ctx.slot] = ctx.n;
+        } else {
+            const FiBuf b = wp_active_buf();
+            if (ctx.p != nullptr && b.cur != nullptr) b.cur[ctx.slot] = ctx.n;
         }
     }
 };
@@ -382,47 +391,41 @@ struct FiScope {
 #define FI_GROUP_ON(g) (((FI_GROUPS) >> ((g) & 31)) & 1u)
 
 // -----------------------------------------------------------------------------
-// Zero-Register-Tax SMEM Context (`-DFI_SMEM_ZREG` / `-DWP_SMEM_ZREG`) and
-// 1-Register Bit-Packed Context (`-DWP_CTX_1R` / `-DWP_CTX_1R_NOINLINE`):
-//   1) `WP_CTX_1R` collapses the 5-register `FiCtx` (`p:2R + n:1R + cap:1R + slot:1R`)
+// Shared-Memory Context (`-DWP_CTX_SMEM`) and
+// Single-Register Bit-Packed Context (`-DWP_CTX_REG` / `-DWP_CTX_REG_NOINLINE`):
+//   1) `WP_CTX_REG` collapses the 5-register `FiCtx` (`p`: 2 regs, `n`/`cap`/`slot`: 1 reg each)
 //      into a SINGLE 32-bit register `uint32_t state` (0 Bytes SMEM!):
 //        - bit  31    : disabled / overflow flag (`(int32_t)state < 0` skips in 1 op)
 //        - bits 30..15: 16-bit lane slot (up to 65,535 concurrent warp/CTA lanes)
 //        - bits 14..0 : 15-bit record cursor `n` (up to 32,767 records/lane)
-//      Global base pointer `fi_g.rec` and `fi_g.cap` stay grid-uniform (loaded only
+//      Global base pointer `wp_fi_c.rec` and `wp_fi_c.cap` stay grid-uniform (loaded only
 //      on the cold recorder branch, never occupying 3 persistent per-thread registers).
-//   2) `WP_CTX_1R_NOINLINE` additionally outlines cold-path `st.global.cs.v4` helpers
+//   2) `WP_CTX_REG_NOINLINE` additionally outlines cold-path `st.global.cs.v4` helpers
 //      with `__noinline__` (1 live reg, 0 B SMEM, zero hot-loop v4 interference).
-//   3) `FI_SMEM_ZREG` / `WP_SMEM_ZREG` parks the 16B context in static `__shared__`
+//   3) `WP_CTX_SMEM` parks the 16B context in static `__shared__`
 //      + `__noinline__` helpers (0 live regs across the hot loop, 16B SMEM/slot)
 //      as the compiler-in-the-loop fallback when even 1 reg crosses a spill cliff.
 // -----------------------------------------------------------------------------
-#if defined(WP_SMEM_ZREG) && !defined(FI_SMEM_ZREG)
-#define FI_SMEM_ZREG 1
-#endif
-#if (defined(WP_CTX_1R_NOINLINE) || defined(FI_CTX_1R_NOINLINE)) && !defined(WP_CTX_1R)
-#define WP_CTX_1R 1
-#endif
-#if defined(FI_CTX_1R) && !defined(WP_CTX_1R)
-#define WP_CTX_1R 1
+#if defined(WP_CTX_REG_NOINLINE) && !defined(WP_CTX_REG)
+#define WP_CTX_REG 1
 #endif
 
-#ifdef FI_SMEM_ZREG
-#ifndef FI_MAX_WARPS_PER_CTA
-#define FI_MAX_WARPS_PER_CTA 32u
+#ifdef WP_CTX_SMEM
+#ifndef WP_MAX_WARPS_PER_CTA
+#define WP_MAX_WARPS_PER_CTA 32u
 #endif
 
-struct FiSmemCtx {
+struct WpSmemCtx {
     FiRec* p;
     uint32_t n;
     uint32_t cap;
 };
 
-__device__ __noinline__ void fi_zreg_open(FiSmemCtx* sc, uint32_t role) {
+__device__ __noinline__ void wp_smem_open(WpSmemCtx* sc, uint32_t role) {
     sc->p = nullptr;
     sc->n = 0u;
     sc->cap = 0u;
-    const FiBuf b = fi_g;
+    const FiBuf b = wp_active_buf();
     if (b.rec == nullptr) return;
     const uint32_t cta = fi_cta_id();
 #if FI_GRAN == 1
@@ -462,13 +465,14 @@ __device__ __noinline__ void fi_zreg_open(FiSmemCtx* sc, uint32_t role) {
     if (b.cur != nullptr) b.cur[s] = n;
 }
 
-__device__ __noinline__ void fi_zreg_rec(FiSmemCtx* sc, uint32_t tag, uint32_t aux) {
+__device__ __noinline__ void wp_smem_rec(WpSmemCtx* sc, uint32_t tag, uint32_t aux) {
     FiRec* base = sc->p;
     if (base == nullptr) return;
     uint32_t n = sc->n;
     const uint32_t cap = sc->cap;
     if (n >= cap) {
-        if (n == cap && fi_g.overflow != nullptr) atomicOr(fi_g.overflow, 1u);
+        const FiBuf b = wp_active_buf();
+        if (n == cap && b.overflow != nullptr) atomicOr(b.overflow, 1u);
         sc->n = cap + 1u;
         return;
     }
@@ -478,13 +482,14 @@ __device__ __noinline__ void fi_zreg_rec(FiSmemCtx* sc, uint32_t tag, uint32_t a
     sc->n = n + 1u;
 }
 
-__device__ __noinline__ void fi_zreg_trans(FiSmemCtx* sc, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
+__device__ __noinline__ void wp_smem_trans(WpSmemCtx* sc, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
     FiRec* base = sc->p;
     if (base == nullptr) return;
     uint32_t n = sc->n;
     const uint32_t cap = sc->cap;
     if (n + 1u >= cap) {
-        if (n <= cap && fi_g.overflow != nullptr) atomicOr(fi_g.overflow, 1u);
+        const FiBuf b = wp_active_buf();
+        if (n <= cap && b.overflow != nullptr) atomicOr(b.overflow, 1u);
         sc->n = cap + 1u;
         return;
     }
@@ -498,12 +503,13 @@ __device__ __noinline__ void fi_zreg_trans(FiSmemCtx* sc, uint32_t end_tag, uint
     sc->n = n + 2u;
 }
 
-__device__ __noinline__ void fi_zreg_close(FiSmemCtx* sc) {
+__device__ __noinline__ void wp_smem_close(WpSmemCtx* sc) {
     FiRec* base = sc->p;
     if (base == nullptr) return;
     uint32_t n = sc->n;
     const uint32_t cap = sc->cap;
-    if (n > cap && fi_g.overflow != nullptr) atomicOr(fi_g.overflow, 1u);
+    const FiBuf b = wp_active_buf();
+    if (n > cap && b.overflow != nullptr) atomicOr(b.overflow, 1u);
     const uint64_t g = fi_gtimer();
 #if FI_TIMER == 1
     const uint64_t k = fi_clk();
@@ -526,25 +532,25 @@ __device__ __noinline__ void fi_zreg_close(FiSmemCtx* sc) {
 }
 
 #if FI_GRAN == 1
-#define FI_ZREG_DECL() __shared__ FiSmemCtx fi_sctx_
-#define FI_ZREG_SLOT() (&fi_sctx_)
+#define WP_SMEM_DECL() __shared__ WpSmemCtx fi_sctx_
+#define WP_SMEM_SLOT() (&fi_sctx_)
 // Device functions receive the CTA's shared context by reference under the SAME name, so every
-// macro (FI_ZREG_SLOT) resolves identically inside the kernel and inside FI_CTX_PARAM callees.
-#define FI_ZREG_PARAM_DECL FiSmemCtx& fi_sctx_
+// macro (WP_SMEM_SLOT) resolves identically inside the kernel and inside WP_CTX_PARAM callees.
+#define WP_SMEM_PARAM_DECL WpSmemCtx& fi_sctx_
 #else
-#define FI_ZREG_DECL() __shared__ FiSmemCtx fi_sctx_[FI_MAX_WARPS_PER_CTA]
-#define FI_ZREG_SLOT() (&fi_sctx_[((threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)) >> 5)])
+#define WP_SMEM_DECL() __shared__ WpSmemCtx fi_sctx_[WP_MAX_WARPS_PER_CTA]
+#define WP_SMEM_SLOT() (&fi_sctx_[((threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)) >> 5)])
 // Callees receive the base of the per-warp shared context array under the SAME name.
-#define FI_ZREG_PARAM_DECL FiSmemCtx* fi_sctx_
+#define WP_SMEM_PARAM_DECL WpSmemCtx* fi_sctx_
 #endif
 
 #if FI_LEVEL >= 1
-#define FI_CTX_PARAM , FI_ZREG_PARAM_DECL
+#define FI_CTX_PARAM , WP_SMEM_PARAM_DECL
 #define FI_CTX_ARG , fi_sctx_
-#define FI_OPEN(role) FI_ZREG_DECL(); if (fi_recorder()) fi_zreg_open(FI_ZREG_SLOT(), (uint32_t)(role))
-#define FI_OPEN_BY(pred, role) FI_ZREG_DECL(); if (pred) fi_zreg_open(FI_ZREG_SLOT(), (uint32_t)(role))
-#define FI_CLOSE() do { if (fi_recorder()) fi_zreg_close(FI_ZREG_SLOT()); } while (0)
-#define FI_ROLE_SWITCH(new_role) do { if (fi_recorder()) fi_zreg_rec(FI_ZREG_SLOT(), FI_TAG_ROLE_SWITCH | FI_TAG_MARK | ((uint32_t)(new_role) & FI_TAG_IDMASK), (uint32_t)(new_role)); } while (0)
+#define FI_OPEN(role) WP_SMEM_DECL(); if (fi_recorder()) wp_smem_open(WP_SMEM_SLOT(), (uint32_t)(role))
+#define FI_OPEN_BY(pred, role) WP_SMEM_DECL(); if (pred) wp_smem_open(WP_SMEM_SLOT(), (uint32_t)(role))
+#define FI_CLOSE() do { if (fi_recorder()) wp_smem_close(WP_SMEM_SLOT()); } while (0)
+#define FI_ROLE_SWITCH(new_role) do { if (fi_recorder()) wp_smem_rec(WP_SMEM_SLOT(), FI_TAG_ROLE_SWITCH | FI_TAG_MARK | ((uint32_t)(new_role) & FI_TAG_IDMASK), (uint32_t)(new_role)); } while (0)
 #define FI_KERNEL_SCOPE(role) FI_OPEN(role)
 #define FI_KERNEL_SCOPE_BY(pred, role) FI_OPEN_BY(pred, role)
 #define FI_DEVICE_SCOPE() do { } while (0)
@@ -567,13 +573,13 @@ __device__ __noinline__ void fi_zreg_close(FiSmemCtx* sc) {
 #endif
 
 #if FI_LEVEL >= 2
-#define FI_BG(g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder()) fi_zreg_rec(FI_ZREG_SLOT(), (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
-#define FI_EG(g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder()) fi_zreg_rec(FI_ZREG_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
-#define FI_MG(g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder()) fi_zreg_rec(FI_ZREG_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
-#define FI_BG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder() && (bool)(pred)) fi_zreg_rec(FI_ZREG_SLOT(), (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
-#define FI_EG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder() && (bool)(pred)) fi_zreg_rec(FI_ZREG_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
-#define FI_MG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder() && (bool)(pred)) fi_zreg_rec(FI_ZREG_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
-#define FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) do { if (FI_GROUP_ON(g_end) && FI_GROUP_ON(g_beg) && fi_recorder() && (bool)(pred)) fi_zreg_trans(FI_ZREG_SLOT(), ((uint32_t)(end_id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(beg_id) & FI_TAG_IDMASK, (uint32_t)(aux)); else { FI_EG_PRED(pred, g_end, end_id, aux); FI_BG_PRED(pred, g_beg, beg_id, aux); } } while (0)
+#define FI_BG(g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder()) wp_smem_rec(WP_SMEM_SLOT(), (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
+#define FI_EG(g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder()) wp_smem_rec(WP_SMEM_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
+#define FI_MG(g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder()) wp_smem_rec(WP_SMEM_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
+#define FI_BG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder() && (bool)(pred)) wp_smem_rec(WP_SMEM_SLOT(), (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
+#define FI_EG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder() && (bool)(pred)) wp_smem_rec(WP_SMEM_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
+#define FI_MG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g) && fi_recorder() && (bool)(pred)) wp_smem_rec(WP_SMEM_SLOT(), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
+#define FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) do { if (FI_GROUP_ON(g_end) && FI_GROUP_ON(g_beg) && fi_recorder() && (bool)(pred)) wp_smem_trans(WP_SMEM_SLOT(), ((uint32_t)(end_id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(beg_id) & FI_TAG_IDMASK, (uint32_t)(aux)); else { FI_EG_PRED(pred, g_end, end_id, aux); FI_BG_PRED(pred, g_beg, beg_id, aux); } } while (0)
 #else
 #define FI_BG(g, id, aux) do { } while (0)
 #define FI_EG(g, id, aux) do { } while (0)
@@ -584,39 +590,39 @@ __device__ __noinline__ void fi_zreg_close(FiSmemCtx* sc) {
 #define FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) do { (void)(pred); } while (0)
 #endif
 
-#elif defined(WP_CTX_1R)  // 1-register bit-packed context (5R -> 1R, 0 B SMEM)
+#elif defined(WP_CTX_REG)  // single-register bit-packed context (0 B SMEM)
 
-#define WP_1R_DISABLED 0x80000000u
-#define WP_1R_SLOT_SHIFT 15u
-#define WP_1R_SLOT_MASK 0xffffu
-#define WP_1R_CUR_MASK 0x7fffu
+#define WP_REG_DISABLED 0x80000000u
+#define WP_REG_SLOT_SHIFT 15u
+#define WP_REG_SLOT_MASK 0xffffu
+#define WP_REG_CUR_MASK 0x7fffu
 
-#if defined(WP_CTX_1R_NOINLINE) || defined(FI_CTX_1R_NOINLINE)
-#define WP_1R_COLD_ATTR __device__ __noinline__
+#if defined(WP_CTX_REG_NOINLINE)
+#define WP_REG_COLD_ATTR __device__ __noinline__
 #else
-#define WP_1R_COLD_ATTR __device__ __forceinline__
+#define WP_REG_COLD_ATTR __device__ __forceinline__
 #endif
 
-struct WpCtx1R {
+struct WpCtxReg {
     uint32_t state;  // bit31=disabled/ovf, bits30..15=slot(0..65535), bits14..0=cursor(0..32767)
 };
 
-WP_1R_COLD_ATTR uint32_t wp_1r_open_cold(uint32_t role) {
-    const FiBuf b = wp_fi_c;
-    if (b.rec == nullptr || b.cap == 0u) return WP_1R_DISABLED;
+WP_REG_COLD_ATTR uint32_t wp_reg_open_cold(uint32_t role) {
+    const FiBuf b = wp_active_buf();
+    if (b.rec == nullptr || b.cap == 0u) return WP_REG_DISABLED;
     const uint32_t cta = fi_cta_id();
 #if FI_GRAN == 1
     const uint32_t s = cta;
-    if (s >= b.n_slots || s > WP_1R_SLOT_MASK) {
+    if (s >= b.n_slots || s > WP_REG_SLOT_MASK) {
 #else
     const uint32_t w = (threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)) >> 5;
     const uint32_t s = cta * b.warps_per_cta + w;
-    if (w >= b.warps_per_cta || s >= b.n_slots || s > WP_1R_SLOT_MASK) {
+    if (w >= b.warps_per_cta || s >= b.n_slots || s > WP_REG_SLOT_MASK) {
 #endif
         if (b.overflow != nullptr) atomicOr(b.overflow, 2u);
-        return WP_1R_DISABLED;
+        return WP_REG_DISABLED;
     }
-    const uint32_t eff_cap = (b.cap > WP_1R_CUR_MASK) ? WP_1R_CUR_MASK : b.cap;
+    const uint32_t eff_cap = (b.cap > WP_REG_CUR_MASK) ? WP_REG_CUR_MASK : b.cap;
     FiRec* base = b.rec + (size_t)s * b.cap;
     uint32_t n = 0u;
     const uint64_t g = fi_gtimer();
@@ -638,36 +644,36 @@ WP_1R_COLD_ATTR uint32_t wp_1r_open_cold(uint32_t role) {
     }
 #endif
     if (b.cur != nullptr) b.cur[s] = n;
-    const uint32_t packed = (s << WP_1R_SLOT_SHIFT) | (n & WP_1R_CUR_MASK);
-    return (n >= eff_cap) ? (packed | WP_1R_DISABLED) : packed;
+    const uint32_t packed = (s << WP_REG_SLOT_SHIFT) | (n & WP_REG_CUR_MASK);
+    return (n >= eff_cap) ? (packed | WP_REG_DISABLED) : packed;
 }
 
-WP_1R_COLD_ATTR uint32_t wp_1r_open_subscope_cold() {
-    const FiBuf b = wp_fi_c;
-    if (b.rec == nullptr || b.cur == nullptr || b.cap == 0u) return WP_1R_DISABLED;
+WP_REG_COLD_ATTR uint32_t wp_reg_open_subscope_cold() {
+    const FiBuf b = wp_active_buf();
+    if (b.rec == nullptr || b.cur == nullptr || b.cap == 0u) return WP_REG_DISABLED;
     const uint32_t cta = fi_cta_id();
 #if FI_GRAN == 1
     const uint32_t s = cta;
-    if (s >= b.n_slots || s > WP_1R_SLOT_MASK) return WP_1R_DISABLED;
+    if (s >= b.n_slots || s > WP_REG_SLOT_MASK) return WP_REG_DISABLED;
 #else
     const uint32_t w = (threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z)) >> 5;
     const uint32_t s = cta * b.warps_per_cta + w;
-    if (w >= b.warps_per_cta || s >= b.n_slots || s > WP_1R_SLOT_MASK) return WP_1R_DISABLED;
+    if (w >= b.warps_per_cta || s >= b.n_slots || s > WP_REG_SLOT_MASK) return WP_REG_DISABLED;
 #endif
-    const uint32_t eff_cap = (b.cap > WP_1R_CUR_MASK) ? WP_1R_CUR_MASK : b.cap;
+    const uint32_t eff_cap = (b.cap > WP_REG_CUR_MASK) ? WP_REG_CUR_MASK : b.cap;
     const uint32_t n = b.cur[s];
-    if (n >= eff_cap) return (s << WP_1R_SLOT_SHIFT) | WP_1R_DISABLED;
-    return (s << WP_1R_SLOT_SHIFT) | (n & WP_1R_CUR_MASK);
+    if (n >= eff_cap) return (s << WP_REG_SLOT_SHIFT) | WP_REG_DISABLED;
+    return (s << WP_REG_SLOT_SHIFT) | (n & WP_REG_CUR_MASK);
 }
 
-WP_1R_COLD_ATTR uint32_t wp_1r_emit_cold(uint32_t state, uint32_t tag, uint32_t aux) {
-    const uint32_t slot = (state >> WP_1R_SLOT_SHIFT) & WP_1R_SLOT_MASK;
-    const uint32_t n = state & WP_1R_CUR_MASK;
-    const FiBuf b = wp_fi_c;
-    const uint32_t eff_cap = (b.cap > WP_1R_CUR_MASK) ? WP_1R_CUR_MASK : b.cap;
+WP_REG_COLD_ATTR uint32_t wp_reg_emit_cold(uint32_t state, uint32_t tag, uint32_t aux) {
+    const uint32_t slot = (state >> WP_REG_SLOT_SHIFT) & WP_REG_SLOT_MASK;
+    const uint32_t n = state & WP_REG_CUR_MASK;
+    const FiBuf b = wp_active_buf();
+    const uint32_t eff_cap = (b.cap > WP_REG_CUR_MASK) ? WP_REG_CUR_MASK : b.cap;
     if (n >= eff_cap) {
         if (b.overflow != nullptr) atomicOr(b.overflow, 1u);
-        return state | WP_1R_DISABLED;
+        return state | WP_REG_DISABLED;
     }
     const uint64_t t = fi_now();
     FiRec* dst = b.rec + (size_t)slot * b.cap + n;
@@ -676,14 +682,14 @@ WP_1R_COLD_ATTR uint32_t wp_1r_emit_cold(uint32_t state, uint32_t tag, uint32_t 
     return state + 1u;  // n < eff_cap <= 0x7FFF guarantees zero carry into bit 15
 }
 
-WP_1R_COLD_ATTR uint32_t wp_1r_trans_cold(uint32_t state, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
-    const uint32_t slot = (state >> WP_1R_SLOT_SHIFT) & WP_1R_SLOT_MASK;
-    const uint32_t n = state & WP_1R_CUR_MASK;
-    const FiBuf b = wp_fi_c;
-    const uint32_t eff_cap = (b.cap > WP_1R_CUR_MASK) ? WP_1R_CUR_MASK : b.cap;
+WP_REG_COLD_ATTR uint32_t wp_reg_trans_cold(uint32_t state, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
+    const uint32_t slot = (state >> WP_REG_SLOT_SHIFT) & WP_REG_SLOT_MASK;
+    const uint32_t n = state & WP_REG_CUR_MASK;
+    const FiBuf b = wp_active_buf();
+    const uint32_t eff_cap = (b.cap > WP_REG_CUR_MASK) ? WP_REG_CUR_MASK : b.cap;
     if (n + 1u >= eff_cap) {
         if (b.overflow != nullptr) atomicOr(b.overflow, 1u);
-        return state | WP_1R_DISABLED;
+        return state | WP_REG_DISABLED;
     }
     const uint64_t t = fi_now();
     const uint32_t tlo = (uint32_t)t;
@@ -696,12 +702,12 @@ WP_1R_COLD_ATTR uint32_t wp_1r_trans_cold(uint32_t state, uint32_t end_tag, uint
     return state + 2u;  // n + 1 < eff_cap <= 0x7FFF guarantees zero carry into bit 15
 }
 
-WP_1R_COLD_ATTR uint32_t wp_1r_close_cold(uint32_t state) {
-    const uint32_t slot = (state >> WP_1R_SLOT_SHIFT) & WP_1R_SLOT_MASK;
-    uint32_t n = state & WP_1R_CUR_MASK;
-    const FiBuf b = wp_fi_c;
-    const uint32_t eff_cap = (b.cap > WP_1R_CUR_MASK) ? WP_1R_CUR_MASK : b.cap;
-    if ((state & WP_1R_DISABLED) != 0u) {
+WP_REG_COLD_ATTR uint32_t wp_reg_close_cold(uint32_t state) {
+    const uint32_t slot = (state >> WP_REG_SLOT_SHIFT) & WP_REG_SLOT_MASK;
+    uint32_t n = state & WP_REG_CUR_MASK;
+    const FiBuf b = wp_active_buf();
+    const uint32_t eff_cap = (b.cap > WP_REG_CUR_MASK) ? WP_REG_CUR_MASK : b.cap;
+    if ((state & WP_REG_DISABLED) != 0u) {
         if (n != 0u && b.overflow != nullptr) atomicOr(b.overflow, 1u);
         return state;
     }
@@ -729,41 +735,41 @@ WP_1R_COLD_ATTR uint32_t wp_1r_close_cold(uint32_t state) {
     }
 #endif
     if (b.cur != nullptr) b.cur[slot] = n;
-    return (slot << WP_1R_SLOT_SHIFT) | WP_1R_DISABLED;
+    return (slot << WP_REG_SLOT_SHIFT) | WP_REG_DISABLED;
 }
 
-__device__ __forceinline__ WpCtx1R wp_1r_open(bool recorder, uint32_t role) {
-    WpCtx1R c;
-    c.state = recorder ? wp_1r_open_cold(role) : WP_1R_DISABLED;
+__device__ __forceinline__ WpCtxReg wp_reg_open(bool recorder, uint32_t role) {
+    WpCtxReg c;
+    c.state = recorder ? wp_reg_open_cold(role) : WP_REG_DISABLED;
     return c;
 }
-#if defined(WP_CTX_1R_NOINLINE) || defined(FI_CTX_1R_NOINLINE)
-__device__ __forceinline__ void wp_1r_rec(WpCtx1R& c, uint32_t tag, uint32_t aux) {
-    if ((int32_t)c.state >= 0) c.state = wp_1r_emit_cold(c.state, tag, aux);
+#if defined(WP_CTX_REG_NOINLINE)
+__device__ __forceinline__ void wp_reg_rec(WpCtxReg& c, uint32_t tag, uint32_t aux) {
+    if ((int32_t)c.state >= 0) c.state = wp_reg_emit_cold(c.state, tag, aux);
 }
-__device__ __forceinline__ void wp_1r_rec_pred(WpCtx1R& c, bool pred, uint32_t tag, uint32_t aux) {
-    if ((int32_t)c.state >= 0 && pred) c.state = wp_1r_emit_cold(c.state, tag, aux);
+__device__ __forceinline__ void wp_reg_rec_pred(WpCtxReg& c, bool pred, uint32_t tag, uint32_t aux) {
+    if ((int32_t)c.state >= 0 && pred) c.state = wp_reg_emit_cold(c.state, tag, aux);
 }
-__device__ __forceinline__ void wp_1r_trans_pred(WpCtx1R& c, bool pred, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
-    if ((int32_t)c.state >= 0 && pred) c.state = wp_1r_trans_cold(c.state, end_tag, beg_tag, aux);
+__device__ __forceinline__ void wp_reg_trans_pred(WpCtxReg& c, bool pred, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
+    if ((int32_t)c.state >= 0 && pred) c.state = wp_reg_trans_cold(c.state, end_tag, beg_tag, aux);
 }
 #else
-// Zero-BB LLVM-opaque 1-register inline PTX path backed by direct __constant__ symbol (`wp_fi_c`):
+// Zero-BB LLVM-opaque single-register inline PTX path backed by direct __constant__ symbol (`wp_fi_c`):
 //   - Literally ONE live 32-bit register (`c.state`) across the entire hot loop (0 B SMEM, 0 pointer reg!).
 //   - Direct `ld.const` symbol loads fold into 1-cycle uniform `LDC` instructions inside the cold branch.
 //   - Minimal scratch-register footprint (4x u32 + 2x u64 reused) prevents spill cliffs at 128 regs.
 static_assert(offsetof(FiBuf, rec) == 0 && offsetof(FiBuf, overflow) == 8 && offsetof(FiBuf, cap) == 24,
-              "FiBuf layout mismatch for WpCtx1R inline PTX");
+              "FiBuf layout mismatch for WpCtxReg inline PTX");
 
 #if defined(__CUDACC_RDC__)
-__device__ __forceinline__ void wp_1r_rec_pred(WpCtx1R& c, bool pred, uint32_t tag, uint32_t aux) {
-    if ((int32_t)c.state >= 0 && pred) c.state = wp_1r_emit_cold(c.state, tag, aux);
+__device__ __forceinline__ void wp_reg_rec_pred(WpCtxReg& c, bool pred, uint32_t tag, uint32_t aux) {
+    if ((int32_t)c.state >= 0 && pred) c.state = wp_reg_emit_cold(c.state, tag, aux);
 }
-__device__ __forceinline__ void wp_1r_rec(WpCtx1R& c, uint32_t tag, uint32_t aux) {
-    if ((int32_t)c.state >= 0) c.state = wp_1r_emit_cold(c.state, tag, aux);
+__device__ __forceinline__ void wp_reg_rec(WpCtxReg& c, uint32_t tag, uint32_t aux) {
+    if ((int32_t)c.state >= 0) c.state = wp_reg_emit_cold(c.state, tag, aux);
 }
 #else
-__device__ __forceinline__ void wp_1r_rec(WpCtx1R& c, uint32_t tag, uint32_t aux) {
+__device__ __forceinline__ void wp_reg_rec(WpCtxReg& c, uint32_t tag, uint32_t aux) {
 #if FI_TIMER == 1
     asm volatile(
         "{\n\t"
@@ -771,12 +777,12 @@ __device__ __forceinline__ void wp_1r_rec(WpCtx1R& c, uint32_t tag, uint32_t aux
         ".reg .u32 %%u0, %%u1, %%u2;\n\t"
         ".reg .u64 %%p0, %%p1;\n\t"
         "setp.lt.s32 %%p, %0, 0;\n\t"
-        "@%%p bra L_WP1R_SKIP_%=;\n\t"
+        "@%%p bra L_WPREG_SKIP_%=;\n\t"
         "ld.const.u32 %%u1, [wp_fi_c + 24];\n\t"
         "and.b32 %%u0, %0, 32767;\n\t"
         "min.u32 %%u2, %%u1, 32767;\n\t"
         "setp.lt.u32 %%pst, %%u0, %%u2;\n\t"
-        "@!%%pst bra L_WP1R_OVF_%=;\n\t"
+        "@!%%pst bra L_WPREG_OVF_%=;\n\t"
         "shr.u32 %%u2, %0, 15;\n\t"
         "mad.lo.u32 %%u0, %%u2, %%u1, %%u0;\n\t"
         "ld.const.u64 %%p0, [wp_fi_c + 0];\n\t"
@@ -785,10 +791,10 @@ __device__ __forceinline__ void wp_1r_rec(WpCtx1R& c, uint32_t tag, uint32_t aux
         "mov.b64 {%%u0, %%u1}, %%p1;\n\t"
         "st.global.cs.v4.u32 [%%p0], {%%u0, %%u1, %1, %2};\n\t"
         "add.u32 %0, %0, 1;\n\t"
-        "bra L_WP1R_SKIP_%=;\n\t"
-        "L_WP1R_OVF_%=:\n\t"
+        "bra L_WPREG_SKIP_%=;\n\t"
+        "L_WPREG_OVF_%=:\n\t"
         "or.b32 %0, %0, 2147483648;\n\t"
-        "L_WP1R_SKIP_%=:\n\t"
+        "L_WPREG_SKIP_%=:\n\t"
         "}"
         : "+r"(c.state)
         : "r"(tag), "r"(aux));
@@ -799,12 +805,12 @@ __device__ __forceinline__ void wp_1r_rec(WpCtx1R& c, uint32_t tag, uint32_t aux
         ".reg .u32 %%u0, %%u1, %%u2;\n\t"
         ".reg .u64 %%p0, %%p1;\n\t"
         "setp.lt.s32 %%p, %0, 0;\n\t"
-        "@%%p bra L_WP1R_SKIP_%=;\n\t"
+        "@%%p bra L_WPREG_SKIP_%=;\n\t"
         "ld.const.u32 %%u1, [wp_fi_c + 24];\n\t"
         "and.b32 %%u0, %0, 32767;\n\t"
         "min.u32 %%u2, %%u1, 32767;\n\t"
         "setp.lt.u32 %%pst, %%u0, %%u2;\n\t"
-        "@!%%pst bra L_WP1R_OVF_%=;\n\t"
+        "@!%%pst bra L_WPREG_OVF_%=;\n\t"
         "shr.u32 %%u2, %0, 15;\n\t"
         "mad.lo.u32 %%u0, %%u2, %%u1, %%u0;\n\t"
         "ld.const.u64 %%p0, [wp_fi_c + 0];\n\t"
@@ -813,17 +819,17 @@ __device__ __forceinline__ void wp_1r_rec(WpCtx1R& c, uint32_t tag, uint32_t aux
         "mov.b64 {%%u0, %%u1}, %%p1;\n\t"
         "st.global.cs.v4.u32 [%%p0], {%%u0, %%u1, %1, %2};\n\t"
         "add.u32 %0, %0, 1;\n\t"
-        "bra L_WP1R_SKIP_%=;\n\t"
-        "L_WP1R_OVF_%=:\n\t"
+        "bra L_WPREG_SKIP_%=;\n\t"
+        "L_WPREG_OVF_%=:\n\t"
         "or.b32 %0, %0, 2147483648;\n\t"
-        "L_WP1R_SKIP_%=:\n\t"
+        "L_WPREG_SKIP_%=:\n\t"
         "}"
         : "+r"(c.state)
         : "r"(tag), "r"(aux));
 #endif
 }
 
-__device__ __forceinline__ void wp_1r_rec_pred(WpCtx1R& c, bool pred, uint32_t tag, uint32_t aux) {
+__device__ __forceinline__ void wp_reg_rec_pred(WpCtxReg& c, bool pred, uint32_t tag, uint32_t aux) {
     const uint32_t active_pred = pred ? 1u : 0u;
 #if FI_TIMER == 1
     asm volatile(
@@ -832,14 +838,14 @@ __device__ __forceinline__ void wp_1r_rec_pred(WpCtx1R& c, bool pred, uint32_t t
         ".reg .u32 %%u0, %%u1, %%u2;\n\t"
         ".reg .u64 %%p0, %%p1;\n\t"
         "setp.eq.u32 %%p, %1, 0;\n\t"
-        "@%%p bra L_WP1RP_SKIP_%=;\n\t"
+        "@%%p bra L_WPREGP_SKIP_%=;\n\t"
         "setp.lt.s32 %%p, %0, 0;\n\t"
-        "@%%p bra L_WP1RP_SKIP_%=;\n\t"
+        "@%%p bra L_WPREGP_SKIP_%=;\n\t"
         "ld.const.u32 %%u1, [wp_fi_c + 24];\n\t"
         "and.b32 %%u0, %0, 32767;\n\t"
         "min.u32 %%u2, %%u1, 32767;\n\t"
         "setp.lt.u32 %%pst, %%u0, %%u2;\n\t"
-        "@!%%pst bra L_WP1RP_OVF_%=;\n\t"
+        "@!%%pst bra L_WPREGP_OVF_%=;\n\t"
         "shr.u32 %%u2, %0, 15;\n\t"
         "mad.lo.u32 %%u0, %%u2, %%u1, %%u0;\n\t"
         "ld.const.u64 %%p0, [wp_fi_c + 0];\n\t"
@@ -848,10 +854,10 @@ __device__ __forceinline__ void wp_1r_rec_pred(WpCtx1R& c, bool pred, uint32_t t
         "mov.b64 {%%u0, %%u1}, %%p1;\n\t"
         "st.global.cs.v4.u32 [%%p0], {%%u0, %%u1, %2, %3};\n\t"
         "add.u32 %0, %0, 1;\n\t"
-        "bra L_WP1RP_SKIP_%=;\n\t"
-        "L_WP1RP_OVF_%=:\n\t"
+        "bra L_WPREGP_SKIP_%=;\n\t"
+        "L_WPREGP_OVF_%=:\n\t"
         "or.b32 %0, %0, 2147483648;\n\t"
-        "L_WP1RP_SKIP_%=:\n\t"
+        "L_WPREGP_SKIP_%=:\n\t"
         "}"
         : "+r"(c.state)
         : "r"(active_pred), "r"(tag), "r"(aux));
@@ -862,14 +868,14 @@ __device__ __forceinline__ void wp_1r_rec_pred(WpCtx1R& c, bool pred, uint32_t t
         ".reg .u32 %%u0, %%u1, %%u2;\n\t"
         ".reg .u64 %%p0, %%p1;\n\t"
         "setp.eq.u32 %%p, %1, 0;\n\t"
-        "@%%p bra L_WP1RP_SKIP_%=;\n\t"
+        "@%%p bra L_WPREGP_SKIP_%=;\n\t"
         "setp.lt.s32 %%p, %0, 0;\n\t"
-        "@%%p bra L_WP1RP_SKIP_%=;\n\t"
+        "@%%p bra L_WPREGP_SKIP_%=;\n\t"
         "ld.const.u32 %%u1, [wp_fi_c + 24];\n\t"
         "and.b32 %%u0, %0, 32767;\n\t"
         "min.u32 %%u2, %%u1, 32767;\n\t"
         "setp.lt.u32 %%pst, %%u0, %%u2;\n\t"
-        "@!%%pst bra L_WP1RP_OVF_%=;\n\t"
+        "@!%%pst bra L_WPREGP_OVF_%=;\n\t"
         "shr.u32 %%u2, %0, 15;\n\t"
         "mad.lo.u32 %%u0, %%u2, %%u1, %%u0;\n\t"
         "ld.const.u64 %%p0, [wp_fi_c + 0];\n\t"
@@ -878,46 +884,51 @@ __device__ __forceinline__ void wp_1r_rec_pred(WpCtx1R& c, bool pred, uint32_t t
         "mov.b64 {%%u0, %%u1}, %%p1;\n\t"
         "st.global.cs.v4.u32 [%%p0], {%%u0, %%u1, %2, %3};\n\t"
         "add.u32 %0, %0, 1;\n\t"
-        "bra L_WP1RP_SKIP_%=;\n\t"
-        "L_WP1RP_OVF_%=:\n\t"
+        "bra L_WPREGP_SKIP_%=;\n\t"
+        "L_WPREGP_OVF_%=:\n\t"
         "or.b32 %0, %0, 2147483648;\n\t"
-        "L_WP1RP_SKIP_%=:\n\t"
+        "L_WPREGP_SKIP_%=:\n\t"
         "}"
         : "+r"(c.state)
         : "r"(active_pred), "r"(tag), "r"(aux));
 #endif
 }
 #endif
-__device__ __forceinline__ void wp_1r_trans_pred(WpCtx1R& c, bool pred, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
-    if ((int32_t)c.state >= 0 && pred) c.state = wp_1r_trans_cold(c.state, end_tag, beg_tag, aux);
+__device__ __forceinline__ void wp_reg_trans_pred(WpCtxReg& c, bool pred, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
+    if ((int32_t)c.state >= 0 && pred) c.state = wp_reg_trans_cold(c.state, end_tag, beg_tag, aux);
 }
 #endif
-__device__ __forceinline__ void wp_1r_close(WpCtx1R& c) {
-    if ((int32_t)c.state >= 0 || (c.state & WP_1R_CUR_MASK) != 0u) c.state = wp_1r_close_cold(c.state);
+__device__ __forceinline__ void wp_reg_close(WpCtxReg& c) {
+    if ((int32_t)c.state >= 0 || (c.state & WP_REG_CUR_MASK) != 0u) c.state = wp_reg_close_cold(c.state);
 }
 
-struct WpScope1R {
-    WpCtx1R ctx;
+struct WpScopeReg {
+    WpCtxReg ctx;
     bool is_root;
-    __device__ __forceinline__ WpScope1R(bool recorder, uint32_t role, bool root)
-        : ctx{recorder ? (root ? wp_1r_open_cold(role) : wp_1r_open_subscope_cold()) : WP_1R_DISABLED},
+    __device__ __forceinline__ WpScopeReg(bool recorder, uint32_t role, bool root)
+        : ctx{recorder ? (root ? wp_reg_open_cold(role) : wp_reg_open_subscope_cold()) : WP_REG_DISABLED},
           is_root(root) {}
     __device__ __forceinline__ void sync_out() {
-        if ((int32_t)ctx.state >= 0 && fi_g.cur != nullptr) {
-            fi_g.cur[(ctx.state >> WP_1R_SLOT_SHIFT) & WP_1R_SLOT_MASK] = ctx.state & WP_1R_CUR_MASK;
+        const FiBuf b = wp_active_buf();
+        if ((int32_t)ctx.state >= 0 && b.cur != nullptr) {
+            const uint32_t slot = (ctx.state >> WP_REG_SLOT_SHIFT) & WP_REG_SLOT_MASK;
+            if (slot < b.n_slots) b.cur[slot] = ctx.state & WP_REG_CUR_MASK;
         }
     }
     __device__ __forceinline__ void sync_in() {
-        if ((int32_t)ctx.state >= 0 && fi_g.cur != nullptr) {
-            const uint32_t slot = (ctx.state >> WP_1R_SLOT_SHIFT) & WP_1R_SLOT_MASK;
-            const uint32_t eff_cap = (fi_g.cap > WP_1R_CUR_MASK) ? WP_1R_CUR_MASK : fi_g.cap;
-            const uint32_t n = fi_g.cur[slot];
-            ctx.state = (n >= eff_cap) ? (ctx.state | WP_1R_DISABLED) : ((slot << WP_1R_SLOT_SHIFT) | (n & WP_1R_CUR_MASK));
+        const FiBuf b = wp_active_buf();
+        if ((int32_t)ctx.state >= 0 && b.cur != nullptr) {
+            const uint32_t slot = (ctx.state >> WP_REG_SLOT_SHIFT) & WP_REG_SLOT_MASK;
+            if (slot >= b.n_slots) return;
+            const uint32_t eff_cap = (b.cap > WP_REG_CUR_MASK) ? WP_REG_CUR_MASK : b.cap;
+            const uint32_t n = b.cur[slot];
+            ctx.state = (n >= eff_cap) ? ((slot << WP_REG_SLOT_SHIFT) | WP_REG_DISABLED)
+                                       : ((slot << WP_REG_SLOT_SHIFT) | (n & WP_REG_CUR_MASK));
         }
     }
-    __device__ __forceinline__ ~WpScope1R() {
+    __device__ __forceinline__ ~WpScopeReg() {
         if (is_root) {
-            wp_1r_close(ctx);
+            wp_reg_close(ctx);
         } else {
             sync_out();
         }
@@ -925,16 +936,16 @@ struct WpScope1R {
 };
 
 #if FI_LEVEL >= 1
-#define FI_CTX_PARAM , WpCtx1R& fi_ctx_
+#define FI_CTX_PARAM , WpCtxReg& fi_ctx_
 #define FI_CTX_ARG , fi_ctx_
-#define FI_OPEN(role) WpCtx1R fi_ctx_ = wp_1r_open(fi_recorder(), (uint32_t)(role))
-#define FI_OPEN_BY(pred, role) WpCtx1R fi_ctx_ = wp_1r_open((pred), (uint32_t)(role))
-#define FI_CLOSE() wp_1r_close(fi_ctx_)
-#define FI_ROLE_SWITCH(new_role) do { wp_1r_rec(fi_ctx_, FI_TAG_ROLE_SWITCH | FI_TAG_MARK | ((uint32_t)(new_role) & FI_TAG_IDMASK), (uint32_t)(new_role)); } while (0)
-#define FI_KERNEL_SCOPE(role) WpScope1R fi_scope_(fi_recorder(), (uint32_t)(role), true); WpCtx1R& fi_ctx_ = fi_scope_.ctx
-#define FI_KERNEL_SCOPE_BY(pred, role) WpScope1R fi_scope_((pred), (uint32_t)(role), true); WpCtx1R& fi_ctx_ = fi_scope_.ctx
-#define FI_DEVICE_SCOPE() WpScope1R fi_scope_(fi_recorder(), 0u, false); WpCtx1R& fi_ctx_ = fi_scope_.ctx
-#define FI_DEVICE_SCOPE_BY(pred) WpScope1R fi_scope_((pred), 0u, false); WpCtx1R& fi_ctx_ = fi_scope_.ctx
+#define FI_OPEN(role) WpCtxReg fi_ctx_ = wp_reg_open(fi_recorder(), (uint32_t)(role))
+#define FI_OPEN_BY(pred, role) WpCtxReg fi_ctx_ = wp_reg_open((pred), (uint32_t)(role))
+#define FI_CLOSE() wp_reg_close(fi_ctx_)
+#define FI_ROLE_SWITCH(new_role) do { wp_reg_rec(fi_ctx_, FI_TAG_ROLE_SWITCH | FI_TAG_MARK | ((uint32_t)(new_role) & FI_TAG_IDMASK), (uint32_t)(new_role)); } while (0)
+#define FI_KERNEL_SCOPE(role) WpScopeReg fi_scope_(fi_recorder(), (uint32_t)(role), true); WpCtxReg& fi_ctx_ = fi_scope_.ctx
+#define FI_KERNEL_SCOPE_BY(pred, role) WpScopeReg fi_scope_((pred), (uint32_t)(role), true); WpCtxReg& fi_ctx_ = fi_scope_.ctx
+#define FI_DEVICE_SCOPE() WpScopeReg fi_scope_(fi_recorder(), 0u, false); WpCtxReg& fi_ctx_ = fi_scope_.ctx
+#define FI_DEVICE_SCOPE_BY(pred) WpScopeReg fi_scope_((pred), 0u, false); WpCtxReg& fi_ctx_ = fi_scope_.ctx
 #define FI_SYNC_OUT() fi_scope_.sync_out()
 #define FI_SYNC_IN() fi_scope_.sync_in()
 #else
@@ -953,13 +964,13 @@ struct WpScope1R {
 #endif
 
 #if FI_LEVEL >= 2
-#define FI_BG(g, id, aux) do { if (FI_GROUP_ON(g)) wp_1r_rec(fi_ctx_, (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
-#define FI_EG(g, id, aux) do { if (FI_GROUP_ON(g)) wp_1r_rec(fi_ctx_, ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
-#define FI_MG(g, id, aux) do { if (FI_GROUP_ON(g)) wp_1r_rec(fi_ctx_, ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
-#define FI_BG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g)) wp_1r_rec_pred(fi_ctx_, (bool)(pred), (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
-#define FI_EG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g)) wp_1r_rec_pred(fi_ctx_, (bool)(pred), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
-#define FI_MG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g)) wp_1r_rec_pred(fi_ctx_, (bool)(pred), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
-#define FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) do { if (FI_GROUP_ON(g_end) && FI_GROUP_ON(g_beg)) wp_1r_trans_pred(fi_ctx_, (bool)(pred), ((uint32_t)(end_id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(beg_id) & FI_TAG_IDMASK, (uint32_t)(aux)); else { FI_EG_PRED(pred, g_end, end_id, aux); FI_BG_PRED(pred, g_beg, beg_id, aux); } } while (0)
+#define FI_BG(g, id, aux) do { if (FI_GROUP_ON(g)) wp_reg_rec(fi_ctx_, (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
+#define FI_EG(g, id, aux) do { if (FI_GROUP_ON(g)) wp_reg_rec(fi_ctx_, ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
+#define FI_MG(g, id, aux) do { if (FI_GROUP_ON(g)) wp_reg_rec(fi_ctx_, ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
+#define FI_BG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g)) wp_reg_rec_pred(fi_ctx_, (bool)(pred), (uint32_t)(id) & FI_TAG_IDMASK, (uint32_t)(aux)); } while (0)
+#define FI_EG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g)) wp_reg_rec_pred(fi_ctx_, (bool)(pred), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(aux)); } while (0)
+#define FI_MG_PRED(pred, g, id, aux) do { if (FI_GROUP_ON(g)) wp_reg_rec_pred(fi_ctx_, (bool)(pred), ((uint32_t)(id) & FI_TAG_IDMASK) | FI_TAG_MARK, (uint32_t)(aux)); } while (0)
+#define FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) do { if (FI_GROUP_ON(g_end) && FI_GROUP_ON(g_beg)) wp_reg_trans_pred(fi_ctx_, (bool)(pred), ((uint32_t)(end_id) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(beg_id) & FI_TAG_IDMASK, (uint32_t)(aux)); else { FI_EG_PRED(pred, g_end, end_id, aux); FI_BG_PRED(pred, g_beg, beg_id, aux); } } while (0)
 #else
 #define FI_BG(g, id, aux) do { } while (0)
 #define FI_EG(g, id, aux) do { } while (0)
@@ -970,7 +981,7 @@ struct WpScope1R {
 #define FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) do { (void)(pred); } while (0)
 #endif
 
-#else  // !FI_SMEM_ZREG && !WP_CTX_1R (legacy 5-register FiCtx)
+#else  // !WP_CTX_SMEM && !WP_CTX_REG (legacy 5-register FiCtx)
 
 #if FI_LEVEL >= 1
 #define FI_CTX_PARAM , FiCtx& fi_ctx_
@@ -1018,7 +1029,7 @@ struct WpScope1R {
 #define FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) do { (void)(pred); } while (0)
 #endif
 
-#endif  // FI_SMEM_ZREG
+#endif  // WP_CTX_SMEM
 #define FI_B(id, aux) FI_BG(0, id, aux)
 #define FI_E(id, aux) FI_EG(0, id, aux)
 #define FI_M(id, aux) FI_MG(0, id, aux)
@@ -1029,9 +1040,9 @@ struct WpScope1R {
 // Canonical WeaveProfiler (`WP_*` / `wp_*`) aliases (§3.2)
 using WpRec = FiRec;
 using WpBuf = FiBuf;
-#if defined(WP_CTX_1R) && !defined(FI_SMEM_ZREG)
-using WpCtx = WpCtx1R;
-using WpScope = WpScope1R;
+#if defined(WP_CTX_REG) && !defined(WP_CTX_SMEM)
+using WpCtx = WpCtxReg;
+using WpScope = WpScopeReg;
 #else
 using WpCtx = FiCtx;
 using WpScope = FiScope;
@@ -1213,57 +1224,61 @@ extern "C" void wp_free() {
 
 static_assert(sizeof(WpRec) == 16, "WeaveProfiler records must be 16 bytes");
 
-// WP_SYNC_CURSOR_OUT() publishes the live per-lane record cursor to wp_g.cur[slot];
+// WP_SYNC_CURSOR_OUT() publishes the live per-lane record cursor to wp_fi_c.cur[slot];
 // WP_SYNC_CURSOR_IN() reloads it (e.g. after a callee __device__ function appended records through
 // WP_DEVICE_SCOPE).  The cursor lives in a different place for every recorder-context mode, so each
 // mode gets its own implementation instead of poking `fi_ctx_.p` (which does not exist under
-// -DWP_CTX_1R or -DWP_SMEM_ZREG):
-//   FI_SMEM_ZREG / WP_SMEM_ZREG : FiSmemCtx in static __shared__ (slot recovered from the lane base pointer)
-//   WP_CTX_1R(_NOINLINE)        : bit-packed WpCtx1R::state (slot = bits 30..15, cursor = bits 14..0)
+// -DWP_CTX_REG or -DWP_CTX_SMEM):
+//   WP_CTX_SMEM                 : WpSmemCtx in static __shared__ (slot recovered from the lane base pointer)
+//   WP_CTX_REG(_NOINLINE)       : bit-packed WpCtxReg::state (slot = bits 30..15, cursor = bits 14..0)
 //   default                     : 5-register FiCtx {p, n, cap, slot}
 #if FI_LEVEL >= 1
-#if defined(FI_SMEM_ZREG)
-__device__ __forceinline__ void wp_sync_cursor_out_zreg(const FiSmemCtx* sc) {
-    const FiBuf b = fi_g;
+#if defined(WP_CTX_SMEM)
+__device__ __forceinline__ void wp_sync_cursor_out_smem(const WpSmemCtx* sc) {
+    const FiBuf b = wp_active_buf();
     if (sc->p != nullptr && b.cur != nullptr && b.rec != nullptr && b.cap != 0u) {
         const uint32_t slot = (uint32_t)((size_t)(sc->p - b.rec) / (size_t)b.cap);
         if (slot < b.n_slots) b.cur[slot] = sc->n;
     }
 }
-__device__ __forceinline__ void wp_sync_cursor_in_zreg(FiSmemCtx* sc) {
-    const FiBuf b = fi_g;
+__device__ __forceinline__ void wp_sync_cursor_in_smem(WpSmemCtx* sc) {
+    const FiBuf b = wp_active_buf();
     if (sc->p != nullptr && b.cur != nullptr && b.rec != nullptr && b.cap != 0u) {
         const uint32_t slot = (uint32_t)((size_t)(sc->p - b.rec) / (size_t)b.cap);
         if (slot < b.n_slots) sc->n = b.cur[slot];
     }
 }
-#define WP_SYNC_CURSOR_OUT() do { if (fi_recorder()) wp_sync_cursor_out_zreg(FI_ZREG_SLOT()); } while (0)
-#define WP_SYNC_CURSOR_IN() do { if (fi_recorder()) wp_sync_cursor_in_zreg(FI_ZREG_SLOT()); } while (0)
-#elif defined(WP_CTX_1R)
-__device__ __forceinline__ void wp_sync_cursor_out_1r(const WpCtx1R& c) {
-    if ((int32_t)c.state >= 0 && fi_g.cur != nullptr) {
-        const uint32_t slot = (c.state >> WP_1R_SLOT_SHIFT) & WP_1R_SLOT_MASK;
-        if (slot < fi_g.n_slots) fi_g.cur[slot] = c.state & WP_1R_CUR_MASK;
+#define WP_SYNC_CURSOR_OUT() do { if (fi_recorder()) wp_sync_cursor_out_smem(WP_SMEM_SLOT()); } while (0)
+#define WP_SYNC_CURSOR_IN() do { if (fi_recorder()) wp_sync_cursor_in_smem(WP_SMEM_SLOT()); } while (0)
+#elif defined(WP_CTX_REG)
+__device__ __forceinline__ void wp_sync_cursor_out_reg(const WpCtxReg& c) {
+    const FiBuf b = wp_active_buf();
+    if ((int32_t)c.state >= 0 && b.cur != nullptr) {
+        const uint32_t slot = (c.state >> WP_REG_SLOT_SHIFT) & WP_REG_SLOT_MASK;
+        if (slot < b.n_slots) b.cur[slot] = c.state & WP_REG_CUR_MASK;
     }
 }
-__device__ __forceinline__ void wp_sync_cursor_in_1r(WpCtx1R& c) {
-    if ((int32_t)c.state >= 0 && fi_g.cur != nullptr) {
-        const uint32_t slot = (c.state >> WP_1R_SLOT_SHIFT) & WP_1R_SLOT_MASK;
-        if (slot >= fi_g.n_slots) return;
-        const uint32_t eff_cap = (fi_g.cap > WP_1R_CUR_MASK) ? WP_1R_CUR_MASK : fi_g.cap;
-        const uint32_t n = fi_g.cur[slot];
-        c.state = (n >= eff_cap) ? ((slot << WP_1R_SLOT_SHIFT) | WP_1R_DISABLED)
-                                 : ((slot << WP_1R_SLOT_SHIFT) | (n & WP_1R_CUR_MASK));
+__device__ __forceinline__ void wp_sync_cursor_in_reg(WpCtxReg& c) {
+    const FiBuf b = wp_active_buf();
+    if ((int32_t)c.state >= 0 && b.cur != nullptr) {
+        const uint32_t slot = (c.state >> WP_REG_SLOT_SHIFT) & WP_REG_SLOT_MASK;
+        if (slot >= b.n_slots) return;
+        const uint32_t eff_cap = (b.cap > WP_REG_CUR_MASK) ? WP_REG_CUR_MASK : b.cap;
+        const uint32_t n = b.cur[slot];
+        c.state = (n >= eff_cap) ? ((slot << WP_REG_SLOT_SHIFT) | WP_REG_DISABLED)
+                                 : ((slot << WP_REG_SLOT_SHIFT) | (n & WP_REG_CUR_MASK));
     }
 }
-#define WP_SYNC_CURSOR_OUT() do { wp_sync_cursor_out_1r(fi_ctx_); } while (0)
-#define WP_SYNC_CURSOR_IN() do { wp_sync_cursor_in_1r(fi_ctx_); } while (0)
+#define WP_SYNC_CURSOR_OUT() do { wp_sync_cursor_out_reg(fi_ctx_); } while (0)
+#define WP_SYNC_CURSOR_IN() do { wp_sync_cursor_in_reg(fi_ctx_); } while (0)
 #else
 __device__ __forceinline__ void wp_sync_cursor_out_ctx(const FiCtx& c) {
-    if (c.p != nullptr && fi_g.cur != nullptr && c.slot < fi_g.n_slots) fi_g.cur[c.slot] = c.n;
+    const FiBuf b = wp_active_buf();
+    if (c.p != nullptr && b.cur != nullptr && c.slot < b.n_slots) b.cur[c.slot] = c.n;
 }
 __device__ __forceinline__ void wp_sync_cursor_in_ctx(FiCtx& c) {
-    if (c.p != nullptr && fi_g.cur != nullptr && c.slot < fi_g.n_slots) c.n = fi_g.cur[c.slot];
+    const FiBuf b = wp_active_buf();
+    if (c.p != nullptr && b.cur != nullptr && c.slot < b.n_slots) c.n = b.cur[c.slot];
 }
 #define WP_SYNC_CURSOR_OUT() do { wp_sync_cursor_out_ctx(fi_ctx_); } while (0)
 #define WP_SYNC_CURSOR_IN() do { wp_sync_cursor_in_ctx(fi_ctx_); } while (0)

@@ -13,7 +13,7 @@ Transforms validated software timelines + hardware PMU curves into:
        - NEED_SUBSTAGE_DRILLDOWN : Material underutilized phase with unexplained dip.
   4. Ranked optimization opportunities with honest Amdahl / work-redistribution
      counterfactual speedup upper bounds.
-  5. Deterministic context-placement & compiler search-space planning (`FI_SMEM_ZREG`
+  5. Deterministic context-placement & compiler search-space planning (`WP_CTX_SMEM`
      routing at 0-register headroom + `{pre, post}` search around `setmaxnreg`).
 """
 from __future__ import annotations
@@ -180,7 +180,7 @@ def plan_context_and_search_space(
     """Deterministically plan recorder context placement and compiler search arms.
 
     Replaces heuristic rules with measurable hardware resource arithmetic:
-      - If register headroom <= 2 regs/thread and SMEM has >= 16B free -> FI_SMEM_ZREG.
+      - If register headroom <= 2 regs/thread and SMEM has >= 16B free -> WP_CTX_SMEM.
       - If `setmaxnreg` / warpgroup reg realloc is present -> emit {pre, post} search
         space for the Supervisor to empirically compile & rank by spill/STL/overhead.
     """
@@ -198,51 +198,51 @@ def plan_context_and_search_space(
     compile_defines: List[str] = []
     reasons: List[str] = []
     # Compiler-in-the-loop tiered plan (D2):
-    #   Arm 1 (default fast): 1-register bit-packed context (`-DWP_CTX_1R`, 0 B SMEM).
-    #   Arm 2 (if spill/STL regression & SMEM free >= 16B): `-DFI_SMEM_ZREG` (0 live regs, 16B SMEM + __noinline__).
-    #   Arm 3 (if spill/STL regression & SMEM exhausted): `-DWP_CTX_1R_NOINLINE` (1 live reg, 0 B SMEM, __noinline__).
+    #   Arm 1 (default fast): 1-register bit-packed context (`-DWP_CTX_REG`, 0 B SMEM).
+    #   Arm 2 (if spill/STL regression & SMEM free >= 16B): `-DWP_CTX_SMEM` (0 live regs, 16B SMEM + __noinline__).
+    #   Arm 3 (if spill/STL regression & SMEM exhausted): `-DWP_CTX_REG_NOINLINE` (1 live reg, 0 B SMEM, __noinline__).
     fallback_arms: List[Dict[str, Any]] = []
     if reg_headroom is not None and reg_headroom <= 2:
         if smem_free >= 16:
-            context_mode = "FI_SMEM_ZREG"
-            compile_defines.append("-DFI_SMEM_ZREG")
+            context_mode = "WP_CTX_SMEM"
+            compile_defines.append("-DWP_CTX_SMEM")
             reasons.append(
                 f"Zero/tight register headroom ({l0_regs}/{reg_budget} regs @ {block_threads} thr) "
                 f"with {smem_free} B free SMEM -> route context to 16B static SMEM + __noinline__ cold path."
             )
             fallback_arms = [
-                {"mode": "WP_CTX_1R_NOINLINE", "defines": ["-DWP_CTX_1R_NOINLINE"], "smem_bytes_per_slot": 0},
-                {"mode": "WP_CTX_1R", "defines": ["-DWP_CTX_1R"], "smem_bytes_per_slot": 0},
+                {"mode": "WP_CTX_REG_NOINLINE", "defines": ["-DWP_CTX_REG_NOINLINE"], "smem_bytes_per_slot": 0},
+                {"mode": "WP_CTX_REG", "defines": ["-DWP_CTX_REG"], "smem_bytes_per_slot": 0},
             ]
         else:
-            context_mode = "WP_CTX_1R_NOINLINE"
-            compile_defines.append("-DWP_CTX_1R_NOINLINE")
+            context_mode = "WP_CTX_REG_NOINLINE"
+            compile_defines.append("-DWP_CTX_REG_NOINLINE")
             reasons.append(
                 f"Both register headroom ({reg_headroom}) and SMEM ({smem_free} B free) are exhausted -> "
                 f"use 1-register bit-packed context + __noinline__ cold outlining (0 B SMEM) and verify spill/STL gate."
             )
             fallback_arms = [
-                {"mode": "WP_CTX_1R_LOW_GRAN", "defines": ["-DWP_CTX_1R_NOINLINE", "-DFI_GRAN=1"], "smem_bytes_per_slot": 0},
+                {"mode": "WP_CTX_REG_CTA", "defines": ["-DWP_CTX_REG_NOINLINE", "-DWP_GRAN=1"], "smem_bytes_per_slot": 0},
             ]
     else:
-        context_mode = "WP_CTX_1R"
-        compile_defines.append("-DWP_CTX_1R")
+        context_mode = "WP_CTX_REG"
+        compile_defines.append("-DWP_CTX_REG")
         if smem_free < 16:
             reasons.append(
-                f"SMEM saturated ({l0_smem_bytes}/{smem_limit} B) -> default to 1-register bit-packed WpCtx1R (0 B SMEM); "
-                f"on compiler spill/STL regression, fall back to WP_CTX_1R_NOINLINE."
+                f"SMEM saturated ({l0_smem_bytes}/{smem_limit} B) -> default to 1-register bit-packed WpCtxReg (0 B SMEM); "
+                f"on compiler spill/STL regression, fall back to WP_CTX_REG_NOINLINE."
             )
             fallback_arms = [
-                {"mode": "WP_CTX_1R_NOINLINE", "defines": ["-DWP_CTX_1R_NOINLINE"], "smem_bytes_per_slot": 0},
+                {"mode": "WP_CTX_REG_NOINLINE", "defines": ["-DWP_CTX_REG_NOINLINE"], "smem_bytes_per_slot": 0},
             ]
         else:
             reasons.append(
-                "Try 1-register bit-packed WpCtx1R (5R -> 1R, 0 B SMEM) first; "
-                "if ptxas/cuobjdump reports spill or STL/LDL regression, fall back to FI_SMEM_ZREG (16B SMEM + __noinline__)."
+                "Try 1-register bit-packed WpCtxReg (0 B SMEM) first; "
+                "if ptxas/cuobjdump reports spill or STL/LDL regression, fall back to WP_CTX_SMEM (16B SMEM + __noinline__)."
             )
             fallback_arms = [
-                {"mode": "FI_SMEM_ZREG", "defines": ["-DFI_SMEM_ZREG"], "smem_bytes_per_slot": 16},
-                {"mode": "WP_CTX_1R_NOINLINE", "defines": ["-DWP_CTX_1R_NOINLINE"], "smem_bytes_per_slot": 0},
+                {"mode": "WP_CTX_SMEM", "defines": ["-DWP_CTX_SMEM"], "smem_bytes_per_slot": 16},
+                {"mode": "WP_CTX_REG_NOINLINE", "defines": ["-DWP_CTX_REG_NOINLINE"], "smem_bytes_per_slot": 0},
             ]
 
     has_setmaxnreg = bool(_SETMAXNREG_RE.search(source_text or ""))
@@ -255,9 +255,9 @@ def plan_context_and_search_space(
 
     has_grid_sync = bool(_GRID_SYNC_RE.search(source_text or ""))
     recommended_granularity = "warp" if (has_setmaxnreg or max_warps_per_cta > 1) else "sm"
-    if context_mode == "FI_SMEM_ZREG" and smem_free < 16 * max_warps_per_cta:
+    if context_mode == "WP_CTX_SMEM" and smem_free < 16 * max_warps_per_cta:
         recommended_granularity = "sm"
-        compile_defines.append("-DFI_GRAN=1")
+        compile_defines.append("-DWP_GRAN=1")
 
     return {
         "arch": prof["arch"],
@@ -1333,7 +1333,7 @@ def analyze_sw_hw_causality(
             "code": "FORBIDDEN_PER_THREAD_ATOMIC_INSTRUMENTATION",
             "metric": {"observed_h20_pollution_pct": 51.6},
             "blocked_actions": ["per_thread_atomicAdd_counters"],
-            "reason": "Per-thread atomicAdd instrumentation pollutes H20 wall time by +51.6%; use fi_lite / FI_SMEM_ZREG private slots.",
+            "reason": "Per-thread atomicAdd instrumentation pollutes H20 wall time by +51.6%; use wp_lite / WP_CTX_SMEM private slots.",
         })
     if rf_axis == "HBM" and emp_rf_pct >= 90.0:
         structural_blockers.append({

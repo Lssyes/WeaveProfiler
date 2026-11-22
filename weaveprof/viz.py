@@ -24,18 +24,38 @@ STAGE_COLORS: Dict[str, Tuple[str, str]] = {
     "mma": ("#1565C0", "Tensor Core MMA / WGMMA"),
     "softmax": ("#00ACC1", "Online Softmax"),
     "compute": ("#42A5F5", "Compute / ALU"),
-    "epilogue": ("#EF6C00", "Epilogue / Store"),
-    "store": ("#EF6C00", "Epilogue / Store"),
+    "epilogue": ("#FB8C00", "Epilogue"),
+    "store": ("#D84315", "Store"),
     "wait": ("#90A4AE", "Wait / Sync"),
-    "barrier": ("#78909C", "Barrier / Sync"),
-    "communication": ("#8E24AA", "Communication / Reduce"),
-    "reduction": ("#8E24AA", "Communication / Reduce"),
+    "barrier": ("#607D8B", "Barrier / Sync"),
+    "communication": ("#8E24AA", "Communication"),
+    "reduction": ("#C2185B", "Reduction"),
     "dispatch": ("#00838F", "Dispatch / Schedule"),
-    "gemm": ("#1565C0", "GEMM / MMA"),
+    "gemm": ("#1E88E5", "GEMM / MMA"),
     "attention": ("#1976D2", "Attention"),
     "moe": ("#6A1B9A", "MoE"),
 }
-_DEFAULT_COLOR = ("#546E7A", "Other Stage")
+# Globally disjoint sub-palette shades used when multiple distinct named stages share one semantic
+# family (e.g., `mma_qk` vs `mma_pv`, `gmm1` vs `gmm2`, `dispatch` vs `combine`), so distinct code
+# segments stay visually distinguishable with zero cross-family color collisions.
+_SEMANTIC_SHADES: Dict[str, Tuple[str, ...]] = {
+    "mma": ("#1565C0", "#0D47A1", "#283593", "#0277BD", "#3F51B5", "#01579B"),
+    "gemm": ("#1E88E5", "#1976D2", "#2196F3", "#039BE5"),
+    "load": ("#2E7D32", "#43A047", "#558B2F", "#1B5E20", "#689F38", "#33691E"),
+    "compute": ("#42A5F5", "#29B6F6", "#5C6BC0", "#64B5F6", "#7986CB"),
+    "softmax": ("#00ACC1", "#26C6DA", "#0097A7", "#4DD0E1"),
+    "epilogue": ("#FB8C00", "#FFA726", "#F57C00", "#FFB74D"),
+    "store": ("#D84315", "#E64A19", "#BF360C", "#FF7043"),
+    "communication": ("#8E24AA", "#AB47BC", "#7B1FA2", "#9C27B0"),
+    "reduction": ("#C2185B", "#D81B60", "#AD1457", "#E91E63"),
+    "dispatch": ("#00838F", "#00897B", "#00695C", "#26A69A"),
+    "wait": ("#90A4AE", "#B0BEC5", "#A1B2BA"),
+    "barrier": ("#607D8B", "#78909C", "#455A64"),
+}
+_OVERFLOW_SHADES: Tuple[str, ...] = (
+    "#8D6E63", "#5D4037", "#AFB42B", "#827717", "#FBC02D", "#F9A825", "#EC407A", "#7E57C2",
+)
+_DEFAULT_COLOR = ("#37474F", "Other Stage")
 _STAGE_DRAW_PRIORITY = {
     "wait": 0, "barrier": 1, "load": 2, "dispatch": 3, "compute": 4,
     "softmax": 5, "epilogue": 6, "store": 6, "communication": 7, "reduction": 7,
@@ -407,19 +427,52 @@ def render_swhw_overview_png(
     fig.text(0.5, 0.985, title, ha="center", va="top", fontsize=14.2, fontweight="bold", color="#111111")
     fig.text(0.5, 0.955, subtitle, ha="center", va="top", fontsize=9.1, color="#455A64")
 
-    # Legend of actually present semantic stages (deduplicated by label/color)
-    seen_leg = set()
-    leg_handles: List[Patch] = []
+    # Legend & per-stage color map: keep distinct shades + explicit stage labels when multiple
+    # distinct `original_label`s share one semantic family (e.g., `mma_qk` vs `mma_pv`), while
+    # preserving clean single semantic labels for simple single-stage-per-semantic kernels.
+    labels_by_sem: Dict[str, List[str]] = defaultdict(list)
+    for sp in sw_spans:
+        lbl = str(sp.get("label") or sp["sem"]).strip()
+        if lbl and lbl not in labels_by_sem[sp["sem"]]:
+            labels_by_sem[sp["sem"]].append(lbl)
+    stage_color_map: Dict[Tuple[str, str], Tuple[str, str]] = {}
     stage_order = ("load", "mma", "gemm", "softmax", "compute", "epilogue", "store", "wait", "barrier", "communication", "reduction", "dispatch")
-    ordered_sems = [s for s in stage_order if s in parsed["stages_seen"]] + [
+    ordered_sems = [s for s in stage_order if s in parsed["stages_seen"]] + sorted(
         s for s in parsed["stages_seen"] if s not in stage_order
-    ]
+    )
+    seen_leg = set()
+    used_colors = set()
+    overflow_idx = 0
+    leg_handles: List[Patch] = []
     for sem in ordered_sems:
-        col, desc = STAGE_COLORS.get(sem, _DEFAULT_COLOR)
-        if desc in seen_leg:
-            continue
-        seen_leg.add(desc)
-        leg_handles.append(Patch(facecolor=col, edgecolor="none", label=desc))
+        base_col, base_desc = STAGE_COLORS.get(sem, _DEFAULT_COLOR)
+        lbls = sorted(labels_by_sem.get(sem) or [sem], key=lambda x: (x.lower() == sem, x.lower()))
+        # Disambiguate when >=2 distinct non-generic labels exist within this semantic family
+        distinct_named = [l for l in lbls if l.lower() != sem]
+        if len(lbls) >= 2 and distinct_named:
+            shades = list(_SEMANTIC_SHADES.get(sem, (base_col,)))
+            for idx_l, lbl in enumerate(lbls):
+                col = next((c for c in shades[idx_l:] if c not in used_colors), None)
+                if col is None:
+                    col = _OVERFLOW_SHADES[overflow_idx % len(_OVERFLOW_SHADES)]
+                    overflow_idx += 1
+                used_colors.add(col)
+                desc = f"{lbl} ({sem})" if lbl.lower() != sem else base_desc
+                stage_color_map[(sem, lbl)] = (col, desc)
+                if desc not in seen_leg:
+                    seen_leg.add(desc)
+                    leg_handles.append(Patch(facecolor=col, edgecolor="none", label=desc))
+        else:
+            only_lbl = lbls[0]
+            used_colors.add(base_col)
+            stage_color_map[(sem, only_lbl)] = (base_col, base_desc)
+            if base_desc not in seen_leg:
+                seen_leg.add(base_desc)
+                leg_handles.append(Patch(facecolor=base_col, edgecolor="none", label=base_desc))
+
+    def _span_color(sp: Mapping[str, Any]) -> str:
+        lbl = str(sp.get("label") or sp["sem"]).strip()
+        return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
     if leg_handles:
         fig.legend(
             handles=leg_handles, loc="upper center", bbox_to_anchor=(0.5, 0.930),
@@ -505,7 +558,12 @@ def render_swhw_overview_png(
     else:
         n_sub = max(1, len(all_warps))
     img = np.full((n_sms * n_sub, img_w, 3), 255, dtype=np.uint8)
-    sorted_spans = sorted(sw_spans, key=lambda s: _STAGE_DRAW_PRIORITY.get(s["sem"], 4))
+    # Draw background waits/barriers first, then active spans from LONGEST to SHORTEST duration
+    # so short nested/adjacent stages (`load`, `softmax`, `store`) are never painted over by longer spans.
+    sorted_spans = sorted(
+        sw_spans,
+        key=lambda s: (0 if s["sem"] in ("wait", "barrier") else 1, -float(s["dur"]), _STAGE_DRAW_PRIORITY.get(s["sem"], 4)),
+    )
     scale_x = (img_w - 1) / max(t_max + x_pad, 1e-6)
     for sp in sorted_spans:
         row = sm_to_row.get(sp["sm"])
@@ -517,8 +575,7 @@ def render_swhw_overview_png(
             sub = warp_to_sub.get(sp["warp"], 0)
         x0 = max(0, min(img_w - 1, int(sp["ts"] * scale_x)))
         x1 = max(x0 + 1, min(img_w, int(math.ceil(sp["end"] * scale_x))))
-        col_hex = STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR)[0]
-        img[row * n_sub + sub, x0:x1] = _hex_to_rgb(col_hex)
+        img[row * n_sub + sub, x0:x1] = _hex_to_rgb(_span_color(sp))
 
     ax_sm.imshow(img, aspect="auto", interpolation="nearest", extent=[0.0, t_max + x_pad, n_sms - 0.5, -0.5])
     ax_sm.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75)
@@ -538,6 +595,8 @@ def render_swhw_overview_png(
     ax_wp.grid(True, axis="x", linestyle="-", linewidth=0.4, color="#ECEFF1", zorder=0)
     warp_to_y = {w: idx for idx, (w, _r) in enumerate(rep_warps)}
     verts_by_color: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
+    durs_by_color: Dict[str, List[float]] = defaultdict(list)
+    sem_by_color: Dict[str, str] = {}
     bar_h = 0.72
     rep_spans = [sp for sp in sorted_spans if sp["sm"] == rep_sm]
     for sp in rep_spans:
@@ -549,11 +608,20 @@ def render_swhw_overview_png(
             continue
         x0, x1 = sp["ts"], sp["end"]
         y0, y1 = y - bar_h / 2.0, y + bar_h / 2.0
-        col_hex = STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR)[0]
+        col_hex = _span_color(sp)
         verts_by_color[col_hex].append([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+        durs_by_color[col_hex].append(float(sp["dur"]))
+        sem_by_color.setdefault(col_hex, sp["sem"])
 
-    for col_hex, verts in verts_by_color.items():
-        pc = PolyCollection(verts, facecolors=col_hex, edgecolors="#FFFFFF", linewidths=0.18, zorder=3)
+    ordered_color_layers = sorted(
+        verts_by_color.items(),
+        key=lambda kv: (
+            0 if sem_by_color.get(kv[0]) in ("wait", "barrier") else 1,
+            -sorted(durs_by_color[kv[0]])[len(durs_by_color[kv[0]]) // 2],
+        ),
+    )
+    for layer_idx, (col_hex, verts) in enumerate(ordered_color_layers):
+        pc = PolyCollection(verts, facecolors=col_hex, edgecolors="#FFFFFF", linewidths=0.18, zorder=3 + layer_idx * 0.01)
         ax_wp.add_collection(pc)
 
     ax_wp.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=5)

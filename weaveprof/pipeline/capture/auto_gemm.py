@@ -816,7 +816,7 @@ def _execute_profiler_wrap(
     if card in ("h20", "b300"):
         nsys = shutil.which("nsys") or "/usr/local/bin/nsys"
         phys_dev = _resolve_nv_phys_gpu_index()
-        freq_hz = 50000 if card == "h20" else 200000
+        freq_hz = 200000
         nsys_tmp = out_dir / "nsys_tmp"
         nsys_tmp.mkdir(parents=True, exist_ok=True)
         rep_base = out_dir / "cap"

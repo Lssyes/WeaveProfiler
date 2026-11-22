@@ -92,28 +92,28 @@ WeaveProfiler is built around **two core design pillars** and **one engineering 
 ### 3.1 Design Point 1: Ensuring Correctness (LLM Understanding + Deterministic Injection & Verification)
 
 - **The LLM only reads code; deterministic Python inserts the probes**: The LLM never edits your kernel source directly. It reads the source against cross-language exemplars and outputs a structured `probe.json` (warp-role predicates and stage start/end line numbers). Fixed Python code copies your source into an isolated temp directory and deterministically injects the timing calls, keeping results reproducible and leaving original source files untouched.
-- **Tamper-resistant execution (MCP Server + HMAC Seal + Hooks + Read-Only Isolation)**:
-  - **MCP Server & HMAC-SHA256 Seal**: Instrumentation, compilation, benchmarking, and rendering run inside a separate MCP server process. Only when all four checks pass does it compute an HMAC-SHA256 signature (`seal.json`) over **original source hash + `probe.json` hash + timeline artifact hash + check results** using a secret key invisible to the agent. Downstream checks and `Stop` hooks re-verify all hashes and signatures.
-  - **Lifecycle Hooks (`PreToolUse / PostToolUse / Stop`)**: Automatically block the agent from bypassing `probe.json` to edit production kernel code with timing statements or tamper with verification scripts/seals, and block finishing a turn until the live source matches a valid `PASS` seal with zero leftover probe code.
-  - **Read-Only Isolation**: Verification scripts, compiler configs, and signing keys are isolated read-only from normal workspace commands.
+- **Tamper-resistant execution (MCP Server + HMAC Seal + Hooks + Isolation)**:
+  - **MCP Server & HMAC-SHA256 Seal**: Instrumentation, compilation, benchmarking, and rendering run inside a separate MCP server process; the MCP surface rejects forged `runtime_metrics` or pre-captured `dump_path` inputs. Only when all four checks pass does it compute an HMAC-SHA256 signature (`seal.json`) over **original source hash + artifact hashes + check results** using a session key stored outside the workspace (`0600`) and stripped from all build/benchmark child processes. Immutable session policy fields in `session.json` are likewise protected by `policy_hmac`, and verification fails closed.
+  - **Lifecycle Hooks (`PreToolUse / PostToolUse / PostToolUseFailure / Stop / SubagentStop`)**: Automatically block editing protected production files before baseline sealing, inserting probe code, or modifying/deleting seals or hook configs (restoring exact backups on out-of-band shell mutations).
+  - **Read-Only Isolation**: On Linux, `run.py guard-exec` mounts verification scripts, hook/MCP configs, and session keys read-only via `bwrap` when available.
 - **Four Blocking Checks & Closed-Loop Refinement**:
-  1. *Disassembly check*: After ignoring probe instructions and register numbering, verifies that core compute/memory instruction order and main-loop unrolling are unchanged and no new register spills are introduced.
-  2. *Output check*: Verifies numerical outputs match the uninstrumented kernel within tolerance.
-  3. *Event completeness check*: Verifies every begin/end pair is closed (`t_end >= t_begin`), zero drops/overflow, no hollow/collapsed stages, and every physical warp in the CTA is recorded.
-  4. *Runtime overhead check*: Interleaved warm timing against the original kernel stays within the configured budget (default `10%`).
-  - Whenever any check fails, the verifier rejects delivery and returns `feedback.json` **together with the failed-run timeline** to the LLM so it can revise `probe.json` (for example, lifting hot inner-loop probes to outer loop boundaries) until all four checks pass.
+  1. *Disassembly & resource check*: Compares compiled SASS/ISA to verify core compute/memory instruction multiset and structure are preserved (tolerating scheduling-only `ptxas -O3` instruction interleaving while rejecting dropped ops or unrolling collapse) with zero added register spills, stack frames, or `STL`/`LDL` explosions.
+  2. *Output check*: Verifies **bitwise identical** outputs against the uninstrumented baseline.
+  3. *Event completeness & semantic coverage check*: Verifies every begin/end pair is closed (`t_end >= t_begin`), zero drops/overflow, no hollow/collapsed stages or nested outer macro-wrappers, full per-CTA physical warp coverage, and operator-specific core stages (e.g., `load`, `mma`, `softmax`, `epilogue`/`store` on attention kernels).
+  4. *Runtime overhead check*: Interleaved ABBA warm timing against the original kernel stays within the configured symmetric bound (default `±10%`).
+  - Whenever any check fails, the verifier rejects delivery and returns `feedback.json` **together with failed-run timeline hotspots and semantic warnings** to the LLM, while `run_rsi_placement_search` enables parallel CPU compile pre-screening and persistent prior-guided convergence.
 
 ### 3.2 Design Point 2: Ensuring Measurement Accuracy (Low-Perturbation In-Kernel Recording)
 
-- **Per-warp private buffers & cache-bypassing stores**: Each `(CTA, physical warp)` gets its own sequential memory slice written by `lane 0` in 16-byte records with zero atomics, using cache-bypassing streaming stores (`st.global.cs.v4.u32`) so kernel data caches are not polluted.
-- **Constant-memory descriptor & 1-register cursor**: Buffer base address and capacity live in read-only constant memory while the live loop packs `(slot, cursor, overflow)` into **a single 32-bit register** (`0 B` shared memory). On register-saturated kernels where even 1 extra register triggers spilling, the harness automatically switches to keeping the write cursor in 16 bytes of shared memory with a `__noinline__` recording helper so the main loop uses zero extra registers.
+- **Per-warp private buffers & cache-bypassing stores**: Each `(CTA, physical warp)` gets its own sequential memory slice written by `lane 0` in 16-byte records with **zero atomics on the hot path** (an atomic flag is used only on the cold overflow path), using cache-bypassing streaming stores (`st.global.cs.v4.u32`) so kernel data caches are not polluted.
+- **Constant-memory descriptor & single-register cursor (CUDA C++)**: The CUDA recorder stores buffer base address and capacity in read-only constant memory while `-DWP_CTX_REG` packs `(slot, cursor, overflow)` into **a single 32-bit register** (`0 B` shared memory). On register-saturated kernels where even 1 extra register triggers spilling, the selector switches to `-DWP_CTX_SMEM` (16 B static shared memory + `__noinline__` helper, zero extra live registers) or `-DWP_CTX_REG_NOINLINE`; HIP C++ uses the standard register context.
 - **Dual-anchor timing & adjacent boundary fusion**: Supports chip-wide synchronized clocks (`%globaltimer` / `s_memrealtime`) or open/close synchronized anchors plus lightweight cycle counters (`%clock64` / `s_memtime`) converted offline. Adjacent end+begin stage boundaries automatically merge into a single clock read + paired write.
 
 ### 3.3 Implementation: Zero Signature Changes & Direct Local 3-Panel PNGs
 
 - **Zero function-signature or call-stack changes**:
-  - **CUDA C++ (`recorders/cuda_cpp/wp_lite.cuh`) & HIP C++ (`recorders/hip_cpp/wp_lite_hip.h`)**: `__global__` parameter lists stay untouched; the host binds the buffer address via `MemcpyToSymbol` or dynamic `.cubin` symbol lookup (`cuLibraryGetGlobal`), while nested `__device__` helpers across headers hand off the write position via per-warp progress slots.
-  - **Triton (`recorders/triton/wp_triton.py`, `wp_triton_amd.py`) & CuTeDSL (`recorders/cutedsl/wp_cute.py`)**: A transparent same-name wrapper proxy unwraps `@heuristics` / `@autotune`, pins the baseline winning configuration, and passes the buffer pointer only at the lowest kernel launch site with zero caller edits.
+  - **CUDA C++ (`recorders/cuda_cpp/wp_lite.cuh`) & HIP C++ (`recorders/hip_cpp/wp_lite_hip.h`)**: `__global__` parameter lists stay untouched; the host binds the buffer address via `cudaMemcpyToSymbol` / `hipMemcpyToSymbol` or dynamic CUDA `.cubin` symbol lookup (`cudaLibraryGetGlobal`), while nested `__device__` helpers across headers hand off the write position via per-warp progress slots.
+  - **Triton (`recorders/triton/wp_triton.py`, `wp_triton_amd.py`) & CuTeDSL (`recorders/cutedsl/wp_cute.py`)**: A transparent same-name wrapper proxy passes the buffer pointer only at the lowest kernel launch site with zero caller edits (the Triton proxy also unwraps `@heuristics` / `@autotune` and pins the baseline winning configuration).
 - **Direct local 3-panel SW+HW overview PNG (`overview.png`)**: After aligning software events with same-run `nsys` / `rocprof` hardware metrics on one shared microsecond axis, `weaveprof/viz.py` directly renders a compact 3-panel PNG locally (while optionally keeping Perfetto traces):
   - **Panel (A)**: Same-run hardware utilization curves (Tensor/Matrix Core, HBM BW, NVLink BW, Active SMs).
   - **Panel (B)**: All physical SMs (`SM0..SM{N-1}`) multi-stage execution waterfall.
@@ -141,9 +141,9 @@ WeaveProfiler is built around **two core design pillars** and **one engineering 
 
 Session keys and clean source backups live outside the repo under `~/.cache/weaveprof/sessions/<workspace_hash>/`:
 
-- **`PreToolUse`**: Blocks reading keys/verifiers, blocks editing protected source files before a verified baseline seal exists, blocks writing probe code (`wp_lite.cuh`, `WP_OPEN`, `WP_B(`) into production files, and blocks altering seals or hook configs.
-- **`PostToolUse`**: Checks live SHA-256 of protected files; restores from backup and fails if modified before baseline verification, and blocks if probe macros were inserted.
-- **`Stop` / `SubagentStop`**: Requires live protected source bytes to match a validly signed `PASS` version with zero probe code remaining.
+- **`PreToolUse`**: Blocks reading keys/verifiers, blocks editing protected source files before a verified baseline seal exists, blocks writing probe code (`wp_lite.cuh`, `WP_OPEN`, `WP_B(`) into production files, and blocks altering/deleting seals or hook configs (including directory-level deletes/moves).
+- **`PostToolUse` / `PostToolUseFailure`**: Checks live SHA-256 of protected files and installed hook/MCP configs; restores exact backups and blocks on unauthorized mutations or inserted probe macros.
+- **`Stop` / `SubagentStop`**: `Stop` requires live protected source bytes to match a validly signed `PASS` version with zero probe code remaining; `SubagentStop` checks for unauthorized mutations, config tampering, and leftover probe code.
 
 ---
 
@@ -153,7 +153,7 @@ Session keys and clean source backups live outside the repo under `~/.cache/weav
 WeaveProfiler/
 ├── README.md              # Simplified Chinese documentation
 ├── README_EN.md           # English documentation
-├── SKILL.md               # Agent skill entry (Claude Code / Codex CLI / Antigravity)
+├── SKILL.md               # Agent skill entry (Claude Code / Codex CLI / Qwen Code / Antigravity)
 ├── pyproject.toml         # Python package config and weaveprof CLI entry
 ├── plugin.json            # Agent plugin manifest
 ├── run.py                 # Unified CLI entry point

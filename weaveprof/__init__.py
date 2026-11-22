@@ -20,6 +20,12 @@ from .causal import (
     plan_context_and_search_space,
     select_compiler_feedback_arm,
 )
+from .fast_search import (
+    build_minimal_include_overlay,
+    check_candidate_static_coverage,
+    detect_kernel_stage_requirements,
+    run_rsi_placement_search,
+)
 from .harness import (
     HarnessPolicy,
     PolicyViolation,
@@ -69,6 +75,10 @@ __all__ = [
     "plan_context_and_search_space",
     "select_compiler_feedback_arm",
     "run_compiler_feedback_selection",
+    "build_minimal_include_overlay",
+    "check_candidate_static_coverage",
+    "detect_kernel_stage_requirements",
+    "run_rsi_placement_search",
     "compare_optimization_rounds",
     "WpSoController",
     "analyze_megakernel_skew",

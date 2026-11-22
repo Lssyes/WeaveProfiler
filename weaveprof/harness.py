@@ -85,6 +85,13 @@ class HarnessPolicy:
     escalation_on_stagnation: bool = True
     export_failed_timeline: bool = True
     max_timeline_hotspots: int = 6
+    allow_single_stage_collapse: bool = False
+    allow_partial_warps: bool = False
+    max_delta_spill_bytes: int = 0
+    max_delta_stack_bytes: int = 0
+    max_delta_stl: int = 4
+    max_delta_ldl: int = 4
+    require_output_files: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -850,6 +857,7 @@ class EpisodeSealer:
         prev_seal_sha256: Optional[str] = None,
         extra_artifacts: Optional[Mapping[str, Optional[Path]]] = None,
         out_seal_path: Optional[Path] = None,
+        mode: Optional[str] = None,
     ) -> Tuple[Path, Dict[str, Any]]:
         checks = dict(result.get("checks") or {})
         metrics = dict(result.get("metrics") or {})
@@ -890,10 +898,13 @@ class EpisodeSealer:
             "trace_processor": metrics.get("trace_processor"),
             "artifacts": artifacts,
         }
+        if mode is not None:
+            payload["mode"] = str(mode)
         payload["seal_sha256"] = canonical_sha256(payload)
         key = _get_supervisor_hmac_key(create=True)
-        if key is not None:
-            payload["seal_hmac"] = _compute_seal_hmac(payload["seal_sha256"], key)
+        if key is None:
+            raise RuntimeError("Supervisor HMAC key unavailable; refusing to write unsigned seal")
+        payload["seal_hmac"] = _compute_seal_hmac(payload["seal_sha256"], key)
         target = Path(out_seal_path) if out_seal_path else (Path(round_dir) / "seal.json")
         write_json(target, payload)
         return target, payload
@@ -930,8 +941,10 @@ def verify_seal(
 
         claimed_hmac = doc.get("seal_hmac")
         key = _get_supervisor_hmac_key(create=False)
-        if require_hmac and key is not None:
-            if not isinstance(claimed_hmac, str):
+        if require_hmac:
+            if key is None:
+                errors.append("Supervisor HMAC key missing; cannot verify seal signature (fail-closed)")
+            elif not isinstance(claimed_hmac, str):
                 errors.append("Seal missing required supervisor HMAC signature (possible forgery)")
             else:
                 expected_hmac = _compute_seal_hmac(computed_seal_sha, key)
@@ -1217,8 +1230,8 @@ def verify_compiler_spill_gate(
 
     Real-world motivation (B300 sm_103a):
       - `v82` K2 (512 thr, 128r cap): `Used 128 regs` unchanged while `spill_stores: 0 -> 220 B`,
-        `STL: 27 -> 97`, slowdown `+51.32%` (remediated by `FI_SMEM_ZREG` -> 0 B spill, `+7.36%`).
-      - `bs128` decode (`setmaxnreg.dec 48`): `Used 72 regs` unchanged across L0/Pre/Post while
+        `STL: 27 -> 97`, slowdown `+51.32%` (remediated by `WP_CTX_SMEM` -> 0 B spill, `+7.36%`).
+      - `bs128` decode (`setmaxnreg.dec 48`): `Used 72 regs` unchanged across Baseline/Pre/Post while
         `spill_stores: 16 -> 760 B`, `STL: 2 -> 134`, slowdown `+28.94%` (remediated by
         compiler-in-the-loop `{pre, post}` placement search -> `+3.61%`).
     """
@@ -1295,7 +1308,7 @@ def verify_compiler_spill_gate(
         if has_setmaxnreg:
             remediation.append("search_setmaxnreg_placement:{pre_setmaxnreg,post_setmaxnreg}")
         if smem_free_bytes is None or smem_free_bytes >= 16:
-            remediation.append("enable_FI_SMEM_ZREG (-DFI_SMEM_ZREG, 16B SMEM + __noinline__ cold path)")
+            remediation.append("enable_WP_CTX_SMEM (-DWP_CTX_SMEM, 16B SMEM + __noinline__ cold path)")
         else:
             remediation.append("coarsen_probes_or_hoist_outside_hot_loop")
 
@@ -1318,9 +1331,9 @@ def verify_compiler_spill_gate(
 
 COMPILER_FEEDBACK_SCHEMA = "weaveprof.compiler-feedback/v1"
 
-_FAST_ARM: Dict[str, Any] = {"mode": "WP_CTX_1R", "defines": ["-DWP_CTX_1R"], "smem_bytes_per_slot": 0}
-_SMEM_ZREG_ARM: Dict[str, Any] = {"mode": "FI_SMEM_ZREG", "defines": ["-DFI_SMEM_ZREG"], "smem_bytes_per_slot": 16}
-_NOINLINE_ARM: Dict[str, Any] = {"mode": "WP_CTX_1R_NOINLINE", "defines": ["-DWP_CTX_1R_NOINLINE"], "smem_bytes_per_slot": 0}
+_FAST_ARM: Dict[str, Any] = {"mode": "WP_CTX_REG", "defines": ["-DWP_CTX_REG"], "smem_bytes_per_slot": 0}
+_SMEM_ARM: Dict[str, Any] = {"mode": "WP_CTX_SMEM", "defines": ["-DWP_CTX_SMEM"], "smem_bytes_per_slot": 16}
+_NOINLINE_ARM: Dict[str, Any] = {"mode": "WP_CTX_REG_NOINLINE", "defines": ["-DWP_CTX_REG_NOINLINE"], "smem_bytes_per_slot": 0}
 
 
 def _first_int(d: Mapping[str, Any], *keys: str) -> Optional[int]:
@@ -1358,13 +1371,13 @@ def run_compiler_feedback_selection(
     Exceptions are recorded as `build_ok=False` attempts (fail closed, never raised).
 
     Tiering:
-      1. Fast arm first (`-DWP_CTX_1R`, 1 live reg, 0 B SMEM) at every placement in the
+      1. Fast arm first (`-DWP_CTX_REG`, 1 live reg, 0 B SMEM) at every placement in the
          search space (`{pre_setmaxnreg, post_setmaxnreg}` when `setmaxnreg` is present,
          else `default_entry`). With `try_fast_first=False` the planner's resource-arithmetic
          `context_mode` is tried first instead.
       2. ONLY if no first-stage attempt passes `verify_compiler_spill_gate`, compile the
-         fallback arms: `-DFI_SMEM_ZREG` (when >= 16 B SMEM free) then
-         `-DWP_CTX_1R_NOINLINE`.
+         fallback arms: `-DWP_CTX_SMEM` (when >= 16 B SMEM free) then
+         `-DWP_CTX_REG_NOINLINE`.
       3. Rank every compiled attempt with `select_compiler_feedback_arm`; the winner is the
          best-ranked attempt that passes the spill/STL gate (or the best-ranked overall,
          flagged `gate_ok=False`, if none does).
@@ -1392,12 +1405,12 @@ def run_compiler_feedback_selection(
 
     if try_fast_first:
         first_arm = dict(_FAST_ARM)
-        fallback_arms = ([dict(_SMEM_ZREG_ARM)] if smem_free >= 16 else []) + [dict(_NOINLINE_ARM)]
+        fallback_arms = ([dict(_SMEM_ARM)] if smem_free >= 16 else []) + [dict(_NOINLINE_ARM)]
     else:
         first_arm = {
             "mode": plan["context_mode"],
             "defines": list(plan["compile_defines"]),
-            "smem_bytes_per_slot": 16 if plan["context_mode"] == "FI_SMEM_ZREG" else 0,
+            "smem_bytes_per_slot": 16 if plan["context_mode"] == "WP_CTX_SMEM" else 0,
         }
         fallback_arms = [dict(a) for a in plan["fallback_arms"]]
         if smem_free < 16:
@@ -1580,6 +1593,7 @@ def verify_stage_granularity(
     stage_us: Dict[str, float] = {}
     stage_n: Dict[str, int] = {}
     stage_lanes: Dict[str, set] = {}
+    lane_intervals: Dict[Any, List[Tuple[float, float, str]]] = defaultdict(list)
     all_active_lanes: set = set()
     has_mem_sem = False
     has_comp_sem = False
@@ -1596,6 +1610,7 @@ def verify_stage_granularity(
         dur = float(ev.get("dur") or 0.0)
         if dur <= 0.0 or not math.isfinite(dur):
             continue
+        ts = float(ev.get("ts") or 0.0)
         name = str(ev.get("name") or "stage")
         sem = str(args.get("semantic_id") or ev.get("cat") or name)
         if _COLLAPSE_WAIT_RE.search(name) or _COLLAPSE_WAIT_RE.search(sem):
@@ -1610,6 +1625,7 @@ def verify_stage_granularity(
         stage_us[key] = stage_us.get(key, 0.0) + dur
         stage_n[key] = stage_n.get(key, 0) + 1
         stage_lanes.setdefault(key, set()).add(lane)
+        lane_intervals[lane].append((ts, ts + dur, key))
 
     total_us = sum(stage_us.values())
     if total_us <= 0.0 or not stage_us:
@@ -1617,19 +1633,55 @@ def verify_stage_granularity(
             "ok": True, "code": None, "distinct_active_stages": 0,
             "dominant_stage": None, "dominant_share_pct": 0.0, "spans_per_lane": 0.0,
         }
+    # Compute true union active time per lane and detect enclosing macro-wrappers
+    # (e.g. an outer `attention`/`mma` wrapper covering >=85% of lane time while enclosing `load`/`store`).
+    union_total_us = 0.0
+    enclosed_counts: Dict[str, int] = defaultdict(int)
+    enclosed_children: Dict[str, set] = defaultdict(set)
+    for ivs in lane_intervals.values():
+        ivs_sorted = sorted(ivs, key=lambda x: (x[0], -x[1]))
+        cur_s, cur_e = ivs_sorted[0][0], ivs_sorted[0][1]
+        for s0, e0, _k in ivs_sorted[1:]:
+            if s0 <= cur_e:
+                if e0 > cur_e:
+                    cur_e = e0
+            else:
+                union_total_us += max(0.0, cur_e - cur_s)
+                cur_s, cur_e = s0, e0
+        union_total_us += max(0.0, cur_e - cur_s)
+        # Check if any long outer span strictly encloses spans from other distinct stages.
+        if len(ivs_sorted) >= 2 and len(ivs_sorted) <= 64:
+            for idx_a, (sa, ea, ka) in enumerate(ivs_sorted):
+                for idx_b, (sb, eb, kb) in enumerate(ivs_sorted):
+                    if idx_a == idx_b or ka == kb:
+                        continue
+                    if sa <= sb + 1e-6 and eb <= ea + 1e-6 and (ea - sa) > (eb - sb) * 1.05:
+                        enclosed_counts[ka] += 1
+                        enclosed_children[ka].add(kb)
+
     dom_stage = max(stage_us, key=lambda k: stage_us[k])
     dom_us = stage_us[dom_stage]
     dom_share = dom_us / total_us
+    dom_union_share = dom_us / max(union_total_us, 1e-9)
     dom_lanes = max(1, len(stage_lanes.get(dom_stage) or ()))
     spans_per_lane = stage_n[dom_stage] / float(dom_lanes)
     per_lane_us = dom_us / float(dom_lanes)
     total_lanes = max(1, len(all_active_lanes))
     overall_spans_per_lane = sum(stage_n.values()) / float(total_lanes)
-    overall_per_lane_us = total_us / float(total_lanes)
+    overall_per_lane_us = union_total_us / float(total_lanes)
 
+    nested_wrappers = [
+        k for k, kids in enclosed_children.items()
+        if kids
+        and (stage_n[k] / float(max(1, len(stage_lanes.get(k) or ())))) <= 1.5
+        and (stage_us[k] / float(max(1, len(stage_lanes.get(k) or ())))) >= float(min_active_us)
+        and (stage_us[k] / max(union_total_us, 1e-9)) >= 0.85
+    ]
+    nested_wrapper_collapsed = bool(nested_wrappers)
     single_collapsed = bool(
-        per_lane_us >= float(min_active_us)
-        and dom_share >= float(max_single_stage_share)
+        not nested_wrapper_collapsed
+        and per_lane_us >= float(min_active_us)
+        and (dom_share >= float(max_single_stage_share) or dom_union_share >= float(max_single_stage_share))
         and spans_per_lane <= float(max_collapsed_spans_per_lane)
     )
     multi_coarse_no_mem = bool(
@@ -1647,13 +1699,29 @@ def verify_stage_granularity(
         and spans_per_lane <= 1.5
         and overall_spans_per_lane <= 6.0
     )
-    coarse_collapsed = (not single_collapsed) and (multi_coarse_no_mem or multi_coarse_long_warp)
-    ok = not (single_collapsed or coarse_collapsed)
-    code = (
-        "SINGLE_STAGE_LOOP_COLLAPSE" if single_collapsed
-        else ("COARSE_PHASE_ONLY_COLLAPSE" if coarse_collapsed else None)
+    coarse_collapsed = (
+        (not nested_wrapper_collapsed)
+        and (not single_collapsed)
+        and (multi_coarse_no_mem or multi_coarse_long_warp)
     )
-    if single_collapsed:
+    ok = not (nested_wrapper_collapsed or single_collapsed or coarse_collapsed)
+    code = (
+        "NESTED_WRAPPER_COLLAPSE" if nested_wrapper_collapsed
+        else ("SINGLE_STAGE_LOOP_COLLAPSE" if single_collapsed
+              else ("COARSE_PHASE_ONLY_COLLAPSE" if coarse_collapsed else None))
+    )
+    if nested_wrapper_collapsed:
+        w0 = max(nested_wrappers, key=lambda k: stage_us[k])
+        kids = sorted(enclosed_children[w0])[:4]
+        w_pct = 100.0 * stage_us[w0] / max(union_total_us, 1e-9)
+        w_spl = stage_n[w0] / float(max(1, len(stage_lanes.get(w0) or ())))
+        msg = (
+            f"Nested outer macro-wrapper detected: stage '{w0}' covers {w_pct:.1f}% of union active time in "
+            f"{w_spl:.2f} spans/lane while enclosing inner stage(s) {kids}. Do not wrap the entire kernel/device "
+            "call in an outer macro-probe; place disjoint sibling per-tile stages (load, mma_qk, softmax, mma_pv, "
+            "epilogue/store) instead."
+        )
+    elif single_collapsed:
         msg = (
             f"Stage '{dom_stage}' absorbs {100.0 * dom_share:.1f}% of active time in {spans_per_lane:.2f} "
             f"spans/lane ({per_lane_us:.1f} us/lane): main loop collapsed into a single coarse bar; "
@@ -1749,7 +1817,6 @@ def verify_warp_completeness(
             m = re.search(r"\b(?:w|warp\s*)(\d+)\b", tname, re.I)
             if m:
                 w = int(m.group(1))
-                warps_seen.add(w)
                 warp_roles.setdefault(w, set()).add(tname)
 
     if gran == 0 and wpc > 1:
@@ -1854,7 +1921,7 @@ def verify_sw_hw_coverage(
                 "message": (
                     f"SW timeline span ({sw:.2f} us) diverges from HW kernel duration ({hw:.2f} us) "
                     f"by {span_delta_ratio * 100.0:.2f}% (> {max_span_delta_ratio * 100.0:.1f}%); "
-                    "check for tag==0 holes, missing FI_CLOSE, or early CTA truncation."
+                    "check for tag==0 holes, missing WP_CLOSE, or early CTA truncation."
                 ),
             })
 

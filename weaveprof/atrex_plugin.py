@@ -99,7 +99,7 @@ class AutoProfService:
         return plan_context_and_search_space(source_text, **kwargs)
 
     def select_compiler_arm(self, compile_fn: Any, source_text: str, **kwargs: Any) -> Dict[str, Any]:
-        """D2: compile WP_CTX_1R first, fall back to FI_SMEM_ZREG / WP_CTX_1R_NOINLINE on spill/STL regression."""
+        """D2: compile WP_CTX_REG first, fall back to WP_CTX_SMEM / WP_CTX_REG_NOINLINE on spill/STL regression."""
         return run_compiler_feedback_selection(compile_fn, source_text, **kwargs)
 
     def compare_rounds(self, prev_report: Mapping[str, Any], curr_report: Mapping[str, Any], **kwargs: Any) -> Dict[str, Any]:

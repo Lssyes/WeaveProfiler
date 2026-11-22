@@ -401,10 +401,11 @@ def main() -> int:
               "(2) **溢出后停采**：打到约 0.6 s 就 'GPU Metrics [0]: Sampling buffer overflow'，"
               "此后不再采（采样段只有一段、末尾停在 kernel 之前，>1 ms 的空洞列表反而是空的）。"
               "先去 nsys 的日志里搜 Sampling buffer overflow 分辨是哪一种。"
-              "把 --gpu-metrics-frequency 降到 50000（20 us 间隔）重采，这个档在 H20 上实测 7.26 s 连续无断档；"
-              "Python/Triton 驱动再加 --capture-range=cudaProfilerApi --capture-range-end=stop "
-              "把窗口只包住要采的 launch，别对整个进程全程采（窗口压到亚秒级时 200 kHz 也能连续，"
-              "但采完必须核查覆盖）。确实只要软件时间线、不要硬件曲线时，显式加 --allow-missing-metrics"
+              "优先在 Python/Triton/CUDA 驱动里给目标 steady-state launch 包上 cudaProfilerStart/Stop，"
+              "并用 --capture-range=cudaProfilerApi --capture-range-end=stop 把窗口压到亚秒级，继续用 200 kHz"
+              "（--gpu-metrics-frequency=200000，5 us 间隔）重采并核查覆盖；"
+              "只有在单次稳态 launch 本身超过数百毫秒且仍发生 buffer overflow 时，才退回较低采样率（例如 100000 或 50000）。"
+              "确实只要软件时间线、不要硬件曲线时，显式加 --allow-missing-metrics"
               "（summary.align.ok 会记 false，退出码 2）。", file=sys.stderr)
         summ["align"] = align
         write_json(summ, a.out.replace(".gz", "").replace(".json", "") + ".summary.json")

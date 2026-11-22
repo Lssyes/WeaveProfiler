@@ -223,8 +223,9 @@ class HeaderContractTest(unittest.TestCase):
             mapping = f"#define {fi_name} {wp_name}"
             self.assertIn(mapping, self.wp)
             self.assertLess(self.wp.index(mapping), self.wp.index(f"#ifndef {fi_name}\n#define {fi_name}"))
-        for name in ("WP_SMEM_ZREG", "WP_CTX_1R", "WP_CTX_1R_NOINLINE", "WP_DEFINE_HOST_API"):
+        for name in ("WP_CTX_SMEM", "WP_CTX_REG", "WP_CTX_REG_NOINLINE", "WP_DEFINE_HOST_API"):
             self.assertIn(name, self.wp)
+        self.assertIn("FiBuf wp_active_buf()", self.wp)
         for wp_name, fi_name in (("WP_LEVEL", "FI_LEVEL"), ("WP_TIMER", "FI_TIMER"), ("WP_GRAN", "FI_GRAN")):
             self.assertIn(f"#define {fi_name} {wp_name}", self.hip)
         self.assertLess(self.hip.index("#define FI_TIMER WP_TIMER"), self.hip.index("#define FI_TIMER 1"))
@@ -246,20 +247,20 @@ class HeaderContractTest(unittest.TestCase):
     def test_sync_cursor_handles_every_context_mode(self):
         body = self.wp
         self.assertNotRegex(body, r"#define WP_SYNC_CURSOR_(?:OUT|IN)\(\).*fi_ctx_\.p")
-        sync_body = body[body.index("wp_sync_cursor_out_zreg"):]
-        i_zreg = sync_body.index("wp_sync_cursor_out_zreg(FI_ZREG_SLOT())")
-        i_1r = sync_body.index("#elif defined(WP_CTX_1R)")
-        i_def = sync_body.index("#else", i_1r)
-        self.assertLess(i_zreg, i_1r)
-        self.assertIn("wp_sync_cursor_out_1r(fi_ctx_)", sync_body[i_1r:i_def])
-        self.assertIn("WP_1R_SLOT_SHIFT", sync_body[i_1r:i_def])
+        sync_body = body[body.index("wp_sync_cursor_out_smem"):]
+        i_smem = sync_body.index("wp_sync_cursor_out_smem(WP_SMEM_SLOT())")
+        i_reg = sync_body.index("#elif defined(WP_CTX_REG)")
+        i_def = sync_body.index("#else", i_reg)
+        self.assertLess(i_smem, i_reg)
+        self.assertIn("wp_sync_cursor_out_reg(fi_ctx_)", sync_body[i_reg:i_def])
+        self.assertIn("WP_REG_SLOT_SHIFT", sync_body[i_reg:i_def])
         self.assertIn("wp_sync_cursor_out_ctx(fi_ctx_)", sync_body[i_def:])
         self.assertEqual(len(re.findall(r"#define WP_SYNC_CURSOR_OUT\(\)", body)), 4)
         self.assertEqual(len(re.findall(r"#define WP_SYNC_CURSOR_IN\(\)", body)), 4)
         self.assertEqual(len(re.findall(r"static inline \w+ wp_host_init\(", body)), 1)
-        # SMEM_ZREG callees bind the shared context under the kernel's name (FI_ZREG_SLOT resolves in both).
-        self.assertIn("#define FI_ZREG_PARAM_DECL FiSmemCtx* fi_sctx_", self.wp)
-        self.assertIn("#define FI_ZREG_PARAM_DECL FiSmemCtx& fi_sctx_", self.wp)
+        # WP_CTX_SMEM callees bind the shared context under the kernel's name (WP_SMEM_SLOT resolves in both).
+        self.assertIn("#define WP_SMEM_PARAM_DECL WpSmemCtx* fi_sctx_", self.wp)
+        self.assertIn("#define WP_SMEM_PARAM_DECL WpSmemCtx& fi_sctx_", self.wp)
         self.assertIn("#define FI_CTX_ARG , fi_sctx_", self.wp)
 
 
@@ -728,6 +729,76 @@ class MegakernelAuditTest(_TmpCase):
         self.assertFalse(rep_lazy["fidelity_gates"]["warps"]["ok"])
         self.assertEqual(rep_lazy["fidelity_gates"]["warps"]["code"], "HOLLOW_WARP_LANE")
 
+    def test_nested_wrapper_collapse_fails_gate_and_scheduling_multiset_passes(self):
+        # Reproduce FlashInfer FA2 defect: outer `attention` + `mma` macro-wrappers enclose inner
+        # `load` (0.63 us) and `store` (1.42 us) so naive summed share was 49.75%. MUST fail closed!
+        e_attn = KB["attention"]
+        e_store = KB["store"]
+        slots = {}
+        for cta in range(16):
+            slots[cta] = [
+                (BASE_NS, OPEN | 0, cta),
+                (BASE_NS + 100, e_attn, cta),
+                (BASE_NS + 200, E_MMA, cta),
+                (BASE_NS + 500, E_LOAD, cta), (BASE_NS + 1_130, END | E_LOAD, cta),
+                (BASE_NS + 162_000, e_store, cta), (BASE_NS + 163_420, END | e_store, cta),
+                (BASE_NS + 164_000, END | E_MMA, cta),
+                (BASE_NS + 164_100, END | e_attn, cta),
+                (BASE_NS + 164_500, CLOSE, 0),
+            ]
+        dump = self.tmp / "nested_fa2.wp02.bin"
+        dump.write_bytes(WPD.build_dump_bytes(slots, n_slots=16, cap=16, wpc=1,
+                                              meta={"arch": "sm_86", "gran": 1, "kernel": "SinglePrefill"}))
+        names_fa = {
+            "events": {str(e_attn): "attention", str(E_MMA): "mma", str(E_LOAD): "load", str(e_store): "store"},
+            "semantics": {str(e_attn): "attention", str(E_MMA): "mma", str(E_LOAD): "load", str(e_store): "store"},
+            "roles": {"0": "cta"},
+        }
+        ws = self._workspace()
+        rep = mk.run_megakernel_audit(
+            ws, entry_source="sparse_mla.cu", dump_path=dump, names=names_fa,
+            runtime_metrics=runtime_metrics(), card="h20", limit=0.10,
+            out_dir=self.tmp / "out-nested-fa2", render_overview_png=False,
+        )
+        self.assertEqual(rep["status"], "FAIL", rep)
+        self.assertFalse(rep["fidelity_gates"]["granularity"]["ok"])
+        self.assertEqual(rep["fidelity_gates"]["granularity"]["code"], "NESTED_WRAPPER_COLLAPSE")
+
+        # Scheduling-aware assembly check in backend.assess: 100% identical core opcodes (204 == 204)
+        # with software-pipeline reordering (global LCS ~0.92) MUST pass without forcing -O1!
+        from weaveprof.backend import assess
+        asm_dir = self.tmp / "sched_asm"
+        asm_dir.mkdir()
+        base_core = ["HMMA", "FFMA", "LDGSTS", "LDS", "STS", "MUFU"] * 34  # 204 core opcodes
+        inst_core = list(base_core)
+        for k in range(0, 36, 2):  # swap 18 adjacent pairs -> multiset 1.00, LCS ~0.91 (< 0.95)
+            inst_core[k], inst_core[k + 1] = inst_core[k + 1], inst_core[k]
+        (asm_dir / "l0.sass").write_text(
+            "Function : flash_prefill\n" + "".join(f"/*{16 * i:04x}*/ {op} R0, R1, R2;\n" for i, op in enumerate(base_core)),
+            encoding="utf-8",
+        )
+        (asm_dir / "inst.sass").write_text(
+            "Function : flash_prefill\n" + "".join(f"/*{16 * i:04x}*/ {op} R0, R1, R2;\n" for i, op in enumerate(inst_core)),
+            encoding="utf-8",
+        )
+        (asm_dir / "l0.bin").write_bytes(b"\x01\x02\x03\x04" * 8)
+        (asm_dir / "inst.bin").write_bytes(b"\x01\x02\x03\x04" * 8)
+        write_dump(asm_dir / "capture.fi02.bin")
+        (asm_dir / "names.json").write_text(json.dumps(NAMES), encoding="utf-8")
+        rt_asm = {
+            "kernel_name": "flash_prefill",
+            "baseline_sass": "l0.sass", "instrumented_sass": "inst.sass",
+            "baseline_spill_bytes": 0, "instrumented_spill_bytes": 0, "extra_smem_bytes": 0,
+            "baseline_output": "l0.bin", "instrumented_output": "inst.bin",
+            "warmup": 3, "baseline_ns": [100_000.0] * 6, "instrumented_ns": [101_000.0] * 6,
+        }
+        checks_asm, metrics_asm, errors_asm, _, _, _ = assess(
+            asm_dir, {"probes": [{"id": "kv_topk_load"}, {"id": "sparse_mla_mma"}]}, 0.10, runtime=rt_asm,
+        )
+        self.assertTrue(checks_asm["assembly"], (errors_asm, metrics_asm))
+        self.assertGreaterEqual(metrics_asm["core_multiset_ratio"], 0.999)
+        self.assertLess(metrics_asm["core_retention_ratio"], 0.95)
+
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})
         self.assertEqual(rep["status"], "FAIL", rep)
@@ -817,7 +888,7 @@ class HygieneTest(unittest.TestCase):
         "recorders/hip_cpp/wp_lite_hip.h", "recorders/cutedsl/wp_cute.py",
         "recorders/triton/wp_triton.py", "recorders/triton/wp_triton_amd.py",
         "weaveprof/pipeline/validate/tools/wp_decode.py", "weaveprof/pipeline/validate/tools/fi_lite_decode.py", "weaveprof/megakernel.py",
-        "weaveprof/viz.py", "tests/test_wp_megakernel.py",
+        "weaveprof/viz.py", "weaveprof/fast_search.py", "tests/test_wp_megakernel.py",
     )
 
     def test_lf_only_and_bytecode_guard(self):

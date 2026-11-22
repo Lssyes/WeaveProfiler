@@ -9,9 +9,10 @@ and always replies in the framing used by the client.
 Launch (wired by `agent_installer.py` into `.mcp.json` / `.codex/config.toml`):
     python -B <skill_root>/weaveprof/mcp_server.py --workspace <ws> --session-dir <session_dir>
 
-The session `.supervisor.key` is exported to `WEAVEPROF_SUPERVISOR_KEY_FILE` inside this
-process only, so seals produced by the profiling tools carry the session HMAC, and every
-verified seal is registered in `<session_dir>/session.json` for the enforcement hook.
+The session `.supervisor.key` is scoped to HMAC sealing and verification inside this server
+process and stripped from all build/benchmark child subprocesses, so seals produced by the
+profiling tools carry the session HMAC and every verified seal is registered in
+`<session_dir>/session.json` for the enforcement hook.
 """
 from __future__ import annotations
 
@@ -56,13 +57,13 @@ from weaveprof.guard_hook import (  # noqa: E402
 SERVER_NAME = "weaveprofiler"
 SERVER_VERSION = "1.0.0"
 SUPPORTED_PROTOCOLS = ("2024-11-05", "2025-03-26", "2025-06-18")
-DEFAULT_PROTOCOL = "2024-11-05"
+DEFAULT_PROTOCOL = SUPPORTED_PROTOCOLS[-1]
 
 INSTRUCTIONS = (
     "WeaveProfiler (wp) supervised GPU-kernel optimization. 1) weaveprof_status. 2) Seal the UNMODIFIED baseline with "
-    "weaveprof_megakernel_audit (fast shadow-copy audit) or weaveprof_profile: protected kernel edits are hook-blocked "
+    "weaveprof_megakernel_audit (fast isolated-copy audit) or weaveprof_profile: protected kernel edits are hook-blocked "
     "until an HMAC-verified PASS seal exists. 3) Optimize using weaveprof_plan_context / weaveprof_analyze / "
-    "weaveprof_compare_rounds evidence; never add WP_*/FI_* probes to production files. 4) Re-seal the final kernel "
+    "weaveprof_compare_rounds evidence; never add WP_* probes to production files. 4) Re-seal the final kernel "
     "before stopping (Stop gate)."
 )
 
@@ -122,27 +123,23 @@ TOOL_DEFS: List[Dict[str, Any]] = [
     },
     {
         "name": "weaveprof_megakernel_audit",
-        "description": ("Fast (~3-12s) shadow-copy, L0-cached megakernel profiler + 4-gate verifier for single- or "
-                        "multi-file CUDA C++ / CuTeDSL / Triton megakernels (FlashAttention, FlashMLA, FlashKDA, GDN, MoE). "
-                        "Never mutates the real workspace. Auto-renders a 3-panel SW+HW overview.png directly on the GPU "
-                        "host (no .perfetto.json.gz needed by default) alongside a compact <2 KB causal JSON report and "
-                        "an HMAC seal.json registered in the session (unlocks edits / final Stop gate)."),
+        "description": ("Fast (~3-12s) isolated-copy megakernel profiler (with cached baseline builds) + 4-gate verifier "
+                        "for single- or multi-file CUDA C++ / CuTeDSL / Triton megakernels (FlashAttention, FlashMLA, "
+                        "FlashKDA, GDN, MoE). Never mutates the real workspace. Auto-renders a 3-panel SW+HW "
+                        "overview.png locally (no .perfetto.json.gz needed by default) alongside a compact <2 KB "
+                        "causal JSON report and an HMAC seal.json registered in the session (unlocks edits / Stop gate)."),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "workspace": {**_S, "description": "Workspace root (defaults to the server workspace)."},
                 "entry_source": {**_S, "description": "Primary protected kernel file (defaults to first protected file)."},
-                "bench_cmd": {"oneOf": [_S, {"type": "array", "items": _S}], "description": "Shadow benchmark command."},
-                "build_cmd": {"oneOf": [_S, {"type": "array", "items": _S}], "description": "Optional parallel L0/L_inst build command."},
-                "inst_files": {"type": "object", "description": "Map of relative path -> instrumented shadow source text."},
+                "bench_cmd": {"oneOf": [_S, {"type": "array", "items": _S}], "description": "Benchmark command (locked to session bench_cmd when configured at install time)."},
+                "build_cmd": {"oneOf": [_S, {"type": "array", "items": _S}], "description": "Optional parallel baseline/instrumented build command."},
+                "inst_files": {"type": "object", "description": "Map of relative path -> instrumented temp-copy source text."},
                 "inst_dir": _S,
-                "dump_path": _S,
-                "names": {"oneOf": [_S, {"type": "object"}]},
-                "runtime_metrics": {"oneOf": [_S, {"type": "object"}]},
                 "nsys_sqlite": _S,
                 "capture_nsys": {"type": "boolean"},
-                "nsys_cmd": {"oneOf": [_S, {"type": "array", "items": _S}]},
-                "nsys_freq_hz": {"type": "integer", "minimum": 1000, "maximum": 500000},
+                "nsys_freq_hz": {"type": "integer", "minimum": 1000, "maximum": 500000, "description": "nsys --gpu-metrics-frequency in Hz (default: 200000 = 200 kHz high-frequency sampling)."},
                 "nsys_gpu_device": _S,
                 "nsys_capture_range": _S,
                 "render_overview_png": {"type": "boolean", "description": "Auto-render 3-panel SW+HW overview.png locally (default: true)."},
@@ -158,13 +155,13 @@ TOOL_DEFS: List[Dict[str, Any]] = [
                 "gpu_id": _S,
                 "use_l0_cache": {"type": "boolean"},
             },
-            "additionalProperties": True,
+            "additionalProperties": False,
         },
         "annotations": {"title": "wp megakernel audit", "readOnlyHint": False, "openWorldHint": False},
     },
     {
         "name": "weaveprof_profile",
-        "description": ("Closed-loop profile_for_agent on a kernel (shadow-copy instrumentation, ABBA overhead gate, "
+        "description": ("Closed-loop profile_for_agent on a kernel (isolated-copy instrumentation, ABBA overhead gate, "
                         "fidelity gates) returning a compact seal-verified report; the seal is registered in the "
                         "session."),
         "inputSchema": {
@@ -178,7 +175,6 @@ TOOL_DEFS: List[Dict[str, Any]] = [
                 "max_rounds": {"type": "integer", "minimum": 1, "maximum": 10},
                 "out": _S,
                 "run_dir": _S,
-                "require_abba_order": {"type": "boolean"},
                 "enforce_trace_processor": {"type": "boolean"},
                 "prev_causal_report": {"type": "object"},
                 "prev_causal_report_path": _S,
@@ -248,7 +244,7 @@ TOOL_DEFS: List[Dict[str, Any]] = [
             "required": ["seal_path"],
             "additionalProperties": False,
         },
-        "annotations": {"title": "wp verify seal", "readOnlyHint": True, "openWorldHint": False},
+        "annotations": {"title": "wp verify seal", "readOnlyHint": False, "openWorldHint": False},
     },
 ]
 
@@ -302,6 +298,8 @@ class WeaveProfServer:
         for r in roots:
             if np == r or np.startswith(r + "/"):
                 raise ValueError(f"{label}={raw_path!r} targets protected supervisor/agent configuration")
+        if np == ws or np.startswith(ws + "/"):
+            raise ValueError(f"{label}={raw_path!r} must be outside the workspace to avoid mutating real project files")
         name = p.name.lower()
         if name.endswith("seal.json") or name in ("verify.json", "episode_ledger.json", ".supervisor.key", "session.json"):
             raise ValueError(f"{label}={raw_path!r} targets protected evidence/session file")
@@ -311,13 +309,15 @@ class WeaveProfServer:
             return
         text = " ".join(str(x) for x in cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
         low = text.replace("\\", "/").lower()
-        forbidden = (".supervisor.key", ".supervisor.", "weaveprof/sessions", "weaveprof_supervisor_hmac_key",
-                     "weaveprof_sessions_dir", str(self.session_dir).replace("\\", "/").lower(),
-                     str(self.session_dir.parent).replace("\\", "/").lower())
+        from weaveprof.guard_hook import SECRET_NEEDLES, _CONFIG_WRITE_RE, _EVIDENCE_WRITE_RE, _INSTALLER_RE, _SAMPLING_RE
+        forbidden = (
+            *SECRET_NEEDLES,
+            str(self.session_dir).replace("\\", "/").lower(),
+            str(self.session_dir.parent).replace("\\", "/").lower(),
+        )
         for needle in forbidden:
             if needle and needle in low:
                 raise ValueError(f"{label} references protected supervisor state ({needle!r})")
-        from weaveprof.guard_hook import _CONFIG_WRITE_RE, _EVIDENCE_WRITE_RE, _INSTALLER_RE, _SAMPLING_RE
         if _SAMPLING_RE.search(text):
             raise ValueError(f"{label} sets WP_SAMPLE/FI_SAMPLE > 1 (forbidden)")
         if _INSTALLER_RE.search(text):
@@ -326,6 +326,21 @@ class WeaveProfServer:
             raise ValueError(f"{label} attempts to modify sealed evidence")
         if _CONFIG_WRITE_RE.search(text):
             raise ValueError(f"{label} attempts to modify agent hook/MCP configuration")
+
+    def _enforce_locked_bench(self, raw_cmd: Any, sess: Dict[str, Any], label: str) -> Optional[List[str]]:
+        locked = sess.get("bench_cmd")
+        if isinstance(raw_cmd, str):
+            req = shlex.split(raw_cmd, posix=(os.name != "nt"))
+        elif isinstance(raw_cmd, (list, tuple)):
+            req = [str(x) for x in raw_cmd]
+        else:
+            req = None
+        if locked:
+            locked_list = [str(x) for x in locked]
+            if req is not None and req != locked_list:
+                raise ValueError(f"{label} is locked by the session installed at provisioning time ({locked_list!r})")
+            return locked_list
+        return req
 
     def _limit(self, args: Dict[str, Any]) -> None:
         sess = self._session() or {}
@@ -383,7 +398,15 @@ class WeaveProfServer:
             from weaveprof.megakernel import run_megakernel_audit
         except ImportError as exc:
             raise RuntimeError(f"weaveprof.megakernel is unavailable: {exc}") from exc
+        from weaveprof.harness import HarnessPolicy
+
         args = dict(args)
+        for forbidden_key in ("dump_path", "runtime_metrics", "names", "nsys_cmd", "policy"):
+            if forbidden_key in args:
+                raise ValueError(
+                    f"`{forbidden_key}` is not allowed on MCP weaveprof_megakernel_audit "
+                    "(MCP audits always execute the isolated benchmark workflow)."
+                )
         args.setdefault("workspace", str(self.workspace))
         sess = self._session() or {}
         if "bench" in args and "bench_cmd" not in args:
@@ -396,25 +419,29 @@ class WeaveProfServer:
             prot = sess.get("protected") or []
             if prot and isinstance(prot[0], dict) and prot[0].get("path"):
                 args["entry_source"] = prot[0]["path"]
-        self._resolve_paths(args, ("workspace", "entry_source", "inst_dir", "dump_path", "nsys_sqlite", "out_dir"))
+        self._resolve_paths(args, ("workspace", "entry_source", "inst_dir", "nsys_sqlite", "out_dir"))
         self._validate_out_path(args.get("out_dir"), "out_dir")
+        locked_bench = self._enforce_locked_bench(args.get("bench_cmd"), sess, "bench_cmd")
+        if not locked_bench:
+            raise ValueError("`bench_cmd` is required (no default bench command recorded at install time)")
+        args["bench_cmd"] = locked_bench
         self._validate_cmd(args.get("bench_cmd"), "bench_cmd")
         self._validate_cmd(args.get("build_cmd"), "build_cmd")
-        self._validate_cmd(args.get("nsys_cmd"), "nsys_cmd")
         try:
             params = inspect.signature(run_megakernel_audit).parameters
             accepts_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
         except (TypeError, ValueError):
             params, accepts_kw = {}, True
-        for key, val in (("bench_cmd", sess.get("bench_cmd")), ("card", sess.get("card")), ("arch", sess.get("arch"))):
+        for key, val in (("card", sess.get("card")), ("arch", sess.get("arch"))):
             if key not in args and val not in (None, "", []) and (key in params or accepts_kw):
-                if key == "bench_cmd" and args.get("dump_path"):
-                    continue
                 args[key] = val
         if not accepts_kw:
             args = {k: v for k, v in args.items() if k in params}
         if "limit" in params or accepts_kw or "limit" in args:
             self._limit(args)
+        ceiling = float(sess.get("max_overhead")) if sess.get("max_overhead") is not None else float(args.get("limit", 0.10))
+        if "policy" in params or accepts_kw:
+            args["policy"] = HarnessPolicy(max_overhead_limit=ceiling)
         ctx = supervisor_env(self.session_dir) if (self.session_dir / KEY_FILE).is_file() else contextlib.nullcontext()
         with ctx, _chdir(self.workspace):
             res = run_megakernel_audit(**args)
@@ -426,20 +453,21 @@ class WeaveProfServer:
         from weaveprof.aka_adapter import _handle_profile
 
         args = dict(args)
+        args.pop("require_abba_order", None)
         self._resolve_paths(args, ("source", "run_dir", "out", "prev_causal_report_path"))
         self._validate_out_path(args.get("out"), "out")
         self._validate_out_path(args.get("run_dir"), "run_dir")
-        self._validate_cmd(args.get("bench"), "bench")
         sess = self._session() or {}
-        if isinstance(args.get("bench"), str):
-            args["bench"] = shlex.split(args["bench"], posix=os.name != "nt")
-        if not args.get("bench"):
-            if not sess.get("bench_cmd"):
-                raise ValueError("`bench` is required (no default bench command recorded at install time)")
-            args["bench"] = list(sess["bench_cmd"])
+        locked_bench = self._enforce_locked_bench(args.get("bench"), sess, "bench")
+        if not locked_bench:
+            raise ValueError("`bench` is required (no default bench command recorded at install time)")
+        args["bench"] = locked_bench
+        self._validate_cmd(args.get("bench"), "bench")
         if "card" not in args and sess.get("card"):
             args["card"] = sess["card"]
         self._limit(args)
+        if sess.get("max_overhead") is not None:
+            args["max_overhead_limit"] = float(sess["max_overhead"])
         if not args.get("out"):
             args["out"] = str(self._runs_dir() / "out.perfetto-trace")
         ctx = supervisor_env(self.session_dir) if (self.session_dir / KEY_FILE).is_file() else contextlib.nullcontext()
@@ -473,7 +501,9 @@ class WeaveProfServer:
 
         args = dict(args)
         self._resolve_paths(args, ("seal_path",))
-        res = _handle_verify_seal(args)
+        ctx = supervisor_env(self.session_dir) if (self.session_dir / KEY_FILE).is_file() else contextlib.nullcontext()
+        with ctx:
+            res = _handle_verify_seal(args)
         if isinstance(res, dict) and res.get("ok"):
             res = dict(res)
             res["seal_path"] = args["seal_path"]
@@ -671,9 +701,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     workspace = Path(args.workspace or sess.get("workspace") or os.getcwd()).expanduser().resolve()
 
     os.environ.pop("WEAVEPROF_SUPERVISOR_HMAC_KEY", None)
-    if (sd / KEY_FILE).is_file():
-        os.environ["WEAVEPROF_SUPERVISOR_KEY_FILE"] = str(sd / KEY_FILE)
-    else:
+    os.environ.pop("WEAVEPROF_SUPERVISOR_KEY_FILE", None)
+    if not (sd / KEY_FILE).is_file():
         sys.stderr.write(f"[weaveprofiler-mcp] warning: no session key at {sd}; seals will not be registered\n")
 
     out = _protect_stdout()

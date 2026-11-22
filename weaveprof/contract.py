@@ -14,6 +14,113 @@ STAGES = {name: i for i, name in enumerate((
     "megakernel", "softmax",
 ), 1)}
 
+_SEMANTIC_TOKEN_ALIASES = {
+    "dma": "load",
+    "tma": "load",
+    "prefetch": "load",
+    "copy": "load",
+    "ldg": "load",
+    "ldmatrix": "load",
+    "gather": "load",
+    "wgmma": "mma",
+    "hmma": "mma",
+    "mfma": "mma",
+    "wmma": "mma",
+    "tcgen": "mma",
+    "tcgen05": "mma",
+    "dot": "mma",
+    "matmul": "mma",
+    "sync": "barrier",
+    "synchronization": "barrier",
+    "fence": "barrier",
+    "mbar": "barrier",
+    "mbarrier": "barrier",
+    "reduce": "reduction",
+    "writeback": "store",
+    "stg": "store",
+    "comm": "communication",
+    "nvshmem": "communication",
+    "nccl": "communication",
+    "rccl": "communication",
+    "p2p": "communication",
+    "allreduce": "communication",
+    "allgather": "communication",
+    "alltoall": "communication",
+    "scatter": "dispatch",
+    "conv": "convolution",
+    "mdo": "softmax",
+    "exp2": "softmax",
+}
+
+_SEMANTIC_EXACT_ALIASES = {
+    "tma_load": "load",
+    "cp_async": "load",
+    "tma_store": "store",
+    "gemm_mma": "mma",
+    "mbarrier_wait": "wait",
+    "cp_async_wait": "wait",
+    "wgmma_wait": "wait",
+    "finalize_m": "softmax",
+    "update_mdo_states": "softmax",
+}
+
+
+def resolve_semantic_id(raw_id, *, default="compute"):
+    """Single authoritative token-level semantic ID resolver shared across contract and scan paths.
+
+    Splits compound probe names into alphanumeric tokens (never arbitrary substrings, so e.g.
+    `gamma_scale` / `summary_stats` will not match `mma`) and resolves action modifiers cleanly
+    (`tma_store_out -> store`, `mbarrier_wait -> wait`, `qk_mma`/`mfma_qk -> mma`).
+    """
+    s = str(raw_id or "").strip().lower()
+    if not s:
+        return default
+    if s in STAGES:
+        return s
+    if s in _SEMANTIC_EXACT_ALIASES:
+        return _SEMANTIC_EXACT_ALIASES[s]
+    raw_tokens = re.findall(r"[a-z0-9]+", s)
+    if not raw_tokens:
+        return default
+    # Strip trailing digits on alphabetic tokens (`softmax0` -> `softmax`, `mma1` -> `mma`),
+    # keeping known alphanumeric identifiers like `tcgen05`.
+    tokens = [
+        t if (t in STAGES or t in _SEMANTIC_TOKEN_ALIASES) else re.sub(r"\d+$", "", t)
+        for t in raw_tokens
+    ]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return default
+    joined = "_".join(tokens)
+    if joined in STAGES:
+        return joined
+    if joined in _SEMANTIC_EXACT_ALIASES:
+        return _SEMANTIC_EXACT_ALIASES[joined]
+    # Explicit wait modifier wins over barrier/load/mma prefix (e.g. `mbarrier_wait`, `mma_wait`).
+    if "wait" in tokens:
+        return "wait"
+    # If the leading token is already a canonical stage ID, honor it unless `load` is refined by `store`.
+    first = tokens[0]
+    if first in STAGES:
+        if first == "load" and ("store" in tokens or "writeback" in tokens):
+            return "store"
+        return first
+    # Otherwise inspect remaining tokens for canonical stages first (e.g. `tma_store_out -> store`,
+    # `qk_mma -> mma`), then unambiguous token aliases (`mfma_qk -> mma`, `dma_issue -> load`).
+    canonical_hits = [t for t in tokens if t in STAGES]
+    if canonical_hits:
+        for pref in ("communication", "softmax", "reduction", "store", "epilogue", "mma", "load", "barrier", "dispatch"):
+            if pref in canonical_hits:
+                return pref
+        return canonical_hits[0]
+    alias_hits = [_SEMANTIC_TOKEN_ALIASES[t] for t in tokens if t in _SEMANTIC_TOKEN_ALIASES]
+    if alias_hits:
+        for pref in ("communication", "softmax", "store", "mma", "reduction", "load", "barrier", "dispatch"):
+            if pref in alias_hits:
+                return pref
+        return alias_hits[0]
+    return default
+
 
 def spill_delta_bytes(baseline, instrumented, reported=None):
     """Read measured spill bytes from both builds, or a previously computed delta."""
@@ -163,20 +270,7 @@ def normalize_probe_spec(doc, source_text=None, *, language=None):
                 p["aux_expr"] = _expression(str(raw_slot) if type(raw_slot) is int else raw_slot, "slot", language=language)
         else:
             p.setdefault("aux_expr", "")
-        sem = p.get("semantic_id") or next(
-            (s for s in STAGES if pid == s or pid.startswith(s + "_") or re.fullmatch(rf"{s}\d+", pid)),
-            None,
-        )
-        if sem is None:
-            low_pid = pid.lower()
-            if low_pid.startswith(("dma", "tma", "prefetch", "copy", "cp_async")):
-                sem = "load"
-            elif low_pid.startswith(("wgmma", "hmma", "tcgen")):
-                sem = "mma"
-            elif low_pid.startswith(("sync", "mbar")):
-                sem = "barrier"
-            else:
-                sem = "compute"
+        sem = resolve_semantic_id(p.get("semantic_id") or pid)
         eid = p.get("event_id")
         if eid is None:
             preferred = STAGES.get(sem)

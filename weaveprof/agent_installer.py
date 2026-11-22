@@ -44,11 +44,16 @@ if str(SKILL_ROOT) not in sys.path:
 
 from weaveprof.guard_hook import (  # noqa: E402
     BACKUP_DIRNAME,
+    CONFIG_BACKUP_DIRNAME,
     KEY_FILE,
     SESSION_FILE,
     SESSION_SCHEMA,
+    _under,
+    compute_policy_hmac,
+    mutated_config_files,
     mutated_since_baseline,
     read_session,
+    restore_config_files,
     restore_protected,
     session_dir_for,
     sha256_file,
@@ -62,13 +67,16 @@ MCP_SERVER = _HERE / "mcp_server.py"
 BEGIN_MARK = "<!-- WEAVEPROFILER:BEGIN -->"
 END_MARK = "<!-- WEAVEPROFILER:END -->"
 KERNEL_SUFFIXES = (".cu", ".cuh", ".hip")
+CPP_KERNEL_SUFFIXES = (".cpp", ".h", ".hpp")
+CPP_KERNEL_MARKERS = ("__global__", "__device__", "hipLaunchKernel", "cutlass::", "cute::", "wgmma", "tcgen05")
 PY_KERNEL_MARKERS = ("@triton.jit", "@triton.autotune", "@cute.kernel", "@cute.jit", "cutlass.cute")
 SKIP_DIRS = {".git", ".hg", ".svn", ".claude", ".codex", ".qwen", ".agents", "node_modules", "build", "dist",
              "__pycache__", ".venv", "venv", "env", ".weaveprof", ".weaveprof_cache", ".mypy_cache",
              ".pytest_cache", "third_party"}
 MAX_AUTODISCOVER = 64
 HOOK_EVENTS = ("PreToolUse", "PostToolUse", "Stop")
-QWEN_HOOK_EVENTS = ("PreToolUse", "PostToolUse", "Stop", "SubagentStop")
+CLAUDE_HOOK_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop")
+QWEN_HOOK_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop")
 AGY_GROUPED_EVENTS = ("PreToolUse", "PostToolUse")
 AGY_FLAT_EVENTS = ("PostInvocation", "Stop")
 
@@ -104,7 +112,12 @@ def _posix(p: Union[str, Path]) -> str:
 def _shell_quote(s: str) -> str:
     if os.name != "nt":
         return shlex.quote(s)
-    return f'"{s}"' if re.search(r"[\s&()^|<>\"']", s) else s
+    return f'"{s}"' if re.search(r"[\s&()^|<>\"'%,;$`]", s) else s
+
+
+def _ps_quote(s: str) -> str:
+    """PowerShell single-quoted literal (treats $, `, %, ;, , and spaces verbatim)."""
+    return "'" + s.replace("'", "''") + "'"
 
 
 def _toml_str(s: str) -> str:
@@ -144,6 +157,14 @@ def _is_kernel_py(path: Path) -> bool:
     return any(m in text for m in PY_KERNEL_MARKERS)
 
 
+def _is_kernel_cpp(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return any(m in text for m in CPP_KERNEL_MARKERS)
+
+
 def discover_kernel_files(workspace: Path) -> List[Path]:
     found: List[Path] = []
     for root, dirs, files in os.walk(workspace):
@@ -151,7 +172,9 @@ def discover_kernel_files(workspace: Path) -> List[Path]:
         for name in sorted(files):
             p = Path(root) / name
             suf = p.suffix.lower()
-            if suf in KERNEL_SUFFIXES or (suf == ".py" and _is_kernel_py(p)):
+            if (suf in KERNEL_SUFFIXES
+                    or (suf in CPP_KERNEL_SUFFIXES and _is_kernel_cpp(p))
+                    or (suf == ".py" and _is_kernel_py(p))):
                 found.append(p.resolve())
                 if len(found) > MAX_AUTODISCOVER:
                     raise ValueError(f"Auto-discovery found > {MAX_AUTODISCOVER} kernel files under {workspace}; "
@@ -258,11 +281,12 @@ def _hook_command(py: str, event: str, workspace: Path, sd: Path, *,
     if protocol:
         parts.extend(["--protocol", protocol])
     parts.extend(["--event", event])
-    quoted = [_shell_quote(x) for x in parts]
-    # On Windows, Qwen Code executes hooks via PowerShell, where a quoted executable path
-    # requires the `&` call operator to avoid being parsed as a string literal.
-    if ps_safe and os.name == "nt" and quoted[0].startswith('"'):
+    # On Windows, Qwen Code command hooks run under explicit `shell: powershell`; single-quoted
+    # literals with `&` call operator prevent `$`, backtick, `%`, `,`, `;` and space expansion.
+    if ps_safe and os.name == "nt":
+        quoted = [_ps_quote(x) for x in parts]
         return "& " + " ".join(quoted)
+    quoted = [_shell_quote(x) for x in parts]
     return " ".join(quoted)
 
 
@@ -287,6 +311,8 @@ def _merge_hooks(doc: Dict[str, Any], py: str, workspace: Path, sd: Path, matche
             "command": _hook_command(py, event, workspace, sd, protocol=protocol, ps_safe=ps_safe),
             "timeout": 120,
         }
+        if ps_safe and os.name == "nt":
+            handler["shell"] = "powershell"
         if named:
             handler["name"] = f"weaveprofiler-{event.lower()}"
         entry: Dict[str, Any] = {"hooks": [handler]}
@@ -365,12 +391,12 @@ def _workflow_block(session: Dict[str, Any]) -> str:
         f"{bench_line}\n"
         "1. Call MCP `weaveprof_status` to see protected files, seal state and gate status.\n"
         "2. Before ANY edit of a protected file, seal the unmodified baseline with `weaveprof_megakernel_audit` "
-        "(fast shadow-copy megakernel audit) or `weaveprof_profile`. Edits stay blocked until an HMAC-verified "
+        "(fast isolated-copy megakernel audit) or `weaveprof_profile`. Edits stay blocked until an HMAC-verified "
         "PASS seal exists; out-of-band mutations (shell, scripts) are reverted to the exact baseline bytes.\n"
         "3. Choose optimizations from evidence: `weaveprof_plan_context`, `weaveprof_analyze`, "
         "`weaveprof_compare_rounds` (follow `next_round_directive`, revert regressions).\n"
-        "4. Keep production kernel source probe-free: never add `wp_lite.cuh`, `WP_OPEN`, `WP_B(`/`WP_E(` (or "
-        "legacy `FI_*`) probes; profiling instruments a shadow copy.\n"
+        "4. Keep production kernel source probe-free: never add `wp_lite.cuh`, `WP_OPEN`, or `WP_B(`/`WP_E(` "
+        "probes; profiling instruments an isolated temporary copy.\n"
         "5. After each optimization re-run `weaveprof_megakernel_audit` / `weaveprof_profile`. The Stop gate "
         "refuses to finish until the final kernel bytes match a verified PASS seal (or you revert to a sealed "
         "incumbent).\n"
@@ -473,10 +499,13 @@ def install_agent_workspace(
         raise ValueError("max_overhead must be within [0, 0.5]")
     files = _resolve_protect(ws, protect_files)
     sd = session_dir_for(ws, sessions_root)
+    if _under(sd, ws):
+        raise ValueError(f"Session directory {sd} must be outside workspace {ws}")
     py = python_exe or sys.executable
     session = _provision_session(ws, files, sd=sd, bench=_bench_list(bench_cmd), card=card, arch=arch,
                                  max_overhead=max_overhead, require_final_seal=require_final_seal, reset=reset)
     written: List[str] = []
+    config_paths: List[Path] = []
     want_claude = agent in ("all", "both", "claude")
     want_codex = agent in ("all", "both", "codex")
     want_qwen = agent in ("all", "qwen")
@@ -493,10 +522,10 @@ def install_agent_workspace(
         doc["mcpServers"] = servers
         _dump_json(mcp_path, doc)
         settings_path = ws / ".claude" / "settings.json"
-        _dump_json(settings_path, _merge_hooks(_load_json(settings_path), py, ws, sd, "*"))
+        _dump_json(settings_path, _merge_hooks(_load_json(settings_path), py, ws, sd, "*", events=CLAUDE_HOOK_EVENTS))
         local_path = ws / ".claude" / "settings.local.json"
         local = _load_json(local_path)
-        local["enableAllProjectMcpServers"] = True
+        local.pop("enableAllProjectMcpServers", None)
         enabled = local.get("enabledMcpjsonServers") if isinstance(local.get("enabledMcpjsonServers"), list) else []
         if "weaveprofiler" not in enabled:
             enabled.append("weaveprofiler")
@@ -505,6 +534,7 @@ def install_agent_workspace(
         skill_path = ws / ".claude" / "skills" / "weaveprofiler" / "SKILL.md"
         _write_text(skill_path, skill)
         _upsert_block(ws / "CLAUDE.md", block)
+        config_paths += [mcp_path, settings_path, local_path]
         written += [str(mcp_path), str(settings_path), str(local_path), str(skill_path), str(ws / "CLAUDE.md")]
 
     if want_codex:
@@ -516,6 +546,7 @@ def install_agent_workspace(
         skill_path = ws / ".agents" / "skills" / "weaveprofiler" / "SKILL.md"
         _write_text(skill_path, skill)
         _upsert_block(ws / "AGENTS.md", block)
+        config_paths += [cfg_path, hooks_path]
         written += [str(cfg_path), str(hooks_path), str(skill_path), str(ws / "AGENTS.md")]
 
     if want_qwen:
@@ -533,9 +564,12 @@ def install_agent_workspace(
         qskill = ws / ".qwen" / "skills" / "weaveprofiler" / "SKILL.md"
         _write_text(qskill, skill)
         _upsert_block(ws / "QWEN.md", block)
+        config_paths += [qwen_settings]
         written += [str(qwen_settings), str(qskill), str(ws / "QWEN.md")]
 
     if want_agy:
+        # Native Antigravity plugins load hooks strictly from `<plugin_dir>/hooks.json`
+        # (`.agents/plugins/weaveprofiler/hooks.json`), avoiding duplicate execution with `.agents/hooks.json`.
         plugin_dir = ws / ".agents" / "plugins" / "weaveprofiler"
         plugin_json = plugin_dir / "plugin.json"
         pdoc = _load_json(plugin_json)
@@ -554,11 +588,28 @@ def install_agent_workspace(
         agy_skill = plugin_dir / "skills" / "weaveprofiler" / "SKILL.md"
         _write_text(agy_skill, skill)
         _upsert_block(ws / "GEMINI.md", block)
+        config_paths += [plugin_json, agy_mcp, agy_hooks]
         written += [str(plugin_json), str(agy_mcp), str(agy_hooks), str(agy_rules), str(agy_skill),
                     str(ws / "GEMINI.md")]
         if not want_codex:
             _upsert_block(ws / "AGENTS.md", block)
             written.append(str(ws / "AGENTS.md"))
+
+    # Snapshot installed hook/MCP config files and sign immutable session policy with HMAC-SHA256.
+    cfg_backups = sd / CONFIG_BACKUP_DIRNAME
+    cfg_backups.mkdir(parents=True, exist_ok=True)
+    _chmod(cfg_backups, 0o700)
+    cfg_by_rel = {str(e.get("rel")): e for e in (session.get("config_files") or []) if isinstance(e, dict)}
+    for cp in config_paths:
+        rel = cp.relative_to(ws).as_posix()
+        bpath = cfg_backups / rel
+        bpath.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cp, bpath)
+        _chmod(bpath, 0o600)
+        cfg_by_rel[rel] = {"path": str(cp), "rel": rel, "sha256": sha256_file(cp), "backup": str(bpath)}
+    session["config_files"] = [cfg_by_rel[k] for k in sorted(cfg_by_rel)]
+    session["policy_hmac"] = compute_policy_hmac(sd, session)
+    write_json_atomic(sd / SESSION_FILE, session)
 
     q = _shell_quote
     run_py = _posix(SKILL_ROOT / "run.py")
@@ -579,9 +630,9 @@ def install_agent_workspace(
                            "codex exec \"optimize the protected kernel with WeaveProfiler\""),
         },
         "notes": [
-            "Claude Code: project MCP servers are pre-approved via .claude/settings.local.json.",
-            "Codex CLI: trust the project so .codex/config.toml and .codex/hooks.json are loaded.",
-            "Qwen Code: MCP + PreToolUse/PostToolUse/Stop/SubagentStop hooks are wired in .qwen/settings.json; "
+            "Claude Code: `weaveprofiler` MCP server is pre-approved via .claude/settings.local.json (`enabledMcpjsonServers`).",
+            "Codex CLI: trust the project and approve project hooks via `/hooks` so .codex/config.toml and .codex/hooks.json execute.",
+            "Qwen Code: MCP + PreToolUse/PostToolUse/PostToolUseFailure/Stop/SubagentStop hooks are wired in .qwen/settings.json; "
             "approve project hooks on first launch (check `/hooks` shows active; for non-interactive runs, trust the "
             "workspace folder via `security.folderTrust.enabled` and `~/.qwen/trustedFolders.json`).",
             "Antigravity (`agy`): native workspace plugin installed in `.agents/plugins/weaveprofiler/` "
@@ -628,6 +679,12 @@ class _Guardian(threading.Thread):
         session = read_session(self.sd)
         if not session:
             return
+        cfg_mut = mutated_config_files(session)
+        if cfg_mut:
+            restored_cfg = restore_config_files(session, cfg_mut)
+            if restored_cfg:
+                self.reverts.append({"t": round(time.time(), 3), "restored_config": restored_cfg})
+                sys.stderr.write(f"[WeaveProfiler wp guard-exec] restored tampered config {restored_cfg}\n")
         mutated = mutated_since_baseline(session)
         if mutated and not self._has_seal(session):
             restored = restore_protected(session, mutated)

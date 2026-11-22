@@ -4,14 +4,14 @@
   "api_version": 1,
   "tools": {
     "profile": {
-      "description": "Run shadow-copy intra-kernel GPU profiling with 4-gate verification (SASS/spill, bitwise output, events, overhead), HMAC seal, and SW+HW causal bottleneck report.",
+      "description": "Run isolated-copy intra-kernel GPU profiling with 4-gate verification (SASS/spill, bitwise output, events, overhead), HMAC seal, and SW+HW causal bottleneck report.",
       "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "profile"],
       "input_schema": "weaveprof/aka_schemas/profile.input.json",
       "output_schema": "weaveprof/aka_schemas/generic.output.json",
       "timeout_seconds": 1800
     },
     "megakernel-audit": {
-      "description": "Fast shadow-copy, L0-cached Sparse Attention / GDN / MoE megakernel profiler and 4-gate verifier returning cross-SM straggler skew, causal opportunities, and HMAC seal.",
+      "description": "Fast isolated-copy Sparse Attention / GDN / MoE megakernel profiler (with cached baseline builds) and 4-gate verifier returning cross-SM straggler skew, causal opportunities, and HMAC seal.",
       "command": ["{python}", "-B", "{plugin_root}/weaveprof/aka_adapter.py", "megakernel-audit"],
       "input_schema": "weaveprof/aka_schemas/megakernel_audit.input.json",
       "output_schema": "weaveprof/aka_schemas/generic.output.json",

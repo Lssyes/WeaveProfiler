@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Offline tests for Pillar 1 fidelity gates, Pillar 2 SW+HW causal attribution,
-FI_SMEM_ZREG / FI_ROLE_SWITCH contracts, KREX pluggable lock, 0-Token remap,
-Atrex v0.4.0 plugin adapter, generic OPENAI_BASE_URL, and CLI doctor/causal.
+WP_CTX_SMEM / WP_ROLE_SWITCH contracts, KREX pluggable lock, 0-Token remap,
+Atrex v0.4.0 plugin adapter, generic OPENAI_BASE_URL, CLI doctor/causal, and RSI fast search.
 """
 from __future__ import annotations
 
@@ -60,15 +60,16 @@ PLACER = _load("weaveprof/pipeline/scan/llm_probe_placer.py", "fg_placer")
 
 
 class TestFidelityGatesAndCausal(unittest.TestCase):
-    def test_fi_lite_cuh_smem_zreg_and_role_switch_decode(self) -> None:
+    def test_wp_lite_cuh_smem_ctx_and_role_switch_decode(self) -> None:
         hdr = (ROOT / "recorders" / "cuda_cpp" / "wp_lite.cuh").read_text(encoding="utf-8")
         for token in (
-            "FI_SMEM_ZREG",
-            "struct FiSmemCtx",
-            "fi_zreg_open",
-            "fi_zreg_rec",
-            "fi_zreg_trans",
-            "fi_zreg_close",
+            "WP_CTX_SMEM",
+            "struct WpSmemCtx",
+            "wp_smem_open",
+            "wp_smem_rec",
+            "wp_smem_trans",
+            "wp_smem_close",
+            "wp_active_buf",
             "FI_TAG_ROLE_SWITCH",
             "FI_ROLE_SWITCH",
             "WP_ROLE_SWITCH",
@@ -125,7 +126,7 @@ class TestFidelityGatesAndCausal(unittest.TestCase):
         self.assertIn("SASS_STL_EXPLOSION", codes)
         self.assertTrue(any("setmaxnreg" in r for r in bad["remediation"]))
 
-        # B300 v82 K2 FI_SMEM_ZREG clean arm: 0B spill delta, 0 STL delta!
+        # B300 v82 K2 WP_CTX_SMEM clean arm: 0B spill delta, 0 STL delta!
         good = verify_compiler_spill_gate(
             {"regs": 128, "spill_stores": 0, "stack_bytes": 0, "stl": 27, "ldl": 25},
             {"regs": 128, "spill_stores": 0, "stack_bytes": 0, "stl": 27, "ldl": 25},
@@ -261,8 +262,8 @@ class TestFidelityGatesAndCausal(unittest.TestCase):
             "__global__ void k() {}",
             arch="sm_103a", block_threads=512, l0_regs=128, l0_smem_bytes=160000,
         )
-        self.assertEqual(p1["context_mode"], "FI_SMEM_ZREG")
-        self.assertIn("-DFI_SMEM_ZREG", p1["compile_defines"])
+        self.assertEqual(p1["context_mode"], "WP_CTX_SMEM")
+        self.assertIn("-DWP_CTX_SMEM", p1["compile_defines"])
         self.assertEqual(p1["reg_headroom"], 0)
 
         p2 = plan_context_and_search_space(
@@ -271,26 +272,26 @@ class TestFidelityGatesAndCausal(unittest.TestCase):
         )
         self.assertEqual(p2["placement_search_space"], ["pre_setmaxnreg", "post_setmaxnreg"])
 
-        # Default register headroom picks 1-register bit-packed WpCtx1R (0 B SMEM) with fallback arms.
+        # Default register headroom picks single-register bit-packed WpCtxReg (0 B SMEM) with fallback arms.
         p3 = plan_context_and_search_space(
             "__global__ void k() {}",
             arch="sm_90a", block_threads=256, l0_regs=64, l0_smem_bytes=232448,
         )
-        self.assertEqual(p3["context_mode"], "WP_CTX_1R")
-        self.assertIn("-DWP_CTX_1R", p3["compile_defines"])
-        self.assertTrue(any(a["mode"] == "WP_CTX_1R_NOINLINE" for a in p3["fallback_arms"]))
+        self.assertEqual(p3["context_mode"], "WP_CTX_REG")
+        self.assertIn("-DWP_CTX_REG", p3["compile_defines"])
+        self.assertTrue(any(a["mode"] == "WP_CTX_REG_NOINLINE" for a in p3["fallback_arms"]))
 
         # Compiler-in-the-loop arm selector automatically falls back on spill/STL regression.
         from weaveprof.causal import select_compiler_feedback_arm
         sel = select_compiler_feedback_arm(
             [
-                {"mode": "WP_CTX_1R", "defines": ["-DWP_CTX_1R"], "regs": 128, "spill_bytes": 128, "stl_count": 32, "overhead_pct": 24.0},
-                {"mode": "FI_SMEM_ZREG", "defines": ["-DFI_SMEM_ZREG"], "regs": 128, "spill_bytes": 0, "stl_count": 0, "overhead_pct": 4.2},
+                {"mode": "WP_CTX_REG", "defines": ["-DWP_CTX_REG"], "regs": 128, "spill_bytes": 128, "stl_count": 32, "overhead_pct": 24.0},
+                {"mode": "WP_CTX_SMEM", "defines": ["-DWP_CTX_SMEM"], "regs": 128, "spill_bytes": 0, "stl_count": 0, "overhead_pct": 4.2},
             ],
             baseline_regs=128, baseline_spill_bytes=0, baseline_stl=0,
         )
         self.assertTrue(sel["fallback_triggered"])
-        self.assertEqual(sel["winner"]["mode"], "FI_SMEM_ZREG")
+        self.assertEqual(sel["winner"]["mode"], "WP_CTX_SMEM")
         self.assertTrue(sel["winner"]["spill_clean"])
 
     def test_causal_engine_h20_calibration_straggler_and_perfetto(self) -> None:
@@ -496,15 +497,15 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
     BASE = {"regs": 128, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 27, "ldl_count": 25}
 
     def test_fast_arm_clean_compiles_once_without_fallback(self) -> None:
-        fn, calls = _fake_compiler({"WP_CTX_1R": {"regs": 128, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 28, "ldl_count": 25}})
+        fn, calls = _fake_compiler({"WP_CTX_REG": {"regs": 128, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 28, "ldl_count": 25}})
         res = run_compiler_feedback_selection(
             fn, "__global__ void k() {}", baseline_metrics=self.BASE,
             arch="sm_103a", block_threads=512, l0_smem_bytes=100000,
         )
-        self.assertEqual(calls, [("WP_CTX_1R", "default_entry", ("-DWP_CTX_1R",), "fast")])
+        self.assertEqual(calls, [("WP_CTX_REG", "default_entry", ("-DWP_CTX_REG",), "fast")])
         self.assertFalse(res["fallback_triggered"])
         self.assertEqual(res["status"], "CLEAN")
-        self.assertEqual(res["winner"]["mode"], "WP_CTX_1R")
+        self.assertEqual(res["winner"]["mode"], "WP_CTX_REG")
         self.assertTrue(res["winner_is_fast_arm"])
         self.assertTrue(res["winner"]["gate_ok"])
         self.assertEqual(res["compile_calls"], 1)
@@ -512,33 +513,33 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
         self.assertEqual(res["placement_search_space"], ["default_entry"])
         json.dumps(res)  # fully JSON-serializable for sealing/ledgers
 
-    def test_spill_regression_falls_back_to_smem_zreg(self) -> None:
-        # B300 v82 K2: Used 128 regs unchanged but WP_CTX_1R spills 220 B / STL 27 -> 97.
+    def test_spill_regression_falls_back_to_smem_ctx(self) -> None:
+        # B300 v82 K2: Used 128 regs unchanged but WP_CTX_REG spills 220 B / STL 27 -> 97.
         fn, calls = _fake_compiler({
-            "WP_CTX_1R": {"regs": 128, "spill_bytes": 220, "stack_bytes": 224, "stl_count": 97, "ldl_count": 90},
-            "FI_SMEM_ZREG": {"regs": 128, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 27, "ldl_count": 25, "overhead_pct": 7.36},
-            "WP_CTX_1R_NOINLINE": {"regs": 128, "spill_bytes": 32, "stack_bytes": 32, "stl_count": 31, "ldl_count": 29},
+            "WP_CTX_REG": {"regs": 128, "spill_bytes": 220, "stack_bytes": 224, "stl_count": 97, "ldl_count": 90},
+            "WP_CTX_SMEM": {"regs": 128, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 27, "ldl_count": 25, "overhead_pct": 7.36},
+            "WP_CTX_REG_NOINLINE": {"regs": 128, "spill_bytes": 32, "stack_bytes": 32, "stl_count": 31, "ldl_count": 29},
         })
         res = run_compiler_feedback_selection(
             fn, "__global__ void k() {}", baseline_metrics=self.BASE,
             arch="sm_103a", block_threads=512, l0_smem_bytes=160000,
         )
-        self.assertEqual([c[0] for c in calls], ["WP_CTX_1R", "FI_SMEM_ZREG", "WP_CTX_1R_NOINLINE"])
+        self.assertEqual([c[0] for c in calls], ["WP_CTX_REG", "WP_CTX_SMEM", "WP_CTX_REG_NOINLINE"])
         self.assertEqual([c[3] for c in calls], ["fast", "fallback", "fallback"])
         self.assertTrue(res["fallback_triggered"])
         self.assertFalse(res["winner_is_fast_arm"])
-        self.assertEqual(res["winner"]["mode"], "FI_SMEM_ZREG")
-        self.assertEqual(res["winner"]["compile_defines"], ["-DFI_SMEM_ZREG"])
+        self.assertEqual(res["winner"]["mode"], "WP_CTX_SMEM")
+        self.assertEqual(res["winner"]["compile_defines"], ["-DWP_CTX_SMEM"])
         self.assertTrue(res["winner"]["spill_clean"])
         first_gate = res["spill_gate_reports"][0]["report"]
         self.assertFalse(first_gate["ok"])
         self.assertTrue(first_gate["register_count_blind_spot"])
-        self.assertEqual([r["mode"] for r in res["ranked"]][0], "FI_SMEM_ZREG")
+        self.assertEqual([r["mode"] for r in res["ranked"]][0], "WP_CTX_SMEM")
         # Deterministic: identical inputs -> identical output.
         fn2, _ = _fake_compiler({
-            "WP_CTX_1R": {"regs": 128, "spill_bytes": 220, "stack_bytes": 224, "stl_count": 97, "ldl_count": 90},
-            "FI_SMEM_ZREG": {"regs": 128, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 27, "ldl_count": 25, "overhead_pct": 7.36},
-            "WP_CTX_1R_NOINLINE": {"regs": 128, "spill_bytes": 32, "stack_bytes": 32, "stl_count": 31, "ldl_count": 29},
+            "WP_CTX_REG": {"regs": 128, "spill_bytes": 220, "stack_bytes": 224, "stl_count": 97, "ldl_count": 90},
+            "WP_CTX_SMEM": {"regs": 128, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 27, "ldl_count": 25, "overhead_pct": 7.36},
+            "WP_CTX_REG_NOINLINE": {"regs": 128, "spill_bytes": 32, "stack_bytes": 32, "stl_count": 31, "ldl_count": 29},
         })
         res2 = run_compiler_feedback_selection(
             fn2, "__global__ void k() {}", baseline_metrics=self.BASE,
@@ -546,10 +547,10 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
         )
         self.assertEqual(json.dumps(res, sort_keys=True), json.dumps(res2, sort_keys=True))
 
-    def test_smem_exhausted_skips_smem_zreg_and_uses_noinline(self) -> None:
+    def test_smem_exhausted_skips_smem_ctx_and_uses_noinline(self) -> None:
         fn, calls = _fake_compiler({
-            "WP_CTX_1R": {"regs": 64, "spill_bytes": 96, "stack_bytes": 96, "stl_count": 40, "ldl_count": 40},
-            "WP_CTX_1R_NOINLINE": {"regs": 64, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 2, "ldl_count": 2},
+            "WP_CTX_REG": {"regs": 64, "spill_bytes": 96, "stack_bytes": 96, "stl_count": 40, "ldl_count": 40},
+            "WP_CTX_REG_NOINLINE": {"regs": 64, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 2, "ldl_count": 2},
         })
         res = run_compiler_feedback_selection(
             fn, "__global__ void k() {}",
@@ -557,9 +558,9 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
             arch="sm_90a", block_threads=256, l0_smem_bytes=232448,
         )
         self.assertEqual(res["smem_free_bytes"], 0)
-        self.assertNotIn("FI_SMEM_ZREG", [c[0] for c in calls])
+        self.assertNotIn("WP_CTX_SMEM", [c[0] for c in calls])
         self.assertTrue(res["fallback_triggered"])
-        self.assertEqual(res["winner"]["mode"], "WP_CTX_1R_NOINLINE")
+        self.assertEqual(res["winner"]["mode"], "WP_CTX_REG_NOINLINE")
         self.assertEqual(res["status"], "CLEAN")
 
     def test_setmaxnreg_searches_pre_post_placements(self) -> None:
@@ -567,31 +568,31 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
         base = {"regs": 72, "spill_stores": 16, "stack_bytes": 16, "stl": 2, "ldl": 2}
         # bs128 decode: post placement explodes STL 2 -> 134 at unchanged 72 regs; pre is clean.
         fn, calls = _fake_compiler({
-            ("WP_CTX_1R", "pre_setmaxnreg"): {"regs": 72, "spill_stores": 16, "stack_bytes": 16, "stl": 3, "ldl": 3},
-            ("WP_CTX_1R", "post_setmaxnreg"): {"regs": 72, "spill_stores": 760, "stack_bytes": 16, "stl": 134, "ldl": 140},
+            ("WP_CTX_REG", "pre_setmaxnreg"): {"regs": 72, "spill_stores": 16, "stack_bytes": 16, "stl": 3, "ldl": 3},
+            ("WP_CTX_REG", "post_setmaxnreg"): {"regs": 72, "spill_stores": 760, "stack_bytes": 16, "stl": 134, "ldl": 140},
         })
         res = run_compiler_feedback_selection(
             fn, src, baseline_metrics=base, arch="sm_103a", block_threads=896, l0_smem_bytes=100000,
         )
         self.assertTrue(res["has_setmaxnreg"])
         self.assertEqual(res["placement_search_space"], ["pre_setmaxnreg", "post_setmaxnreg"])
-        self.assertEqual([(c[0], c[1]) for c in calls], [("WP_CTX_1R", "pre_setmaxnreg"), ("WP_CTX_1R", "post_setmaxnreg")])
+        self.assertEqual([(c[0], c[1]) for c in calls], [("WP_CTX_REG", "pre_setmaxnreg"), ("WP_CTX_REG", "post_setmaxnreg")])
         self.assertFalse(res["fallback_triggered"])
-        self.assertEqual((res["winner"]["mode"], res["winner"]["placement"]), ("WP_CTX_1R", "pre_setmaxnreg"))
+        self.assertEqual((res["winner"]["mode"], res["winner"]["placement"]), ("WP_CTX_REG", "pre_setmaxnreg"))
 
         # Both placements of the fast arm regress -> every fallback arm compiled at every placement.
         bad = {"regs": 72, "spill_stores": 760, "stack_bytes": 16, "stl": 134, "ldl": 140}
         fn2, calls2 = _fake_compiler({
-            "WP_CTX_1R": bad,
-            "FI_SMEM_ZREG": {"regs": 72, "spill_stores": 16, "stack_bytes": 16, "stl": 2, "ldl": 2, "overhead_pct": 3.61},
-            "WP_CTX_1R_NOINLINE": {"regs": 72, "spill_stores": 64, "stack_bytes": 16, "stl": 9, "ldl": 9},
+            "WP_CTX_REG": bad,
+            "WP_CTX_SMEM": {"regs": 72, "spill_stores": 16, "stack_bytes": 16, "stl": 2, "ldl": 2, "overhead_pct": 3.61},
+            "WP_CTX_REG_NOINLINE": {"regs": 72, "spill_stores": 64, "stack_bytes": 16, "stl": 9, "ldl": 9},
         })
         res2 = run_compiler_feedback_selection(
             fn2, src, baseline_metrics=base, arch="sm_103a", block_threads=896, l0_smem_bytes=100000,
         )
         self.assertTrue(res2["fallback_triggered"])
         self.assertEqual(res2["compile_calls"], 6)
-        self.assertEqual(res2["winner"]["mode"], "FI_SMEM_ZREG")
+        self.assertEqual(res2["winner"]["mode"], "WP_CTX_SMEM")
         self.assertEqual(res2["winner"]["placement"], "pre_setmaxnreg")  # stable tie-break
         self.assertTrue(any(
             "setmaxnreg" in r for g in res2["spill_gate_reports"][:2] for r in g["report"]["remediation"]
@@ -599,9 +600,9 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
 
     def test_build_failures_fail_closed_and_package_exports(self) -> None:
         fn, _ = _fake_compiler({
-            "WP_CTX_1R": RuntimeError("ptxas fatal"),
-            "FI_SMEM_ZREG": {"build_ok": False, "error": "smem overflow"},
-            "WP_CTX_1R_NOINLINE": {"regs": 130, "spill_bytes": 64, "stack_bytes": 64, "stl_count": 60, "ldl_count": 60},
+            "WP_CTX_REG": RuntimeError("ptxas fatal"),
+            "WP_CTX_SMEM": {"build_ok": False, "error": "smem overflow"},
+            "WP_CTX_REG_NOINLINE": {"regs": 130, "spill_bytes": 64, "stack_bytes": 64, "stl_count": 60, "ldl_count": 60},
         })
         res = run_compiler_feedback_selection(
             fn, "__global__ void k() {}", baseline_metrics=self.BASE,
@@ -609,7 +610,7 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
         )
         self.assertEqual(res["status"], "NO_CLEAN_ARM")
         self.assertFalse(res["winner"]["gate_ok"])
-        self.assertEqual(res["winner"]["mode"], "WP_CTX_1R_NOINLINE")  # only arm that built
+        self.assertEqual(res["winner"]["mode"], "WP_CTX_REG_NOINLINE")  # only arm that built
         self.assertFalse(res["attempts"][0]["build_ok"])
         self.assertIn("ptxas fatal", res["attempts"][0]["error"])
         self.assertEqual(res["spill_gate_reports"][1]["report"]["violations"][0]["code"], "BUILD_FAILED")
@@ -620,10 +621,10 @@ class TestCompilerFeedbackSelectionD2(unittest.TestCase):
         self.assertIs(weaveprof.run_compiler_feedback_selection, run_compiler_feedback_selection)
         self.assertIn("run_compiler_feedback_selection", weaveprof.__all__)
         svc = apply_atrex_plugin({}, {})
-        fn_ok, _ = _fake_compiler({"WP_CTX_1R": dict(self.BASE)})
+        fn_ok, _ = _fake_compiler({"WP_CTX_REG": dict(self.BASE)})
         self.assertEqual(
             svc.select_compiler_arm(fn_ok, "", baseline_metrics=self.BASE, arch="sm_90a")["winner"]["mode"],
-            "WP_CTX_1R",
+            "WP_CTX_REG",
         )
 
 
@@ -759,6 +760,144 @@ class TestRoundDiffFeedbackD3(unittest.TestCase):
         self.assertIn("compare_optimization_rounds", weaveprof.__all__)
         svc = apply_atrex_plugin({}, {})
         self.assertEqual(svc.compare_rounds(prev, curr), d)
+
+
+class TestSemanticsAndRsiFastSearch(unittest.TestCase):
+    def test_unified_semantic_resolver_and_cue_verification(self) -> None:
+        from weaveprof.contract import resolve_semantic_id
+        expected = {
+            "tma_store_out": "store",
+            "qk_mma": "mma",
+            "MMA_qk": "mma",
+            "mfma_qk": "mma",
+            "gamma_scale": "compute",
+            "summary_stats": "compute",
+            "mbarrier_wait": "wait",
+            "scatter": "dispatch",
+            "update_mdo_states": "softmax",
+        }
+        for raw, sem in expected.items():
+            self.assertEqual(resolve_semantic_id(raw), sem, raw)
+
+        src = "\n".join([
+            "__global__ void fa_kernel() {",
+            "    // comment mentioning wgmma and cp.async",
+            "    pipeline.consumer_wait(state);",
+            "    wgmma.wait_group.sync.aligned 0;",
+            '    asm volatile("cp.async.bulk.tensor.2d.global.shared::cta [dst], [src];");',
+            "    update_mdo_states(s, m, d, o);",
+            "    float y = __expf(x - m_val);",
+            "    o = o / d_sum;",
+            "}",
+        ]) + "\n"
+        plan = {
+            "probes": [
+                {"probe_id": "wait_pipe", "semantic_id": "wait", "begin_line": 3, "end_line": 4},
+                {"probe_id": "tma_store", "semantic_id": "store", "begin_line": 5, "end_line": 5},
+                {"probe_id": "online_sfmx", "semantic_id": "softmax", "begin_line": 6, "end_line": 8},
+                {"probe_id": "bad_mma", "semantic_id": "mma", "begin_line": 3, "end_line": 4},
+            ],
+        }
+        warnings = PLACER.verify_probe_semantics(plan["probes"], src)
+        warned_ids = {w["probe_id"] for w in warnings}
+        self.assertEqual(warned_ids, {"bad_mma"}, warnings)
+
+    def test_attention_product_gate_requires_softmax_and_epilogue(self) -> None:
+        aligned = {
+            "otherData": {
+                "platform": "nv",
+                "alignment": {
+                    "warps_per_cta": 4, "physical_units_observed": 8,
+                    "has_compute_curve": True, "has_memory_curve": True, "has_sm_curve": True,
+                    "kernel_duration_us": 160.0,
+                },
+            },
+            "traceEvents": [
+                {"ph": "X", "pid": 100001, "tid": w, "ts": 0.0, "dur": 40.0, "name": "load_kv",
+                 "args": {"cta": cta, "warp": w, "semantic_id": "load"}}
+                for cta in range(8) for w in range(4)
+            ] + [
+                {"ph": "X", "pid": 100001, "tid": w, "ts": 40.0, "dur": 115.0, "name": "compute_qk",
+                 "args": {"cta": cta, "warp": w, "semantic_id": "mma"}}
+                for cta in range(8) for w in range(4)
+            ],
+        }
+        src_fa = (
+            "__global__ void SinglePrefillWithKVCacheKernel() {\n"
+            "  produce_kv(); compute_qk(); update_mdo_states(); write_o_reg_gmem();\n"
+            "}\n"
+        )
+        rep = validate_trace_product(aligned, {"wpc": 4, "n_ctas": 8, "fires": {1: 32, 3: 32}},
+                                     {"roles": {"0": "w"}, "probes": [{"id": 1}, {"id": 3}]},
+                                     src_fa, {"grid_ctas": 8})
+        self.assertFalse(rep["ok"])
+        self.assertEqual(rep["kernel_class"], "attention")
+        joined = "\n".join(rep["failures"])
+        self.assertIn("MISSING_ATTENTION_SOFTMAX", joined)
+        self.assertIn("MISSING_EPILOGUE_STORE", joined)
+
+    def test_rsi_fast_search_overlay_static_filter_parallel_and_priors(self) -> None:
+        from weaveprof.fast_search import (
+            build_minimal_include_overlay,
+            detect_kernel_stage_requirements,
+            run_rsi_placement_search,
+        )
+        src_fa = (
+            "__global__ void SinglePrefillWithKVCacheKernel() {\n"
+            "  produce_kv();\n"
+            "  compute_qk();\n"
+            "  update_mdo_states();\n"
+            "  write_o_reg_gmem();\n"
+            "}\n"
+        )
+        reqs = detect_kernel_stage_requirements(src_fa, kernel_name="SinglePrefill")
+        self.assertEqual(reqs["operator_family"], "attention")
+        self.assertEqual(set(reqs["required_stages"]), {"load", "mma", "softmax", "store_or_epilogue"})
+
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            ov = build_minimal_include_overlay(tdp / "orig_inc", {"flashinfer/attention/prefill.cuh": "// patched\n"}, tdp / "overlay")
+            self.assertEqual(ov["files_overlaid"], ["flashinfer/attention/prefill.cuh"])
+            self.assertTrue((tdp / "overlay" / "flashinfer/attention/prefill.cuh").is_file())
+            self.assertEqual(ov["include_flags"][0], "-I")
+
+            priors_p = tdp / "rsi_priors.json"
+            base = {"regs": 160, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 0, "ldl_count": 0}
+            candidates = [
+                {"strategy": "no_softmax", "mode": "WP_CTX_REG", "stages": ["load", "mma", "store"]},
+                {"strategy": "outer_wrap", "mode": "WP_CTX_REG", "stages": ["load", "mma", "softmax", "store"], "wraps_entire_kernel": True},
+                {"strategy": "inner_unpred", "mode": "WP_CTX_REG", "stages": ["load", "mma", "softmax", "epilogue"]},
+                {"strategy": "disjoint_loop_o3", "mode": "WP_CTX_SMEM", "stages": ["load", "mma", "softmax", "epilogue"]},
+            ]
+            compiled_seen = []
+
+            def fake_compile(cand):
+                compiled_seen.append(cand["strategy"])
+                if cand["strategy"] == "inner_unpred":
+                    return {"regs": 160, "spill_bytes": 128, "stack_bytes": 128, "stl_count": 20, "ldl_count": 20}
+                return {"regs": 160, "spill_bytes": 0, "stack_bytes": 0, "stl_count": 0, "ldl_count": 0,
+                        "core_multiset_ratio": 1.0, "core_retention_ratio": 0.92}
+
+            def fake_gpu(cand, _cm):
+                return {"ok": True, "overhead_pct": 1.8}
+
+            r1 = run_rsi_placement_search(
+                src_fa, candidates, fake_compile, fake_gpu,
+                baseline_metrics=base, arch="sm_86", max_workers=2, prior_path=priors_p,
+            )
+            self.assertEqual(r1["status"], "PASS")
+            self.assertEqual(len(r1["rejected_static"]), 2)
+            self.assertEqual(set(compiled_seen), {"inner_unpred", "disjoint_loop_o3"})
+            self.assertEqual(r1["gpu_screens"], 1)
+            self.assertEqual(r1["winner"]["strategy"], "disjoint_loop_o3")
+            self.assertTrue(priors_p.is_file())
+
+            r2 = run_rsi_placement_search(
+                src_fa, candidates, fake_compile, fake_gpu,
+                baseline_metrics=base, arch="sm_86", max_workers=1, prior_path=priors_p,
+            )
+            self.assertEqual(r2["attempts"][0]["strategy"], "disjoint_loop_o3")
+            self.assertGreater(r2["attempts"][0]["prior_score"], r2["attempts"][1]["prior_score"])
 
 
 if __name__ == "__main__":

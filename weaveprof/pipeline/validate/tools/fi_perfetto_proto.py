@@ -1,6 +1,6 @@
 """Serialize generic stage, handoff and hardware tracks as Perfetto TrackEvents.
 
-Only the public TrackEvent protobuf fields used below are needed on the GPU host.
+Only the public TrackEvent protobuf fields used below are needed on the target GPU machine.
 This also avoids loading PyTorch's sometimes incompatible protobuf installation.
 """
 import gzip

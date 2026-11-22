@@ -76,7 +76,7 @@ def probe_gpu(device_index: int) -> Dict[str, Any]:
         raise SystemExit(
             "[materialize] nvidia-smi not found, so the target GPU cannot be identified. The "
             "contract must record the GPU name: metric scale rules are keyed on it and the "
-            "delivery quotes it as the SKU under test. Freeze the contract on the GPU host "
+            "delivery quotes it as the SKU under test. Freeze the contract on the target GPU machine "
             "(or fix nvidia-smi visibility in this container) instead of shipping a null name.")
     try:
         out = subprocess.run([smi, "--query-gpu=index,name,uuid,memory.total", "--format=csv,noheader"],

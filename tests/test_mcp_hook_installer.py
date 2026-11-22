@@ -174,7 +174,8 @@ class InstallerTests(_WorkspaceCase):
         self.assertIn("--session-dir", mcp["args"])
         settings = json.loads((ws / ".claude/settings.json").read_text(encoding="utf-8"))
         local = json.loads((ws / ".claude/settings.local.json").read_text(encoding="utf-8"))
-        self.assertTrue(local["enableAllProjectMcpServers"])
+        self.assertNotIn("enableAllProjectMcpServers", local)
+        self.assertIn("weaveprofiler", local.get("enabledMcpjsonServers", []))
         codex_hooks = json.loads((ws / ".codex/hooks.json").read_text(encoding="utf-8"))
         for doc in (settings, codex_hooks):
             for ev in ("PreToolUse", "PostToolUse", "Stop"):
@@ -199,10 +200,10 @@ class InstallerTests(_WorkspaceCase):
         qwen_settings = json.loads((ws / ".qwen/settings.json").read_text(encoding="utf-8"))
         self.assertIs(qwen_settings["disableAllHooks"], False)
         self.assertTrue(any(a.endswith("mcp_server.py") for a in qwen_settings["mcpServers"]["weaveprofiler"]["args"]))
-        for ev in ("PreToolUse", "PostToolUse", "Stop", "SubagentStop"):
+        for ev in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop"):
             cmds = [h["command"] for g in qwen_settings["hooks"][ev] for h in g["hooks"]]
             self.assertEqual(sum("guard_hook.py" in c for c in cmds), 1, ev)
-            self.assertTrue(any(f"--event {ev}" in c and "--protocol qwen" in c for c in cmds), ev)
+            self.assertTrue(any("--event" in c and ev in c and "--protocol" in c and "qwen" in c for c in cmds), (ev, cmds))
         # Antigravity workspace plugin bundle
         agy_plugin = json.loads((ws / ".agents/plugins/weaveprofiler/plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(agy_plugin["name"], "weaveprofiler")
@@ -435,7 +436,7 @@ class McpServerTests(_WorkspaceCase):
             msg = json.loads(rest[:n])
             replies[msg["id"]] = msg
             out = rest[n:]
-        self._check(replies, "2024-11-05", seal)
+        self._check(replies, "2025-06-18", seal)
 
 
 # ---------------------------------------------------------------------------
@@ -645,11 +646,12 @@ class QwenAndAgyProtocolTests(_WorkspaceCase):
         self.assertIn("restored", out["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(self.kernel.read_bytes(), KERNEL.encode("utf-8"))
 
-        # Stop and SubagentStop block with decision=block AND stopReason before seal, respecting 3-block cap.
+        # SubagentStop checks probe pollution / unauthorized edits / config integrity WITHOUT requiring final seal.
         rc, out, _ = self._run_proto("SubagentStop", {"stop_hook_active": False, "cwd": str(self.ws)}, protocol="qwen")
         self.assertEqual(rc, 0)
-        self.assertEqual(out["decision"], "block")
-        self.assertIn("NO_VERIFIED_PASS_SEAL", out["stopReason"])
+        self.assertEqual(out["decision"], "allow")
+        self.assertEqual(read_session(self.sd).get("stop_blocks", 0), 0)
+        # Stop still enforces NO_VERIFIED_PASS_SEAL before seal, respecting 3-block cap.
         decisions = [
             self._run_proto("Stop", {"stop_hook_active": i > 0, "cwd": str(self.ws)}, protocol="qwen")[1]["decision"]
             for i in range(4)
@@ -778,6 +780,89 @@ class QwenAndAgyProtocolTests(_WorkspaceCase):
         }, protocol="agy")
         self.assertEqual(rc, 0)
         self.assertEqual(out, {"decision": "allow"})
+
+    def test_security_audit_p0_p1_regressions(self) -> None:
+        # P0-1: MCP megakernel_audit rejects precaptured/caller-forged fields (`dump_path`, `runtime_metrics`, `names`).
+        from weaveprof.mcp_server import WeaveProfServer
+        srv = WeaveProfServer(self.ws, self.sd, None, None)
+        for bad_key in ("dump_path", "runtime_metrics", "names", "nsys_cmd"):
+            with self.assertRaises(ValueError):
+                srv._tool_megakernel({"entry_source": "kernel.cu", bad_key: "forged"})
+        # P0-1: register_seal rejects seals produced in `precaptured` mode!
+        prec_seal = self.make_seal()
+        with supervisor_env(self.sd):
+            prec_path, _ = EpisodeSealer.seal_round(
+                round_dir=prec_seal.parent, round_number=99, source_path=self.kernel,
+                source_sha256=_sha(self.kernel), probe_path=None, instrumented_path=None, names_path=None,
+                feedback_path=prec_seal.parent / "feedback.json", verify_path=None,
+                trace_path=prec_seal.parent / "out.perfetto-trace", failed_trace_path=None,
+                result={"status": "PASS", "checks": {"assembly": True, "output": True, "events": True, "overhead": True}},
+                policy=HarnessPolicy(), limit=0.10, region_lock={"ok": True}, mode="precaptured",
+                out_seal_path=prec_seal.parent / "precaptured.seal.json",
+            )
+        reg_prec = register_seal(self.sd, prec_path)
+        self.assertFalse(reg_prec["registered"])
+
+        # P0-4: verify_seal fails closed when require_hmac=True and key is absent!
+        from weaveprof.harness import verify_seal
+        good_seal = self.make_seal()
+        res_no_key = verify_seal(good_seal, require_hmac=True)
+        self.assertFalse(res_no_key["ok"])
+        self.assertTrue(any("key" in e.lower() or "hmac" in e.lower() for e in res_no_key["errors"]), res_no_key)
+
+        # P0-5: Antigravity Stop honors executionNum > 0 AND allowlist (MAX_INVOCATIONS allowed).
+        rc, out, _ = self._run_proto("Stop", {
+            "hookEventName": "Stop", "cwd": str(self.ws),
+            "terminationReason": "MAX_INVOCATIONS", "executionNum": 0,
+        }, protocol="agy")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, {"decision": "allow"})
+        decs = [
+            self._run_proto("Stop", {
+                "hookEventName": "Stop", "cwd": str(self.ws),
+                "terminationReason": "NO_TOOL_CALL", "executionNum": i,
+            }, protocol="agy")[1]["decision"]
+            for i in range(4)
+        ]
+        self.assertEqual(decs, ["continue", "continue", "continue", "allow"])
+
+        # P0-6: Directory-level deletion of `.claude` blocked in PreToolUse AND tampered config restored in PostToolUse!
+        rc, err = self.hook("PreToolUse", {"tool_name": "Bash", "tool_input": {"command": "rm -rf .claude"}})
+        self.assertEqual(rc, 2)
+        self.assertIn("SUPERVISOR_CONFIG_TAMPER", err)
+        orig_cfg = (self.ws / ".claude" / "settings.json").read_bytes()
+        (self.ws / ".claude" / "settings.json").write_bytes(b"{}")
+        rc, err = self.hook("PostToolUse", {"tool_name": "Bash", "tool_input": {"command": "python oops.py"}})
+        self.assertEqual(rc, 2)
+        self.assertEqual((self.ws / ".claude" / "settings.json").read_bytes(), orig_cfg)
+
+        # P1-8 & P1-12: PostToolUseFailure reverts edits; real Antigravity replace_file_content & manage_task blocked!
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "c_w", "name": "replace_file_content",
+                         "args": {"TargetFile": str(self.kernel), "TargetContent": "+", "ReplacementContent": "*"}},
+        }, protocol="agy")
+        self.assertEqual(out["decision"], "deny")
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "hookEventName": "PreToolUse", "cwd": str(self.ws),
+            "toolCall": {"id": "c_m", "name": "manage_task",
+                         "args": {"Action": "send_input", "Input": "cat ~/.cache/weaveprof/sessions/*/.supervisor.key"}},
+        }, protocol="agy")
+        self.assertEqual(out["decision"], "deny")
+        self.kernel.write_bytes(b"// mutated before failure\n")
+        rc, err = self.hook("PostToolUseFailure", {"tool_name": "Bash", "tool_input": {"command": "python fail.py"}})
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.kernel.read_bytes(), KERNEL.encode("utf-8"))
+
+        # P0-7: Tampering session.json (`require_final_seal: False`) fails closed via policy_hmac!
+        sess_path = self.sd / "session.json"
+        tampered = json.loads(sess_path.read_text(encoding="utf-8"))
+        tampered["require_final_seal"] = False
+        sess_path.write_text(json.dumps(tampered), encoding="utf-8")
+        rc, err = self.hook("PreToolUse", {"tool_name": "Edit", "tool_input": {
+            "file_path": str(self.kernel), "old_string": "+", "new_string": "*"}})
+        self.assertEqual(rc, 2)
+        self.assertIn("SESSION_POLICY_TAMPER", err)
 
 
 if __name__ == "__main__":

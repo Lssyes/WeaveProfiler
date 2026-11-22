@@ -66,7 +66,7 @@ SHADOW_IGNORE: Tuple[str, ...] = (
     ".git", "__pycache__", "*.pyc", "*.bin", "*.sqlite", "*.nsys-rep", "*.so",
     "*.perfetto*", "*.tar*", "*.whl",
     ".weaveprof_cache", ".pytest_cache", ".mypy_cache", ".cache", ".venv", "venv",
-    ".claude", ".codex", ".agents", "node_modules", "third_party",
+    ".claude", ".codex", ".qwen", ".agents", "node_modules", "third_party",
 )
 DUMP_CANDIDATES: Tuple[str, ...] = ("capture.wp02.bin", "capture.fi02.bin")
 _WAIT_RE = re.compile(r"(?:wait|barrier|grid_sync|sync_wait|stall|idle|spin|poll)", re.I)
@@ -804,12 +804,7 @@ def _load_mapping(value: Mapping[str, Any] | str | Path | None, what: str) -> Tu
     return doc, p
 
 
-def _gate_output(rm: Mapping[str, Any], base: Path) -> Dict[str, Any]:
-    if "output_match" in rm:
-        return {"ok": rm["output_match"] is True, "evidence": "runtime_metrics.output_match"}
-    if rm.get("baseline_output_sha256") and rm.get("instrumented_output_sha256"):
-        ok = str(rm["baseline_output_sha256"]) == str(rm["instrumented_output_sha256"])
-        return {"ok": ok, "evidence": "output_sha256"}
+def _gate_output(rm: Mapping[str, Any], base: Path, *, require_files: bool = False) -> Dict[str, Any]:
     pairs = rm.get("output_files") or rm.get("outputs")
     if isinstance(pairs, Mapping):
         pairs = [[pairs.get("baseline"), pairs.get("instrumented")]]
@@ -819,14 +814,23 @@ def _gate_output(rm: Mapping[str, Any], base: Path) -> Dict[str, Any]:
             if not isinstance(pair, (list, tuple)) or len(pair) != 2 or not all(pair):
                 return {"ok": False, "code": "OUTPUT_EVIDENCE_MALFORMED", "evidence": "output_files"}
             a, b = (Path(x) if Path(x).is_absolute() else base / x for x in pair)
-            if not a.is_file() or not b.is_file() or digest(a) != digest(b):
+            if (not a.is_file() or not b.is_file() or a.resolve() == b.resolve()
+                    or a.stat().st_size == 0 or digest(a) != digest(b)):
                 mismatched.append(b.name)
         return {"ok": not mismatched, "evidence": "output_files", "mismatched": mismatched[:4]}
+    if require_files:
+        return {"ok": False, "code": "OUTPUT_FILES_REQUIRED",
+                "evidence": "policy requires real baseline/instrumented output_files byte comparison"}
+    if rm.get("baseline_output_sha256") and rm.get("instrumented_output_sha256"):
+        ok = str(rm["baseline_output_sha256"]) == str(rm["instrumented_output_sha256"])
+        return {"ok": ok, "evidence": "output_sha256"}
+    if "output_match" in rm:
+        return {"ok": rm["output_match"] is True, "evidence": "runtime_metrics.output_match"}
     return {"ok": False, "code": "OUTPUT_EVIDENCE_MISSING",
-            "evidence": "runtime_metrics has no output_match / output_sha256 / output_files"}
+            "evidence": "runtime_metrics has no output_files / output_sha256 / output_match"}
 
 
-def _gate_compiler(rm: Mapping[str, Any]) -> Dict[str, Any]:
+def _gate_compiler(rm: Mapping[str, Any], pol: HarnessPolicy) -> Dict[str, Any]:
     l0, inst = rm.get("l0_stats"), rm.get("inst_stats")
     if not isinstance(l0, Mapping) or not isinstance(inst, Mapping):
         return {"ok": False, "violations": [{"code": "COMPILER_STATS_MISSING",
@@ -834,12 +838,16 @@ def _gate_compiler(rm: Mapping[str, Any]) -> Dict[str, Any]:
                 "register_count_blind_spot": False, "remediation": [], "metrics": {}}
     return verify_compiler_spill_gate(
         l0, inst,
+        max_delta_spill_bytes=pol.max_delta_spill_bytes,
+        max_delta_stack_bytes=pol.max_delta_stack_bytes,
+        max_delta_stl=pol.max_delta_stl,
+        max_delta_ldl=pol.max_delta_ldl,
         has_setmaxnreg=bool(rm.get("has_setmaxnreg")),
         smem_free_bytes=rm.get("smem_free_bytes"),
     )
 
 
-def _gate_events(summary: Mapping[str, Any], trace: Mapping[str, Any], rm: Mapping[str, Any]) -> Dict[str, Any]:
+def _gate_events(summary: Mapping[str, Any], trace: Mapping[str, Any], rm: Mapping[str, Any], pol: HarnessPolicy) -> Dict[str, Any]:
     stage_ns: Dict[str, List[float]] = defaultdict(list)
     sass_body = rm.get("sass_body_insns")
     for ev in _trace_x_events(trace):
@@ -852,12 +860,12 @@ def _gate_events(summary: Mapping[str, Any], trace: Mapping[str, Any], rm: Mappi
     stub = verify_semantic_body_and_stubs(stage_ns, sass_body_insns=sass_body)
     gran_gate = (
         {"ok": True, "code": None, "skipped": True}
-        if rm.get("allow_single_stage_collapse") is True
+        if pol.allow_single_stage_collapse
         else verify_stage_granularity(trace)
     )
     warp_gate = (
         {"ok": True, "code": None, "skipped": True}
-        if rm.get("allow_partial_warps") is True
+        if pol.allow_partial_warps
         else verify_warp_completeness(summary, trace, expected_warps=rm.get("expected_warps_per_cta"))
     )
     overflow = int(summary.get("overflow") or 0)
@@ -890,7 +898,7 @@ def _gate_overhead(guard: PolicyGuard, rm: Mapping[str, Any], limit: float) -> D
     elif ratio is not None and float(ratio) < -(lim + 1e-12):
         errors = list(errors) + [
             f"NEGATIVE_OVERHEAD_PERTURBATION: warm ratio {100.0 * float(ratio):.2f}% < -{100.0 * lim:.2f}% "
-            "(instrumentation altered compiler unrolling/scheduling relative to L0)"
+            "(instrumentation altered compiler unrolling/scheduling relative to the unmodified baseline)"
         ]
     return {"ok": ok, "overhead_ratio": ratio, "limit": lim, "abba": abba, "errors": list(errors)}
 
@@ -954,20 +962,18 @@ def _argv(cmd: Sequence[str] | str, subs: Mapping[str, str]) -> List[str]:
 def _shadow_env(l0: Path, inst: Path, out: Path, l0_cache: Optional[Path]) -> Dict[str, str]:
     libs = ROOT / "recorders"
     env = dict(os.environ)
+    env.pop("WEAVEPROF_SUPERVISOR_KEY_FILE", None)
+    env.pop("WEAVEPROF_SUPERVISOR_HMAC_KEY", None)
     env.update(
         WEAVEPROF_ROOT=str(ROOT), WEAVEPROF_L0_DIR=str(l0), WEAVEPROF_INST_DIR=str(inst),
         WEAVEPROF_OUT_DIR=str(out), PYTHONDONTWRITEBYTECODE="1",
     )
     if os.name != "nt":
-        jit_tmp = str(_cache_base() / "jit")
-        env.setdefault("TRITON_CACHE_DIR", jit_tmp + "/triton")
-        env.setdefault("TORCH_EXTENSIONS_DIR", jit_tmp + "/torch_ext")
-    if l0_cache is not None:
-        env["WEAVEPROF_L0_CACHE_DIR"] = str(l0_cache)
-    if os.name != "nt":
         jit_tmp = _cache_base() / "jit"
         env.setdefault("TRITON_CACHE_DIR", str(jit_tmp / "triton"))
         env.setdefault("TORCH_EXTENSIONS_DIR", str(jit_tmp / "torch_ext"))
+    if l0_cache is not None:
+        env["WEAVEPROF_L0_CACHE_DIR"] = str(l0_cache)
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT), str(libs / "triton"), str(libs / "cutedsl"),
                                          *filter(None, env.get("PYTHONPATH", "").split(os.pathsep))])
     env["CPATH"] = os.pathsep.join([str(libs / "cuda_cpp"), str(libs / "hip_cpp"),
@@ -1027,11 +1033,27 @@ def _run_shadow_workflow(
         procs: Dict[str, Tuple[subprocess.Popen, Any]] = {}
         before = None
         if manifest is not None and manifest.is_file():
-            for rel in read_json(manifest).get("files") or []:
-                src = l0_cache_dir / "products" / rel
-                (l0 / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, l0 / rel)
-            l0_info["hit"] = True
+            try:
+                mdoc = read_json(manifest)
+                cached_files = mdoc.get("files") or []
+                cached_shas = mdoc.get("sha256") or {}
+                valid_cache = bool(cached_files) and isinstance(cached_shas, Mapping)
+                if valid_cache:
+                    for rel in cached_files:
+                        src = l0_cache_dir / "products" / rel
+                        if not src.is_file() or cached_shas.get(rel) != digest(src):
+                            valid_cache = False
+                            break
+                if valid_cache:
+                    for rel in cached_files:
+                        src = l0_cache_dir / "products" / rel
+                        (l0 / rel).parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, l0 / rel)
+                    l0_info["hit"] = True
+                else:
+                    before = _tree_snapshot(l0)
+            except (OSError, ValueError):
+                before = _tree_snapshot(l0)
         else:
             before = _tree_snapshot(l0)
         for tag, tree, env in (("L0", l0, env_l0), ("L_inst", inst, env_inst)):
@@ -1054,11 +1076,13 @@ def _run_shadow_workflow(
         if before is not None and l0_cache_dir is not None:
             after = _tree_snapshot(l0)
             products = sorted(rel for rel, sig in after.items() if before.get(rel) != sig)
+            shas: Dict[str, str] = {}
             for rel in products:
                 dst = l0_cache_dir / "products" / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(l0 / rel, dst)
-            write_json(l0_cache_dir / "products.json", {"files": products, "created_at": time.time()})
+                shas[rel] = digest(dst)
+            write_json(l0_cache_dir / "products.json", {"files": products, "sha256": shas, "created_at": time.time()})
             l0_info["stored_products"] = len(products)
     subs = {"l0": str(l0), "inst": str(inst), "out": str(bench_out), "tree": str(inst)}
     argv = _argv(bench_cmd, subs)
@@ -1298,32 +1322,18 @@ def _capture_nsys_sqlite(
             except subprocess.TimeoutExpired:
                 return -9
 
-    used_sudo = False
     log_path = out / "nsys_profile.log"
     with gpu_critical_region(gpu_id, timeout_s=policy.region_lock_timeout_s, label="megakernel_nsys"):
         rc = _run_prof(prof_argv, env_nsys, log_path)
-        rep_file = Path(str(rep_base) + ".nsys-rep")
-        log_txt = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
-        need_sudo = (rc != 0 or not rep_file.is_file()
-                     or "ERR_NVGPUCTRPERM" in log_txt or "Insufficient Privilege" in log_txt)
-        if need_sudo and os.name == "posix" and shutil.which("sudo"):
-            chk = subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if chk.returncode == 0:
-                pass_keys = (
-                    "HOME", "XDG_CACHE_HOME", "FLASHINFER_WORKSPACE_BASE", "TRITON_CACHE_DIR",
-                    "TORCH_EXTENSIONS_DIR", "CUDA_VISIBLE_DEVICES", "PATH", "LD_LIBRARY_PATH",
-                    "PYTHONPATH", "CPATH", "WEAVEPROF_ROOT", "WEAVEPROF_L0_DIR", "WEAVEPROF_INST_DIR",
-                    "WEAVEPROF_OUT_DIR", "WEAVEPROF_L0_CACHE_DIR", "WEAVEPROF_NSYS_CAPTURE",
-                    "PYTHONDONTWRITEBYTECODE",
-                )
-                env_pairs = [f"{k}={env_nsys[k]}" for k in pass_keys if k in env_nsys]
-                sudo_argv = ["sudo", "-n", "env", *env_pairs, *prof_argv]
-                rc = _run_prof(sudo_argv, env_nsys, log_path)
-                used_sudo = True
-                subprocess.run(["sudo", "-n", "chmod", "-R", "a+rX", str(out)],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     rep_file = Path(str(rep_base) + ".nsys-rep")
     if rc != 0 or not rep_file.is_file():
+        log_txt = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+        if "ERR_NVGPUCTRPERM" in log_txt or "Insufficient Privilege" in log_txt:
+            raise RuntimeError(
+                f"nsys profile exited {rc} due to GPU performance counter permissions "
+                f"(configure NVreg_RestrictProfilingToAdminUsers=0 or CAP_SYS_ADMIN on the host; "
+                f"automatic sudo escalation is disabled; see {log_path})"
+            )
         raise RuntimeError(f"nsys profile exited {rc} (see {log_path})")
     exp_log = out / "nsys_export.log"
     with open(exp_log, "wb") as log:
@@ -1344,7 +1354,6 @@ def _capture_nsys_sqlite(
         "same_run_dump": same_run_dump,
         "gpu_device": dev,
         "freq_hz": int(nsys_freq_hz),
-        "used_sudo": used_sudo,
     }
 
 
@@ -1515,6 +1524,8 @@ def run_megakernel_audit(
 
     if not ws.is_dir():
         return _blocked("WORKSPACE_MISSING", str(ws))
+    if mode == "shadow_build_run" and out.is_relative_to(ws):
+        return _blocked("OUT_DIR_INSIDE_WORKSPACE", f"out_dir must be outside workspace ({out})")
     if entry is None or source_sha is None:
         return _blocked("ENTRY_SOURCE_MISSING", f"entry_source must name the clean production source ({entry})")
     try:
@@ -1600,9 +1611,9 @@ def run_megakernel_audit(
         hard_fail = True
 
     # Fidelity gates (evaluated on clean non-nsys ABBA run first).
-    g_compiler = _gate_compiler(rm)
-    g_output = _gate_output(rm, rm_base)
-    g_events = _gate_events(summary, trace, rm) if summary else {
+    g_compiler = _gate_compiler(rm, pol)
+    g_output = _gate_output(rm, rm_base, require_files=pol.require_output_files)
+    g_events = _gate_events(summary, trace, rm, pol) if summary else {
         "ok": False, "stub_gate": {"ok": False, "stubs": [], "valid_stages": [], "stub_count": 0},
         "overflow": None, "pairing_errors": None, "spans": 0, "decoder_errors": {}}
     g_overhead = _gate_overhead(guard, rm, float(limit))
@@ -1781,6 +1792,7 @@ def run_megakernel_audit(
             )
         except ImportError:
             overview_png_path = None
+            blockers.append("OVERVIEW_PNG_SKIPPED: matplotlib unavailable")
         except Exception as exc:
             blockers.append(f"OVERVIEW_PNG_FAILED: {type(exc).__name__}: {exc}"[:160])
 
@@ -1802,6 +1814,7 @@ def run_megakernel_audit(
             fsm_state="VERIFY_AND_SEAL", region_lock=region_lock,
             extra_artifacts={"dump": dump, "runtime_metrics": rm_path, "nsys_hw": hw_path,
                              "names_source": names_src, "overview_png": overview_png_path},
+            mode=mode,
         )
         seal_sha = seal_doc.get("seal_sha256")
         ver = verify_seal(seal_path, require_pass=(status == "PASS"), expected_source_sha=source_sha,

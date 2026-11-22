@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """§3.1 Semantic Probe Placement — Read-Only LLM JSON Probe Spec Generator & §4.2 Ablation Driver.
 
-Supports the three evaluated DAC'27 models at ``reasoning_effort="max"``:
+Supports the evaluated models at ``reasoning_effort="max"``:
   - ``qwen4-max``
   - ``deepseek-v4.1-flash-1017``
-  - ``glm-5.3``
+  - ``kimi-k3.1-pro``
 
 Retrieves route-specific exemplars from ``configs/``:
   - ``configs/semantic_ids.json``
@@ -15,8 +15,8 @@ Retrieves route-specific exemplars from ``configs/``:
 
 Emits a SHA-bound declarative **JSON Probe Spec** (``weaveprofiler.probe-spec/v1``) and
 supports all four §4.2 progressive ablation modes:
-  1. ``bare_direct``      : Bare LLM directly rewrites full kernel source.
-  2. ``kb_direct``        : LLM + route KB exemplars directly rewrites full kernel source.
+  1. ``bare_direct``      : [Ablation-only] Bare LLM directly rewrites full kernel source.
+  2. ``kb_direct``        : [Ablation-only] LLM + route KB exemplars directly rewrites full kernel source.
   3. ``open_loop``        : Read-only JSON Probe Spec + KB + deterministic rule injection (single round).
   4. ``full_closed_loop`` : Full WeaveProfiler (+ deterministic compile/SASS/numerical/completeness/overhead
                             closed-loop feedback & Scheme A Probe Coarsening).
@@ -44,7 +44,13 @@ if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
 from weaveprof.pipeline.core.semantics import load_kb as load_semantic_kb, source_hints  # noqa: E402
-from weaveprof.contract import compact_probe_spec, normalize_probe_spec, revise_probe_spec
+from weaveprof.contract import (
+    STAGES as STAGE_EVENT_IDS,
+    compact_probe_spec,
+    normalize_probe_spec,
+    resolve_semantic_id,
+    revise_probe_spec,
+)
 
 PROBE_SPEC_SCHEMA = "weaveprofiler.probe-spec/v1"
 BAILIAN_BASE_URL = "https://ws-3o1qb69p061drz4g.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
@@ -67,31 +73,14 @@ CANONICAL_STAGE_IDS = (
     "wait",
     "mma",
     "compute",
+    "softmax",
+    "reduction",
     "barrier",
     "store",
     "epilogue",
     "dispatch",
     "communication",
 )
-
-STAGE_EVENT_IDS: Dict[str, int] = {
-    "load": 1,
-    "wait": 2,
-    "mma": 3,
-    "compute": 4,
-    "epilogue": 5,
-    "store": 6,
-    "barrier": 7,
-    "dispatch": 8,
-    "communication": 9,
-    "gemm": 10,
-    "attention": 11,
-    "reduction": 12,
-    "moe": 13,
-    "convolution": 14,
-    "megakernel": 15,
-    "softmax": 16,
-}
 
 FIVE_CLASS_MAP: Dict[str, str] = {
     "load": "load",
@@ -105,28 +94,6 @@ FIVE_CLASS_MAP: Dict[str, str] = {
     "epilogue": "store",
     "dispatch": "compute",
     "communication": "load",
-}
-
-STAGE_ALIAS_NORMALIZE: Dict[str, str] = {
-    "sync": "barrier",
-    "synchronization": "barrier",
-    "fence": "barrier",
-    "mbarrier": "barrier",
-    "wgmma": "mma",
-    "mfma": "mma",
-    "tcgen05": "mma",
-    "dot": "mma",
-    "gemm_mma": "mma",
-    "softmax": "compute",
-    "reduction": "compute",
-    "reduce": "compute",
-    "writeback": "store",
-    "tma_load": "load",
-    "cp_async": "load",
-    "tma_store": "store",
-    "comm": "communication",
-    "allgather": "communication",
-    "allreduce": "communication",
 }
 
 CARD_DEFAULTS: Dict[str, Dict[str, Any]] = {
@@ -554,16 +521,148 @@ def extract_code_block(raw_text: str) -> str:
     return text + "\n"
 
 
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+_LINE_COMMENT_RE = re.compile(r"(?://|#).*$", re.M)
+_MMA_WAIT_MASK_RE = re.compile(
+    r"\b(?:wgmma\.wait\w*|wgmma_wait\w*|tcgen05\.wait\w*|mma_?(?:mbar|bar|barrier|wait|fence)\w*)\b",
+    re.I,
+)
+_SOFTMAX_EXP_RE = re.compile(r"\b(?:exp2?f?|__expf|tl\.exp2?)\b", re.I)
+_SOFTMAX_STATS_RE = re.compile(r"\b(?:row_?max|row_?sum|m_?new|l_?new|rescale|max_val|sum_exp|online_softmax)\b", re.I)
+
+_SEMANTIC_CUES: Dict[str, "re.Pattern[str]"] = {
+    "mma": re.compile(
+        r"(?:\b(?:mma|wgmma|wmma|tcgen05|mfma|matmul|gemm)\w*|\btl\.dot\b|\bcute\.gemm\b)",
+        re.I,
+    ),
+    "load": re.compile(
+        r"(?:cp\.async\.bulk\.tensor\.\d+d\.shared\b|\b(?:cp\.async(?!\.bulk\.tensor\.\d+d\.global)|tma_load|ld\.global|ld\.shared|global_load|buffer_load|copy_async|load_matrix|ldmatrix)\w*|\btl\.load\b|\bcute\.copy\b)",
+        re.I,
+    ),
+    "store": re.compile(
+        r"(?:cp\.async\.bulk\.tensor\.\d+d\.global\b|\b(?:tma_store|st\.global|global_store|buffer_store|store_matrix|store_epilogue)\w*|\btl\.store\b)",
+        re.I,
+    ),
+    "softmax": re.compile(r"\bsoftmax\w*", re.I),
+    "communication": re.compile(
+        r"\b(?:nvshmem\w*|nccl\w*|rccl\w*|p2p\w*|peer\w*|allreduce\w*|allgather\w*|alltoall\w*|remote_ptr|multimem\w*)",
+        re.I,
+    ),
+    "wait": re.compile(
+        r"(?:\bmbarrier[\w.]*wait\w*|\bwait_parity\w*|\bwait_group\w*|\bs_waitcnt\b|\bcp\.async\.wait\w*|\bwgmma\.wait\w*|\bwait_barrier\w*|\bpipeline\w*\.consumer_wait\w*|\bwarpgroup_wait\w*|\bwhile\s*\([^)]*volatile)",
+        re.I,
+    ),
+    "barrier": re.compile(
+        r"\b(?:__syncthreads|__syncwarp|bar\.sync|barrier_sync\w*|s_barrier|arrive_and_wait\w*|named_barrier\w*|cluster_sync\w*|__threadfence\w*)",
+        re.I,
+    ),
+}
+
+
+def _strip_comments_preserve_lines(code: str) -> str:
+    """Remove C/C++ and Python comments while preserving line structure for window checks."""
+    no_block = _BLOCK_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), code)
+    return _LINE_COMMENT_RE.sub("", no_block)
+
+
+def _has_windowed_softmax(clean_code: str, window_lines: int = 12) -> bool:
+    """Require exp/exp2 and online-softmax max/sum/rescale cues within a local line window."""
+    if _SEMANTIC_CUES["softmax"].search(clean_code):
+        return True
+    clines = clean_code.splitlines()
+    exp_idxs = [i for i, ln in enumerate(clines) if _SOFTMAX_EXP_RE.search(ln)]
+    if not exp_idxs:
+        return False
+    stat_idxs = [i for i, ln in enumerate(clines) if _SOFTMAX_STATS_RE.search(ln)]
+    return any(abs(ei - si) <= window_lines for ei in exp_idxs for si in stat_idxs)
+
+
+def verify_probe_semantics(
+    probes: Sequence[Mapping[str, Any]],
+    source_text: str,
+) -> List[Dict[str, Any]]:
+    """Deterministically cross-check each probe's declared semantic_id against its enclosed source lines.
+
+    Flags clear semantic mismatches (e.g., `mma` enclosing zero matrix-multiply cues, `load` wrapping
+    only stores, `wait`/`barrier` wrapping matrix math, or `load`/`store` wrapping cross-GPU P2P/NVSHMEM
+    communication) so ambiguous or mislabeled segments are caught before trace delivery.
+    """
+    lines = source_text.splitlines()
+    n_lines = len(lines)
+    warnings: List[Dict[str, Any]] = []
+    for p in probes:
+        if not isinstance(p, Mapping):
+            continue
+        pid = str(p.get("probe_id") or p.get("id") or "")
+        sem = normalize_semantic_id(p.get("semantic_id") or pid)
+        b_ln = p.get("begin_line")
+        e_ln = p.get("end_line")
+        if b_ln is None and isinstance(p.get("begin"), Mapping):
+            b_ln = p["begin"].get("line")
+        if e_ln is None and isinstance(p.get("end"), Mapping):
+            e_ln = p["end"].get("line")
+        if not isinstance(b_ln, int) or not isinstance(e_ln, int) or n_lines == 0:
+            continue
+        lo = max(1, min(n_lines, b_ln))
+        hi = max(lo, min(n_lines, e_ln))
+        # Skip cross-warp split endpoints (where begin and end live in separate role branches)
+        if isinstance(p.get("begin"), Mapping) and isinstance(p.get("end"), Mapping):
+            if p["begin"].get("role") != p["end"].get("role"):
+                continue
+        raw_snippet = "\n".join(lines[lo - 1 : hi])
+        clean_snippet = _strip_comments_preserve_lines(raw_snippet)
+        mma_masked = _MMA_WAIT_MASK_RE.sub("", clean_snippet)
+        hits = set()
+        for k, rx in _SEMANTIC_CUES.items():
+            if k == "softmax":
+                if _has_windowed_softmax(clean_snippet):
+                    hits.add("softmax")
+            elif k == "mma":
+                if rx.search(mma_masked):
+                    hits.add("mma")
+            elif rx.search(clean_snippet):
+                hits.add(k)
+        preview = " | ".join(ln.strip() for ln in lines[lo - 1 : min(hi, lo + 2)] if ln.strip())[:160]
+
+        def _warn(reason: str, suggested: str) -> None:
+            warnings.append({
+                "code": "SEMANTIC_MISMATCH",
+                "probe_id": pid,
+                "declared_semantic": sem,
+                "suggested_semantic": suggested,
+                "lines": f"L{lo}-L{hi}",
+                "detected_cues": sorted(hits),
+                "code_preview": preview,
+                "message": reason,
+            })
+
+        if sem in ("mma", "gemm") and "mma" not in hits:
+            if hits & {"wait", "barrier"} and not (hits & {"load", "store"}):
+                _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `{sem}` has no MMA/matmul cues and matches wait/barrier.",
+                      "wait" if "wait" in hits else "barrier")
+            elif "store" in hits and "load" not in hits:
+                _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `{sem}` has no MMA/matmul cues and matches store.", "store")
+            elif "softmax" in hits:
+                _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `{sem}` matches online softmax rather than MMA.", "softmax")
+        elif sem in ("wait", "barrier") and "mma" in hits:
+            _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `{sem}` encloses MMA/matmul operations.", "mma")
+        elif sem == "load":
+            if "communication" in hits:
+                _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `load` encloses cross-GPU communication cues.", "communication")
+            elif "store" in hits and "load" not in hits:
+                _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `load` encloses only store operations.", "store")
+        elif sem == "store":
+            if "communication" in hits:
+                _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `store` encloses cross-GPU communication cues.", "communication")
+            elif "load" in hits and "store" not in hits:
+                _warn(f"probe `{pid}` (L{lo}-L{hi}) declared `store` encloses only load operations.", "load")
+        elif sem == "compute" and "softmax" in hits and "mma" not in hits:
+            _warn(f"probe `{pid}` (L{lo}-L{hi}) declared generic `compute` encloses online softmax (exp + max/sum/rescale).", "softmax")
+    return warnings
+
+
 def normalize_semantic_id(raw_id: Any) -> str:
-    s = str(raw_id or "").strip().lower()
-    if s in CANONICAL_STAGE_IDS:
-        return s
-    if s in STAGE_ALIAS_NORMALIZE:
-        return STAGE_ALIAS_NORMALIZE[s]
-    for cid in CANONICAL_STAGE_IDS:
-        if cid in s:
-            return cid
-    return "compute"
+    return resolve_semantic_id(raw_id, default="compute")
 
 
 def sanitize_and_bind_probe_spec(
@@ -580,7 +679,8 @@ def sanitize_and_bind_probe_spec(
         result = normalize_probe_spec(raw_spec, source_text, language=route["language"])
         result.update({key: route[key] for key in ("language", "card", "platform", "arch")})
         result.update(source_path=str(source_path or ""), source_sha256=sha256_text(source_text),
-                      kb_provenance=dict(kb_provenance or {}), telemetry=dict(telemetry or {}))
+                      kb_provenance=dict(kb_provenance or {}), telemetry=dict(telemetry or {}),
+                      semantic_warnings=verify_probe_semantics(result.get("probes") or [], source_text))
         return result
     lines = source_text.splitlines()
     n_lines = max(1, len(lines))
@@ -715,6 +815,7 @@ def sanitize_and_bind_probe_spec(
         "granularity": gran,
         "warp_roles": warp_roles,
         "probes": probes,
+        "semantic_warnings": verify_probe_semantics(probes, source_text),
         "kb_provenance": dict(kb_provenance or {}),
         "telemetry": dict(telemetry or {}),
     }
@@ -767,7 +868,24 @@ def _build_readonly_probe_prompt(
         "an outer tile loop) — instead bracket the ENTIRE inner sub-loop at the outer tile-loop "
         "level as one 'mma'/'softmax'/'compute' probe. NEVER wrap a single trivial scalar "
         "assignment or single-line store (e.g. `if (lane == 0) out[...] = sum;`, < 128 ns) as a "
-        "standalone probe — include it inside the enclosing tile compute/epilogue probe."
+        "standalone probe — include it inside the enclosing tile compute/epilogue probe.\n"
+        "5) SEMANTIC DISAMBIGUATION RULES (prevent stage mislabeling):\n"
+        "   - `load` vs `communication`: local HBM->SMEM/RMEM (TMA/cp.async/tl.load) is `load`; "
+        "cross-GPU/peer P2P/NVSHMEM/NVLink/AllReduce/Scatter is `communication`.\n"
+        "   - `mma` vs `compute` vs `softmax`: Tensor/Matrix Core ops (wgmma/tcgen05/wmma/mfma/tl.dot/cute.gemm) "
+        "are `mma`; online softmax (max + exp/exp2 + sum + rescale) is `softmax`; elementwise/activation/dequant "
+        "is `compute`.\n"
+        "   - `wait` vs `barrier`: waiting for an async producer/DMA/MMA completion (mbarrier.wait, cp.async.wait, "
+        "wgmma.wait, s_waitcnt) is `wait`; CTA/warp-group synchronization (__syncthreads, bar.sync, s_barrier) is `barrier`.\n"
+        "   - `epilogue` vs `store`: post-GEMM scale/bias/cast/quantize + writeback is `epilogue`; pure global/TMA writeout is `store`.\n"
+        "   - Distinct multi-phase IDs: when a kernel has two distinct phases in the same semantic family, give them "
+        "descriptive unique IDs with the canonical prefix (e.g., `mma_qk` and `mma_pv`, `mma_gmm1` and `mma_gmm2`, "
+        "`load_q` and `load_kv`, `communication_dispatch` and `communication_combine`) so they stay distinguishable.\n"
+        "   - DISJOINT SIBLING RULE (NO OUTER MACRO-WRAPPERS): NEVER wrap an entire kernel or device function call "
+        "in an outer `attention`/`mma`/`compute` probe that encloses inner `load`/`softmax`/`store` probes. Every "
+        "stage on the same lane must be a disjoint sibling interval. For FlashInfer/FA2/FA3 attention kernels, "
+        "always bracket per-tile `produce_kv`/`cp_async` (`load`), `compute_qk` (`mma_qk`), `update_mdo_states`/"
+        "`finalize_m` (`softmax`), `compute_sv` (`mma_pv`), and `write_o_reg_gmem` (`epilogue`/`store`)."
     )
     example = {"roles": {"dma": "warp 4", "math": "warps 0-3"},
                "probes": [{"id": "load", "begin": {"role": "dma", "line": 42},
@@ -784,6 +902,14 @@ def _build_readonly_probe_prompt(
     if prev_spec and diagnostics:
         parts.append("Previous probe.json: " + json.dumps(compact_probe_spec(prev_spec)))
         parts.append("Verification feedback (feedback.json): " + json.dumps(diagnostics, ensure_ascii=False))
+        sem_warns = list(prev_spec.get("semantic_warnings") or [])
+        if isinstance(diagnostics, Mapping):
+            sem_warns.extend(diagnostics.get("semantic_warnings") or [])
+        if sem_warns:
+            parts.append(
+                "Semantic disambiguation warnings from previous probe.json (fix every mislabeled segment):\n"
+                + json.dumps(sem_warns[:8], ensure_ascii=False)
+            )
         tsum = None
         if isinstance(diagnostics, Mapping):
             tsum = diagnostics.get("timeline_summary") or (diagnostics.get("metrics") or {}).get("timeline_summary")

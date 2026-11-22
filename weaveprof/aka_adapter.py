@@ -38,8 +38,10 @@ def _load_json_or_obj(val: Any) -> Dict[str, Any]:
 
 
 def _handle_profile(req: Dict[str, Any]) -> Dict[str, Any]:
+    req_limit = float(req.get("limit", 0.10))
+    policy_ceiling = float(req.get("max_overhead_limit", 0.10))
     policy = HarnessPolicy(
-        max_overhead_limit=float(req.get("limit", 0.10)),
+        max_overhead_limit=policy_ceiling,
         require_abba_order=bool(req.get("require_abba_order", False)),
         enforce_trace_processor=bool(req.get("enforce_trace_processor", False)),
     )
@@ -54,7 +56,7 @@ def _handle_profile(req: Dict[str, Any]) -> Dict[str, Any]:
         bench=req["bench"],
         card=req.get("card", "auto"),
         model=req.get("model", "qwen4-max"),
-        limit=float(req.get("limit", 0.10)),
+        limit=req_limit,
         max_rounds=int(req.get("max_rounds", 3)),
         out=req.get("out"),
         run_dir=req.get("run_dir"),

@@ -19,7 +19,7 @@
     "primary": "nsys",
     "fallback": [],
     "sampling_model": "periodic_pm",
-    "preferred_sample_hz": 50000,
+    "preferred_sample_hz": 200000,
     "evidence": "cross_compile_only",
     "note": "Both sm_100a and sm_103a remain distinct compiler targets. Sampling rate and continuity require an on-card manifest."
   },
