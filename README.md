@@ -81,7 +81,11 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async 四联对齐图](docs/images/case_sm86_cuda_s6_4panel.png)
 
-> 桌面显卡长核排障案例：在 Windows RTX 3050（WDDM）上跑 `92 ms` 的 `8192³` Triton GEMM 时，WeaveProfiler 通过软硬对齐同时捕捉到两类典型现象——前 `0–30 ms` 因预热不足/冷启动导致的本地 GDDR6 DRAM 带宽爬升（DVFS 频率与冷 TLB/L2 逐步稳态化），以及把 Panel (A) 4 次 `Active SMs → 0%` 垂直断崖与 Panel (B) 中被拉长至 ~`1 ms` 的异常蓝/红块微秒级锁定为桌面合成器抢占（详见 [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md)）。
+> **桌面显卡排障案例（Windows RTX 3050 WDDM，`8192³` Triton GEMM，详见 [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md)）**：
+> - **前 `0–30 ms` 冷启动本地 DRAM（GDDR6）带宽爬升**：Panel (A) 中橙色 `HBM/DRAM BW %` 从 `~25–30%` 缓慢爬升到 `~100%`（而 Tensor Active 恒定 `~48%`），系**预热不足/冷启动**导致（笔记本 GPU 刚退出低功耗 P-state 处于 DVFS 频率爬坡期，且 `384 MB` 工作集打冷 TLB / `2 MB` L2 缓存逐步稳态化）；实操中务必在 `cudaProfilerStart` 前跑够稳态热身。
+> - **4 次 WDDM 桌面抢占与 `~1 ms` 异常蓝/红块对齐**：Panel (A) 在 `5.5 / 30.2 / 55.0 / 72.0 ms` 的垂直掉零断崖与 Panel (B) 中 SM0/3/8/11–15 被拉长至 `~1 ms` 的大蓝块（`K0 MMA`）/ 大红块（`FP16 Store`）微秒级严丝合缝，直接把异常定位为 Windows 桌面合成器上下文抢占。
+
+![RTX 3050 sm_86 8192³ Triton GEMM 冷启动 DRAM 爬升与 WDDM 抢占四联对齐图](docs/images/case_sm86_wddm_preemption.png)
 
 ### 4.3 开源算子库零签名修改四联图实测（NVIDIA H20，200.3 kHz `nsys`）
 

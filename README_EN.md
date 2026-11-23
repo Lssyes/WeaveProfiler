@@ -81,7 +81,11 @@ Captured with same-run 200 kHz `nsys` GPU metrics on a `2048×2048×1280` 6-stag
 
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async Four-Panel Aligned View](docs/images/case_sm86_cuda_s6_4panel.png)
 
-> Desktop GPU forensic case study: on a `92 ms` `8192³` Triton GEMM under Windows WDDM (RTX 3050), locked SW+HW alignment simultaneously exposed both a `0–30 ms` cold-start local GDDR6 DRAM bandwidth ramp (insufficient pre-capture warmup / DVFS clock & L2-TLB stabilization) and four `Active SMs → 0%` cliffs in Panel (A) tied directly to `~1 ms` stretched blue/red stage blocks in Panel (B) from OS display preemption (see [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md)).
+> **Desktop GPU Forensic Case Study (Windows RTX 3050 WDDM, `8192³` Triton GEMM, full write-up in [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md))**:
+> - **Cold-start local DRAM (GDDR6) ramp (`0–30 ms`)**: The orange `HBM/DRAM BW %` curve in Panel (A) climbs from `~25–30%` to `~100%` while `Tensor Active %` holds steady near `48%`, exposing **insufficient pre-capture warmup** (laptop DVFS clock stabilization + cold TLB / `2 MB` L2 across a `384 MB` working set).
+> - **4 WDDM preemption cliffs ↔ `~1 ms` stretched blue/red blocks**: Panel (A)'s vertical `Active SMs → 0%` drops (`5.5 / 30.2 / 55.0 / 72.0 ms`) align to the microsecond with `~1 ms` stretched blue (`K0 MMA`) and red (`FP16 Store`) spans in Panel (B), pinning the glitches directly to OS display preemption.
+
+![RTX 3050 sm_86 8192³ Triton GEMM Cold-Start DRAM Ramp and WDDM Preemption](docs/images/case_sm86_wddm_preemption.png)
 
 ### 4.3 Zero-Signature Four-Panel Profiling of Open-Source Kernels (NVIDIA H20, 200.3 kHz `nsys`)
 
