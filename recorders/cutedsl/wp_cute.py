@@ -51,32 +51,40 @@ def _map_env(canonical: str, legacy: str) -> None:
     os.environ[legacy] = value
 
 
-for _canonical, _legacy in (("WP_LEVEL", "FI_LEVEL"), ("WP_GRAN", "FI_GRAN")):
+for _canonical, _legacy in (("WP_LEVEL", "FI_LEVEL"), ("WP_GRAN", "FI_GRAN"), ("WP_TIMER", "FI_TIMER")):
     _map_env(_canonical, _legacy)
 
+_TIMER_ENV_EXPLICIT = ("FI_TIMER" in os.environ and os.environ.get("FI_TIMER", "") != "")
 WP_LEVEL = int(os.environ.get("FI_LEVEL", "2"))
 WP_GRAN = int(os.environ.get("FI_GRAN", "0"))
+WP_TIMER = int(os.environ.get("FI_TIMER", "0"))
 if WP_LEVEL not in (0, 1, 2):
     raise ValueError(f"WP_LEVEL must be 0, 1 or 2, got {WP_LEVEL}")
 if WP_GRAN not in (0, 1):
     raise ValueError(f"WP_GRAN must be 0 or 1, got {WP_GRAN}")
+if WP_TIMER not in (0, 1):
+    raise ValueError(f"WP_TIMER must be 0 or 1, got {WP_TIMER}")
 FI_LEVEL = WP_LEVEL
 FI_GRAN = WP_GRAN
+FI_TIMER = WP_TIMER
 
 TAG_END = 0x80000000
 TAG_OPEN = 0x40000000
 TAG_MARK = 0x20000000
+TAG_CLK = 0x10000000
 TAG_CLOSE = 0x08000000
 TAG_IDMASK = 0x0FFF
 AUX_SHIFT = 32
 UINT32_MASK = 0xFFFFFFFF
 DEFAULT_BACKEND = "nvidia_cutedsl"
 NVIDIA_ARCH_RE = re.compile(r"^sm_[0-9]+[a-z]?$")
-WP_TAG_END, WP_TAG_OPEN, WP_TAG_MARK, WP_TAG_CLOSE, WP_TAG_IDMASK = TAG_END, TAG_OPEN, TAG_MARK, TAG_CLOSE, TAG_IDMASK
+WP_TAG_END, WP_TAG_OPEN, WP_TAG_MARK, WP_TAG_CLK, WP_TAG_CLOSE, WP_TAG_IDMASK = (
+    TAG_END, TAG_OPEN, TAG_MARK, TAG_CLK, TAG_CLOSE, TAG_IDMASK
+)
 
 _DEVICE_SYMBOLS = {
     "FiCtx", "WpCtx",
-    "fi_globaltimer", "fi_smid", "_fi_pack", "_fi_store", "_fi_store_fast",
+    "fi_globaltimer", "fi_clock64", "fi_smid", "_fi_pack", "_fi_store", "_fi_store_fast",
     "fi_open_by", "fi_open", "fi_b", "fi_e", "fi_m", "fi_close",
     "FI_OPEN", "FI_OPEN_BY", "FI_B", "FI_E", "FI_M", "FI_CLOSE",
     "wp_open", "wp_open_by", "wp_b", "wp_e", "wp_m", "wp_close",
@@ -119,6 +127,15 @@ if _CUTLASS_AVAILABLE:
 
 
     @dsl_user_op
+    def fi_clock64(*, loc=None, ip=None) -> Int64:
+        """Read PTX ``%clock64`` cycle counter (high resolution on sm_86 where %globaltimer steps at 1024 ns)."""
+        fn = getattr(nvvm, "read_ptx_sreg_clock64", None)
+        if fn is None:
+            return Int64(nvvm.read_ptx_sreg_globaltimer(T.i64(), loc=loc, ip=ip))
+        return Int64(fn(T.i64(), loc=loc, ip=ip))
+
+
+    @dsl_user_op
     def fi_smid(*, loc=None, ip=None) -> Int32:
         """Read PTX ``%smid``."""
         return Int32(nvvm.read_ptx_sreg_smid(T.i32(), loc=loc, ip=ip))
@@ -133,7 +150,7 @@ if _CUTLASS_AVAILABLE:
 
 
     @cute.jit
-    def _fi_store(ctx: FiCtx, tag: Int32, aux: Int32) -> FiCtx:
+    def _fi_store(ctx: FiCtx, tag: Int32, aux: Int32, use_clock64: cutlass.Constexpr[int] = 0) -> FiCtx:
         next_count = ctx.count
         if ctx.active:
             n_slots = Int32(ctx.records.shape[0])
@@ -147,7 +164,10 @@ if _CUTLASS_AVAILABLE:
                         cute.arch.atomic_or(ctx.overflow.iterator, Int32(2))
                     else:
                         if ctx.count < ctx.cap:
-                            ctx.records[ctx.slot, ctx.count, 0] = fi_globaltimer()
+                            if const_expr(use_clock64 == 1):
+                                ctx.records[ctx.slot, ctx.count, 0] = fi_clock64()
+                            else:
+                                ctx.records[ctx.slot, ctx.count, 0] = fi_globaltimer()
                             ctx.records[ctx.slot, ctx.count, 1] = _fi_pack(tag, aux)
                             next_count = ctx.count + Int32(1)
                         else:
@@ -173,8 +193,9 @@ if _CUTLASS_AVAILABLE:
         warps_per_cta: Int32,
         fi_level: cutlass.Constexpr[int] = FI_LEVEL,
         fi_gran: cutlass.Constexpr[int] = FI_GRAN,
+        fi_timer: cutlass.Constexpr[int] = -1,
     ) -> FiCtx:
-        """Open a recorder selected by ``pred`` and write an OPEN record."""
+        """Open a recorder selected by ``pred`` and write an OPEN record (plus CLK anchor when fi_timer==1)."""
         if const_expr(fi_level < 1):
             return FiCtx(
                 records,
@@ -218,11 +239,15 @@ if _CUTLASS_AVAILABLE:
             records.shape[1],
             out_active,
         )
-        return _fi_store(
+        ctx_open = _fi_store(
             opened,
             Int32(TAG_OPEN) | (role & Int32(0xFFFF)),
             fi_smid(),
+            use_clock64=0,
         )
+        if const_expr((FI_TIMER if fi_timer < 0 else fi_timer) == 1):
+            ctx_open = _fi_store(ctx_open, Int32(TAG_CLK), Int32(0), use_clock64=1)
+        return ctx_open
 
 
     @cute.jit
@@ -233,6 +258,7 @@ if _CUTLASS_AVAILABLE:
         warps_per_cta: Int32,
         fi_level: cutlass.Constexpr[int] = FI_LEVEL,
         fi_gran: cutlass.Constexpr[int] = FI_GRAN,
+        fi_timer: cutlass.Constexpr[int] = -1,
     ) -> FiCtx:
         """Open a recorder using the default lane for FI_GRAN."""
         if const_expr(fi_gran == 0):
@@ -250,16 +276,20 @@ if _CUTLASS_AVAILABLE:
             warps_per_cta,
             fi_level=fi_level,
             fi_gran=fi_gran,
+            fi_timer=fi_timer,
         )
 
 
     @cute.jit
-    def _fi_store_fast(ctx: FiCtx, tag: Int32, aux: Int32) -> FiCtx:
+    def _fi_store_fast(ctx: FiCtx, tag: Int32, aux: Int32, use_clock64: cutlass.Constexpr[int] = 0) -> FiCtx:
         """Hot-loop recorder path: slot bounds already verified in fi_open_by; overflow atomic hoisted to fi_close."""
         next_count = ctx.count
         if ctx.active:
             if ctx.count < ctx.cap:
-                ctx.records[ctx.slot, ctx.count, 0] = fi_globaltimer()
+                if const_expr(use_clock64 == 1):
+                    ctx.records[ctx.slot, ctx.count, 0] = fi_clock64()
+                else:
+                    ctx.records[ctx.slot, ctx.count, 0] = fi_globaltimer()
                 ctx.records[ctx.slot, ctx.count, 1] = _fi_pack(tag, aux)
                 next_count = ctx.count + Int32(1)
             else:
@@ -280,10 +310,14 @@ if _CUTLASS_AVAILABLE:
         event: Int32,
         aux: Int32,
         fi_level: cutlass.Constexpr[int] = FI_LEVEL,
+        fi_timer: cutlass.Constexpr[int] = -1,
     ) -> FiCtx:
         if const_expr(fi_level < 2):
             return ctx
-        return _fi_store_fast(ctx, event & TAG_IDMASK, aux)
+        return _fi_store_fast(
+            ctx, event & TAG_IDMASK, aux,
+            use_clock64=const_expr(1 if (FI_TIMER if fi_timer < 0 else fi_timer) == 1 else 0),
+        )
 
 
     @cute.jit
@@ -292,10 +326,14 @@ if _CUTLASS_AVAILABLE:
         event: Int32,
         aux: Int32,
         fi_level: cutlass.Constexpr[int] = FI_LEVEL,
+        fi_timer: cutlass.Constexpr[int] = -1,
     ) -> FiCtx:
         if const_expr(fi_level < 2):
             return ctx
-        return _fi_store_fast(ctx, (event & TAG_IDMASK) | TAG_END, aux)
+        return _fi_store_fast(
+            ctx, (event & TAG_IDMASK) | TAG_END, aux,
+            use_clock64=const_expr(1 if (FI_TIMER if fi_timer < 0 else fi_timer) == 1 else 0),
+        )
 
 
     @cute.jit
@@ -304,17 +342,28 @@ if _CUTLASS_AVAILABLE:
         event: Int32,
         aux: Int32,
         fi_level: cutlass.Constexpr[int] = FI_LEVEL,
+        fi_timer: cutlass.Constexpr[int] = -1,
     ) -> FiCtx:
         if const_expr(fi_level < 2):
             return ctx
-        return _fi_store_fast(ctx, (event & TAG_IDMASK) | TAG_MARK, aux)
+        return _fi_store_fast(
+            ctx, (event & TAG_IDMASK) | TAG_MARK, aux,
+            use_clock64=const_expr(1 if (FI_TIMER if fi_timer < 0 else fi_timer) == 1 else 0),
+        )
 
 
     @cute.jit
-    def fi_close(ctx: FiCtx, fi_level: cutlass.Constexpr[int] = FI_LEVEL) -> FiCtx:
+    def fi_close(
+        ctx: FiCtx,
+        fi_level: cutlass.Constexpr[int] = FI_LEVEL,
+        fi_timer: cutlass.Constexpr[int] = -1,
+    ) -> FiCtx:
         if const_expr(fi_level < 1):
             return ctx
-        return _fi_store(ctx, TAG_CLOSE, Int32(0))
+        cur = _fi_store(ctx, TAG_CLOSE, Int32(0), use_clock64=0)
+        if const_expr((FI_TIMER if fi_timer < 0 else fi_timer) == 1):
+            cur = _fi_store(cur, Int32(TAG_CLK), Int32(1), use_clock64=1)
+        return cur
 
 
     # CUDA-macro-compatible aliases.
@@ -361,6 +410,7 @@ class FiBuffer:
         *,
         arch: str,
         backend: str = DEFAULT_BACKEND,
+        timer: int | None = None,
     ) -> None:
         gran = _coerce_gran(gran)
         n_ctas = _positive_int("n_ctas", n_ctas)
@@ -372,6 +422,12 @@ class FiBuffer:
                 "CuTeDSL arch must be an NVIDIA sm_* target such as sm_90, "
                 f"sm_100a or sm_103a; got {arch!r}"
             )
+        if timer is None:
+            resolved_timer = 1 if (arch == "sm_86" and not _TIMER_ENV_EXPLICIT) else FI_TIMER
+        else:
+            if isinstance(timer, bool) or int(timer) not in (0, 1):
+                raise ValueError(f"timer must be 0 or 1, got {timer!r}")
+            resolved_timer = int(timer)
         backend = str(backend or "").strip().lower()
         if not (backend.startswith("nvidia") or backend == "ptx"):
             raise ValueError(
@@ -382,6 +438,7 @@ class FiBuffer:
         from cutlass.cute.runtime import from_dlpack
 
         self.gran = gran
+        self.timer = resolved_timer
         self.arch = arch
         self.backend = backend
         self.n_ctas = n_ctas
@@ -446,7 +503,7 @@ class FiBuffer:
             self.cap,
             self.warps_per_cta,
             ovf,
-            0,
+            int(getattr(self, "timer", 0)),
             len(meta_bytes),
         )
         with open(path, "wb") as f:
@@ -474,7 +531,7 @@ class FiBuffer:
             "gran_name": "warp" if self.gran == 0 else "sm",
             "fi_level": int(FI_LEVEL),
             "timer_hz": 1_000_000_000,
-            "timer": 0,
+            "timer": int(getattr(self, "timer", 0)),
             "arch": self.arch,
             "backend": self.backend,
             "platform": "nv",
@@ -660,12 +717,73 @@ def open_perfetto(dump_path: str, names_path: str, out_path: str) -> dict[str, A
 
 
 _FI_ACTIVE_BUF: FiBuffer | None = None
+_ORIG_CUTE_COMPILE = None
+
+
+def _install_cute_compile_hook() -> None:
+    """Transparently route cute.compile() through _FiCuteProxy / _FiCuteDescriptor.
+
+    Without this hook, calling ``cute.compile(obj, ...)`` on an instrumented OOP
+    CuTeDSL launcher either drops instrumentation (resolving raw class __call__)
+    or—if a user manually compiles ``_inst_fn`` with ``_fi_rec/_fi_ovf``—causes
+    ``cudaErrorIllegalAddress`` at call time when the compiled C ABI stub is
+    invoked without forwarding ``_fi_rec`` and ``_fi_ovf``.
+    """
+    global _ORIG_CUTE_COMPILE
+    if not _CUTLASS_AVAILABLE:
+        return
+    cur = getattr(cute, "compile", None)
+    if cur is None or getattr(cur, "_wp_hooked", False):
+        return
+    _ORIG_CUTE_COMPILE = cur
+
+    def _wp_cute_compile(func, *args, **kwargs):
+        buf = fi_get_attached()
+        # Case 1: standalone _FiCuteProxy function
+        if isinstance(func, _FiCuteProxy):
+            if buf is None:
+                return _ORIG_CUTE_COMPILE(func._l0_fn, *args, **kwargs)
+            compiled = _ORIG_CUTE_COMPILE(
+                func._inst_fn, *args,
+                _fi_rec=buf.records_cute, _fi_ovf=buf.overflow_cute,
+                **kwargs,
+            )
+            def _wrapped_proxy(*cargs, **ckwargs):
+                active = fi_get_attached() or buf
+                return compiled(*cargs, _fi_rec=active.records_cute, _fi_ovf=active.overflow_cute, **ckwargs)
+            _wrapped_proxy._wp_compiled_raw = compiled
+            return _wrapped_proxy
+        # Case 2: class instance whose __call__ is a _FiCuteDescriptor (e.g. FlashAttentionForwardAmpere, PersistentDenseGemmKernel)
+        cls_call = type(func).__dict__.get("__call__")
+        if isinstance(cls_call, _FiCuteDescriptor):
+            if buf is None:
+                return _ORIG_CUTE_COMPILE(cls_call._l0_fn, func, *args, **kwargs)
+            compiled = _ORIG_CUTE_COMPILE(
+                cls_call._inst_fn, func, *args,
+                _fi_rec=buf.records_cute, _fi_ovf=buf.overflow_cute,
+                **kwargs,
+            )
+            def _wrapped_obj(*cargs, **ckwargs):
+                active = fi_get_attached() or buf
+                return compiled(*cargs, _fi_rec=active.records_cute, _fi_ovf=active.overflow_cute, **ckwargs)
+            _wrapped_obj._wp_compiled_raw = compiled
+            return _wrapped_obj
+        return _ORIG_CUTE_COMPILE(func, *args, **kwargs)
+
+    _wp_cute_compile._wp_hooked = True
+    cute.compile = _wp_cute_compile
+
+
+_install_cute_compile_hook()
 
 
 def fi_attach(buf: FiBuffer | None = None) -> FiBuffer | None:
     """Attach (or detach when ``None``) a module-level ``FiBuffer`` for zero-signature-edit launches."""
-    global _FI_ACTIVE_BUF
+    global _FI_ACTIVE_BUF, FI_TIMER, WP_TIMER
     _FI_ACTIVE_BUF = buf
+    if buf is not None:
+        FI_TIMER = WP_TIMER = int(getattr(buf, "timer", 0))
+    _install_cute_compile_hook()
     return buf
 
 
@@ -732,9 +850,9 @@ def wp_available() -> bool:
 __all__ = sorted(
     (_DEVICE_SYMBOLS if _CUTLASS_AVAILABLE else set())
     | {
-        "WP_LEVEL", "WP_GRAN", "FI_LEVEL", "FI_GRAN",
-        "TAG_END", "TAG_OPEN", "TAG_MARK", "TAG_CLOSE", "TAG_IDMASK",
-        "WP_TAG_END", "WP_TAG_OPEN", "WP_TAG_MARK", "WP_TAG_CLOSE", "WP_TAG_IDMASK",
+        "WP_LEVEL", "WP_GRAN", "WP_TIMER", "FI_LEVEL", "FI_GRAN", "FI_TIMER",
+        "TAG_END", "TAG_OPEN", "TAG_MARK", "TAG_CLK", "TAG_CLOSE", "TAG_IDMASK",
+        "WP_TAG_END", "WP_TAG_OPEN", "WP_TAG_MARK", "WP_TAG_CLK", "WP_TAG_CLOSE", "WP_TAG_IDMASK",
         "FiBuffer", "WpBuffer", "fi_attach", "wp_attach", "fi_get_attached", "wp_get_attached",
         "_FiCuteProxy", "_WpCuteProxy", "wp_wrap", "_FiCuteDescriptor", "_WpCuteDescriptor", "wp_descriptor",
         "write_names", "open_perfetto", "wp_available",

@@ -1274,6 +1274,9 @@ def _lower_cutedsl_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -
     op_ev = STAGE_EVENT_IDS.get(op_fam, 10)
     paper = probe_spec.get("_paper_endpoints")
     gran_int = 0 if paper or str(probe_spec.get("granularity")) == "warp" else 1
+    card_norm = str(probe_spec.get("card") or "").strip().lower()
+    arch_norm = str(probe_spec.get("arch") or "").strip().lower()
+    timer_int = 1 if (card_norm == "sm86" or arch_norm == "sm_86") else 0
     cute_dir = str(SKILL_ROOT / "recorders" / "cutedsl")
 
     import_block = (
@@ -1297,12 +1300,12 @@ def _lower_cutedsl_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -
         f"{body_indent}_fi_tile_id = cutlass.Int32(_fi_bidx + _fi_bidy * _fi_gidx + _fi_bidz * _fi_gidx * _fi_gidy)\n"
         f"{body_indent}_fi_bx, _fi_by, _fi_bz = cute.arch.block_dim()\n"
         f"{body_indent}_fi_wpc = cutlass.Int32((_fi_bx * _fi_by * _fi_bz + 31) // 32)\n"
-        f"{body_indent}_fi_ctx = _fi_open(_fi_rec, _fi_ovf, cutlass.Int32(0), _fi_wpc, fi_level=2, fi_gran={gran_int})\n"
-        f"{body_indent}_fi_ctx = _fi_b(_fi_ctx, cutlass.Int32({op_ev}), _fi_tile_id, fi_level=2)\n"
+        f"{body_indent}_fi_ctx = _fi_open(_fi_rec, _fi_ovf, cutlass.Int32(0), _fi_wpc, fi_level=2, fi_gran={gran_int}, fi_timer={timer_int})\n"
+        f"{body_indent}_fi_ctx = _fi_b(_fi_ctx, cutlass.Int32({op_ev}), _fi_tile_id, fi_level=2, fi_timer={timer_int})\n"
     )
     close_block = (
-        f"{body_indent}_fi_ctx = _fi_e(_fi_ctx, cutlass.Int32({op_ev}), _fi_tile_id, fi_level=2)\n"
-        f"{body_indent}_fi_ctx = _fi_close(_fi_ctx, fi_level=2)\n"
+        f"{body_indent}_fi_ctx = _fi_e(_fi_ctx, cutlass.Int32({op_ev}), _fi_tile_id, fi_level=2, fi_timer={timer_int})\n"
+        f"{body_indent}_fi_ctx = _fi_close(_fi_ctx, fi_level=2, fi_timer={timer_int})\n"
     )
 
     specialized = _specialized_roles(probe_spec)
@@ -1317,7 +1320,7 @@ def _lower_cutedsl_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -
         else:
             open_block += f"{body_indent}_wp_role = cutlass.Int32({probe_spec['warp_roles'][0]['role_id']})\n"
         open_block += (f"{body_indent}_fi_ctx = _fi_open(_fi_rec, _fi_ovf, _wp_role, _fi_wpc, "
-                       f"fi_level=2, fi_gran={gran_int})\n")
+                       f"fi_level=2, fi_gran={gran_int}, fi_timer={timer_int})\n")
         close_block = close_block.splitlines(keepends=True)[-1]
     insert_before.setdefault(kfn.body[0].lineno, []).append(open_block)
     for pr in probe_spec.get("probes") or []:
@@ -1330,15 +1333,15 @@ def _lower_cutedsl_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -
                 if specialized:
                     chunk += f"{ind}if _wp_role == {pr[side + '_role_id']}:\n"
                     ind += "    "
-                chunk += f"{ind}_fi_ctx = WP_{op}(_fi_ctx, cutlass.Int32({ev_id}), cutlass.Int32({pr.get('slot', 0)}), fi_level=2)\n"
+                chunk += f"{ind}_fi_ctx = WP_{op}(_fi_ctx, cutlass.Int32({ev_id}), cutlass.Int32({pr.get('slot', 0)}), fi_level=2, fi_timer={timer_int})\n"
                 where.setdefault(line, []).append(chunk)
             continue
         sb, se, ind = _snap_python_probe_lines(kfn, int(pr["begin_line"]), int(pr["end_line"]))
         insert_before.setdefault(sb, []).append(
-            f"{ind}_fi_ctx = _fi_b(_fi_ctx, cutlass.Int32({ev_id}), _fi_tile_id, fi_level=2)\n"
+            f"{ind}_fi_ctx = _fi_b(_fi_ctx, cutlass.Int32({ev_id}), _fi_tile_id, fi_level=2, fi_timer={timer_int})\n"
         )
         insert_after.setdefault(se, []).append(
-            f"{ind}_fi_ctx = _fi_e(_fi_ctx, cutlass.Int32({ev_id}), _fi_tile_id, fi_level=2)\n"
+            f"{ind}_fi_ctx = _fi_e(_fi_ctx, cutlass.Int32({ev_id}), _fi_tile_id, fi_level=2, fi_timer={timer_int})\n"
         )
 
     last_stmt = kfn.body[-1]
