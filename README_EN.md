@@ -81,19 +81,19 @@ Captured with same-run 200 kHz `nsys` GPU metrics on a `2048×2048×1280` 6-stag
 
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async Four-Panel Aligned View](docs/images/case_sm86_cuda_s6_4panel.png)
 
-### 4.3 Zero-Signature Profiling of Open-Source Kernels
+### 4.3 Zero-Signature Four-Panel Profiling of Open-Source Kernels (NVIDIA H20, 200.3 kHz `nsys`)
 
-Closed-loop H20 profiling without changing function signatures or callers (earlier sparse-event runs below did not exceed the `< 12 px` density threshold for Panel D):
+Closed-loop profiling on unmodified open-source libraries at production long-sequence shapes with zero signature edits, `max_diff=0.0`, zero buffer overflows, and 100% physical warp coverage:
 
-| Open-Source Kernel | Frontend & Shape (H20) | Warp Coverage | Steady-State Overhead & Outcome |
+| Open-Source Kernel | Frontend & Shape (H20 `sm_90a`) | Warp Coverage | Steady-State Overhead & Highlights |
 | --- | --- | :---: | --- |
-| **FlashInfer 0.6.8 Hopper FA3** (3 headers) | CUDA C++, `B=5, H=16, S=512/4096, D=128` | 12 / 12 | `-1.62%` (scheduling shift within `±10%`), SW–HW delta `0.33%` |
-| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`) | CUDA C++, `B=64, H=128, KV=512/4096` | 8 / 8 | Round 1 `+14.55%` rejected → auto-hoisted `+6.11%`, `0 B` spill |
-| **vLLM FLA FlashKDA** (`chunk_delta_h.py`) | Triton 3.6, `B=1, T=512/8192, H=64, D=128` | 4 / 4 | Pinned baseline autotune config, boundary-fused `+6.74%`, `0 B` spill |
+| **FlashInfer 0.6.8 Hopper FA3** (3 headers) | CUDA C++, `B=5, H=16, S=4096, D=128` | 12 / 12 | **`+0.13%`** (`2,629 → 2,633 µs`), SW–HW delta `0.08%`; Panel (D) exposes `W00` TMA prefetch and antiphase ping-pong scheduling across `math_wg1`/`math_wg2` |
+| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`) | CUDA C++, `B=64, H=128, KV=4096` | 8 / 8 | **`+6.23%`** (`687 → 729 µs`), **`0 B` spill**, SW–HW delta `0.24%`; locks the `78 + 50` two-wave step and `WG0`/`WG1` split |
+| **vLLM FLA FlashKDA** (`chunk_delta_h.py`) | Triton 3.6 PTX Auto-Async, `B=1, T=8192, H=64, D=128` | 4 / 4 | Round 1 dual-async `+18.77%` rejected → closed-loop coarsened to **`+4.08%`** (`544 → 566 µs`), **`0` spill**, SW–HW delta `0.21%`; Panel (D) exposes 5-stage `cp.async` ramps and `Exposed Wait` |
 
-![FlashInfer 0.6.8 Hopper FA3 H20 Aligned SW+HW View](docs/images/case_h20_flashinfer_fa3.png)
-![FlashInfer 0.6.8 Hopper FlashMLA H20 Aligned SW+HW View](docs/images/case_h20_flashmla.png)
-![vLLM FLA FlashKDA H20 Aligned SW+HW View](docs/images/case_h20_flashkda.png)
+![FlashInfer 0.6.8 Hopper FA3 H20 S=4096 Four-Panel Aligned View](docs/images/case_h20_flashinfer_fa3.png)
+![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=4096 Four-Panel Aligned View](docs/images/case_h20_flashmla.png)
+![vLLM FLA FlashKDA H20 T=8192 Triton PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_flashkda.png)
 
 ---
 

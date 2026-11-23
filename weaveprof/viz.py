@@ -908,6 +908,7 @@ def _pick_micro_zoom_window(
     cta_wait_spans: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
     cta_issues: Dict[int, List[float]] = defaultdict(list)
     all_issue_ts_by_warp: Dict[int, List[float]] = defaultdict(list)
+    all_main_ts_by_warp: Dict[int, List[float]] = defaultdict(list)
 
     for sp in rep_main:
         c = int(sp["cta"])
@@ -915,6 +916,7 @@ def _pick_micro_zoom_window(
         t0, t1 = float(sp["ts"]), float(sp["end"])
         b = cta_bounds.get(c)
         cta_bounds[c] = [t0, t1] if b is None else [min(b[0], t0), max(b[1], t1)]
+        all_main_ts_by_warp[int(sp["warp"])].append(t0)
         if sp["sem"] == "wait":
             cta_wait[c] += (t1 - t0)
             cta_wait_spans[c].append((t0, t1))
@@ -943,16 +945,31 @@ def _pick_micro_zoom_window(
         return out
 
     # Step 1: Deterministic density trigger (`delta_px < 12 px` on ~2400 px plot width)
-    gaps: List[float] = []
+    # Check both async issue spacing AND main-track stage spacing so multi-stage loops
+    # (e.g. FlashMLA QK/Softmax/PV) trigger micro-zoom whenever per-stage bars get < 12 px wide.
+    def _med_gap_px(ts_by_warp: Mapping[int, Sequence[float]]) -> float:
+        gs: List[float] = []
+        for _w, ts_l in ts_by_warp.items():
+            ds = _dedup_sorted(ts_l)
+            for i in range(1, len(ds)):
+                g = ds[i] - ds[i - 1]
+                if g > 1e-4:
+                    gs.append(g)
+        if not gs:
+            return 2400.0
+        gs.sort()
+        return (gs[len(gs) // 2] / max(t_max, 1e-6)) * 2400.0
+
+    async_gaps: List[float] = []
     for _w, ts_l in all_issue_ts_by_warp.items():
         ds = _dedup_sorted(ts_l)
         for i in range(1, len(ds)):
             g = ds[i] - ds[i - 1]
             if g > 1e-4:
-                gaps.append(g)
-    gaps.sort()
-    med_gap = gaps[len(gaps) // 2] if gaps else t_max
-    delta_px = (med_gap / max(t_max, 1e-6)) * 2400.0
+                async_gaps.append(g)
+    async_gaps.sort()
+    med_gap = async_gaps[len(async_gaps) // 2] if async_gaps else t_max
+    delta_px = min(_med_gap_px(all_issue_ts_by_warp), _med_gap_px(all_main_ts_by_warp))
     if zoom_cta is None and delta_px >= 12.0:
         return None
 
@@ -1030,7 +1047,7 @@ def _pick_micro_zoom_window(
         # Single-wave persistent kernel / megakernel: cap to 32-iter sliding window if dense (> 48 iters)
         c_id, t0, t1, _dur, _w, _wr, n_it = cands[0]
         if n_it > 48:
-            return _cap_to_32_iters(c_id, t0, t1, "persistent-kernel 32-iter window")
+            return _cap_to_32_iters(c_id, t0, t1, "persistent-kernel")
     return None
 
 
@@ -1462,10 +1479,16 @@ def render_swhw_overview_png(
     }
     if focus_sm is not None and focus_sm in sm_roles:
         rep_sm = int(focus_sm)
-    elif 0 in sm_roles:
-        rep_sm = 0
     elif sms:
-        rep_sm = max(sms, key=lambda s: (len(sm_roles.get(s, ())), -s))
+        # Prefer an SM that ran the maximum wave count (distinct CTAs) so partial-wave
+        # tail-idle SMs (e.g. SM 0 in a 78+50 two-wave launch) don't hide Wave 2 in Panel (C).
+        sm_ctas: Dict[int, set[int]] = defaultdict(set)
+        sm_ev_cnt: Dict[int, int] = defaultdict(int)
+        for sp in sw_spans:
+            s_i = int(sp["sm"])
+            sm_ctas[s_i].add(int(sp["cta"]))
+            sm_ev_cnt[s_i] += 1
+        rep_sm = max(sms, key=lambda s: (len(sm_ctas.get(s, ())), len(sm_roles.get(s, ())), sm_ev_cnt.get(s, 0) > 0, -s))
     else:
         rep_sm = 0
 
@@ -1709,11 +1732,17 @@ def render_swhw_overview_png(
             lbl = str(sp.get("label") or sp["sem"]).strip()
             return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
 
+        n_leg_rows = 1
         if top_legend_handles:
+            n_leg_cols = min(len(top_legend_handles), 7)
+            n_leg_rows = (len(top_legend_handles) + n_leg_cols - 1) // max(n_leg_cols, 1)
             leg_y = 0.934 if has_zoom else (0.928 if has_hw else 0.916)
             fig.legend(
                 handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, leg_y),
-                ncol=min(len(top_legend_handles), 6), frameon=False, fontsize=8.4, handlelength=1.4, columnspacing=1.35,
+                ncol=n_leg_cols, frameon=False,
+                fontsize=7.9 if n_leg_cols >= 7 else 8.4,
+                handlelength=1.35 if n_leg_cols >= 7 else 1.4,
+                columnspacing=0.95 if n_leg_cols >= 7 else 1.35,
             )
 
     x_pad = max(1.0, t_max * 0.015)
@@ -2003,10 +2032,11 @@ def render_swhw_overview_png(
     max_lbl = max((len(s) for s in yt_labels), default=10)
     left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
     right_m = (0.795 if len(active_async_engines) >= 2 else 0.825) if has_async_rep else 0.985
+    extra_leg = 0.022 if (not dual_fabric and len(top_legend_handles) > 7) else 0.0
     if has_zoom:
-        top_m = min(0.862, 1.0 - 2.15 / fig_h) if has_hw else min(0.870, 1.0 - 1.85 / fig_h)
+        top_m = min(0.862, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else min(0.870, 1.0 - 1.85 / fig_h) - extra_leg
     else:
-        top_m = 0.855 if (has_hw and dual_fabric) else (min(0.805, 1.0 - 2.15 / fig_h) if has_hw else 0.835)
+        top_m = 0.855 if (has_hw and dual_fabric) else (min(0.805, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else 0.835)
     fig.subplots_adjust(left=left_m, right=right_m, top=top_m, bottom=0.055 if has_zoom else 0.065)
 
     out_path = Path(out_png)

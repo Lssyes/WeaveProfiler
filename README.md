@@ -81,19 +81,19 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async 四联对齐图](docs/images/case_sm86_cuda_s6_4panel.png)
 
-### 4.3 开源算子库零签名修改剖析
+### 4.3 开源算子库零签名修改四联图实测（NVIDIA H20，200.3 kHz `nsys`）
 
-不改动原始开源库函数签名与调用链，在 H20 上完成全自动闭环剖析（以下三张为较早实测软硬对齐图，因单核事件较稀疏未触发 Panel D 微距栏）：
+不改动原始开源库函数签名与调用链，在 H20 上以真实生产长序列规模完成端到端闭环剖析并直出四联对齐图（全部 `max_diff=0.0`、零缓冲区溢出、全物理 Warp 100% 覆盖）：
 
-| 开源算子 | 语言与规模（H20） | 物理 Warp 覆盖 | 稳态相对开销与结果 |
+| 开源算子 | 前端与规模（H20 `sm_90a`） | 物理 Warp 覆盖 | 稳态相对开销与实测结果 |
 | --- | --- | :---: | --- |
-| **FlashInfer 0.6.8 Hopper FA3**（跨 3 头文件） | CUDA C++，`B=5, H=16, S=512/4096, D=128` | 12 / 12 | `-1.62%`（调度微扰，在 `±10%` 容差内），软硬边界差 `0.33%` |
-| **FlashInfer 0.6.8 Hopper FlashMLA**（`mla_hopper.cuh`） | CUDA C++，`B=64, H=128, KV=512/4096` | 8 / 8 | 第 1 轮 `+14.55%` 被拦截 → 自动外提粗化后 `+6.11%`，`0 B` spill |
-| **vLLM FLA FlashKDA**（`chunk_delta_h.py`） | Triton 3.6，`B=1, T=512/8192, H=64, D=128` | 4 / 4 | 固定基线最优调优配置，自动合并边界后 `+6.74%`，`0 B` spill |
+| **FlashInfer 0.6.8 Hopper FA3**（跨 3 头文件） | CUDA C++，`B=5, H=16, S=4096, D=128` | 12 / 12 | **`+0.13%`**（`2,629 → 2,633 µs`），软硬边界差 `0.08%`，Panel (D) 清晰呈现 `W00` TMA 预取与双计算组反相 Ping-Pong 调度 |
+| **FlashInfer 0.6.8 Hopper FlashMLA**（`mla_hopper.cuh`） | CUDA C++，`B=64, H=128, KV=4096` | 8 / 8 | **`+6.23%`**（`687 → 729 µs`），**`0 B` spill**，软硬边界差 `0.24%`，精准对齐 `78 + 50` 双波次掉谷与 `WG0`/`WG1` 分工 |
+| **vLLM FLA FlashKDA**（`chunk_delta_h.py`） | Triton 3.6 PTX 自动异步，`B=1, T=8192, H=64, D=128` | 4 / 4 | 第 1 轮双异步 `+18.77%` 被拦截 → 闭环粗化后 **`+4.08%`**（`544 → 566 µs`），**`0` spill**，软硬边界差 `0.21%`，Panel (D) 完整展开每轮 5 级 `cp.async` 深度与 `Exposed Wait` |
 
-![FlashInfer 0.6.8 Hopper FA3 H20 软硬对齐图](docs/images/case_h20_flashinfer_fa3.png)
-![FlashInfer 0.6.8 Hopper FlashMLA H20 软硬对齐图](docs/images/case_h20_flashmla.png)
-![vLLM FLA FlashKDA H20 软硬对齐图](docs/images/case_h20_flashkda.png)
+![FlashInfer 0.6.8 Hopper FA3 H20 S=4096 四联对齐图](docs/images/case_h20_flashinfer_fa3.png)
+![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=4096 四联对齐图](docs/images/case_h20_flashmla.png)
+![vLLM FLA FlashKDA H20 T=8192 Triton PTX 自动异步四联对齐图](docs/images/case_h20_flashkda.png)
 
 ---
 

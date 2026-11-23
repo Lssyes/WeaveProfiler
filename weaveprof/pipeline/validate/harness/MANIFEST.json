@@ -1,8 +1,8 @@
 {
   "file_count": 331,
   "files": {
-    "README.md": "d706d9b6cc013b9abcb36eea31dae4e598292d21ac8c9abaf8a9d1487770aef3",
-    "README_EN.md": "efd36b0d002c24d5c048e1bf6183301bd1c9f60ed3acb726484cc14157874b45",
+    "README.md": "ceee47573918297f5da4f4114f46a4e9488e8684459425c2eecd4d0567005487",
+    "README_EN.md": "1bd1ea9b53399ec9afc08b76916c4b6da67bde79d7a1cd81e96d66c68eebdeb1",
     "SKILL.md": "9d46e546081d83629219bd083bcbceb5027d3d4115d65c3c5171dbacc49b7193",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
@@ -59,9 +59,9 @@
     "docs/amd_mi308x.md": "7ce461866e3db539004ee2199292e826d7915d8306aed312f02a64128177322d",
     "docs/case_studies/h20_megamoe_optimization.md": "f8abe98befbfe3ce99c626227483458b76d99f2cd9c8e3584bf1345552bd944f",
     "docs/design.md": "e94c0b602e40a22435ca8442f00d0198afc848012c55535bb515c64d2fb03004",
-    "docs/images/case_h20_flashinfer_fa3.png": "3222d5e789365e4f0781d76cb676cd129e8f8177232d49a7d913e3733b4bedab",
-    "docs/images/case_h20_flashkda.png": "491b4724fbd9f63ee942c4289fc7ea6e8bfac2df21a5ea8b6bd29917d6f24bf9",
-    "docs/images/case_h20_flashmla.png": "c4be0392f0e66d5aac10230bf79649b9e1eee01f199c1eff21ae0899c2106e29",
+    "docs/images/case_h20_flashinfer_fa3.png": "01e87165594a35bbfaf494926ea2c8b3b4d2632b56e8050cb872424d9471f6c5",
+    "docs/images/case_h20_flashkda.png": "16ac04a1e2be889eda45131c28ff34900b943b93e37416e7feec3db0e4632ac2",
+    "docs/images/case_h20_flashmla.png": "7c8b59e617adfa01d8dc8f6b3c9a8dd98dcb9d5bc1a252e95a260799621a030c",
     "docs/images/case_h20_megamoe_1p47x.png": "c3ee9f84f7bedc2db314af7079c4f09a18dfd692414fff0979da1038de5f347a",
     "docs/images/case_h20_triton_s5_4panel.png": "63cbc5e6d846163d5d01ee474b5f4b4e0f25f887d43e2c2e2dbd42d17d64c70f",
     "docs/images/case_sm86_cuda_s6_4panel.png": "096c73cfa45bdbadac1a7ba51d786ace41a573c2d80626b13454e9c9e68c8bbf",
@@ -330,11 +330,11 @@
     "weaveprof/pipeline/validate/validate_run.py": "2b785579616c820a5444f77484630fb0e11e8ee1ba9be4f591f7d2d2a1f0d9cd",
     "weaveprof/preview.py": "dfd402f6be05d5c990a7b0a1404f0c8273db7763eb9704f4599160261e6b38bf",
     "weaveprof/replay.py": "3d6c39de92302bc222bfa69f6b7bd4b7b4dcd94aaa12a20042d4edd39d4d35df",
-    "weaveprof/viz.py": "0314b59dfecb5599d09778aa062d8b6e0d6bd0d4cba7d91caa9728d175c765a6",
+    "weaveprof/viz.py": "3203a67845097e361e12dad4cc3845b85aa90c9d4b4a2ad81b9af7fd5440bf26",
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
-  "generated_at_utc": "2026-11-23T10:14:55.582682Z",
-  "root_sha256": "c56dcc4f055d4662dd7c6ce2f299307b7616c4e542bb9f6451f79092020e41d4",
+  "generated_at_utc": "2026-11-23T11:09:58.485763Z",
+  "root_sha256": "8b0eabad6003abeb042df2478ef27bfeecd23e6b16296b50014c10adeedce1bb",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }
