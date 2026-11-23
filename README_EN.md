@@ -27,7 +27,7 @@ Previous options force a trade-off:
 
 ## 2. How to Read the Four-Panel Aligned View
 
-WeaveProfiler defaults to PNG-only delivery (`overview.png`) instead of heavy `.perfetto.json.gz` dumps. Panels (A)–(C) share one locked microsecond (`µs`) axis, and Panel (D) automatically appends when full-kernel event spacing is denser than `12 px`:
+WeaveProfiler defaults to PNG-only delivery (`overview.png`) instead of heavy `.perfetto.json.gz` dumps. Panels (A)–(C) share one locked microsecond (`µs`) axis, and Panel (D) automatically appends when full-kernel event spacing is denser than `28 px`:
 
 - **(A) Hardware Utilization Curves**: Same-run chip-wide metrics (0–100%, 200 kHz `nsys` on NVIDIA, `rocprof-sys` on AMD): Compute (Tensor / MFMA), summed HBM Read+Write bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` are never summed or merged; `xGMI` on AMD), optional inter-node RDMA, and active SM/CU %. **Fails closed if real same-run hardware curves are missing.**
 - **(B) All-SM / All-CU Waterfall**: Every physical core on the vertical axis, exposing wave steps, tail stragglers, and load skew.
@@ -88,11 +88,11 @@ Closed-loop profiling on unmodified open-source libraries at production long-seq
 | Open-Source Kernel | Frontend & Shape (H20 `sm_90a`) | Warp Coverage | Steady-State Overhead & Highlights |
 | --- | --- | :---: | --- |
 | **FlashInfer 0.6.8 Hopper FA3** (3 headers) | CUDA C++, `B=5, H=16, S=4096, D=128` | 12 / 12 | **`+0.13%`** (`2,629 → 2,633 µs`), SW–HW delta `0.08%`; Panel (D) exposes `W00` TMA prefetch and antiphase ping-pong scheduling across `math_wg1`/`math_wg2` |
-| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`) | CUDA C++, `B=64, H=128, KV=4096` | 8 / 8 | **`+6.23%`** (`687 → 729 µs`), **`0 B` spill**, SW–HW delta `0.24%`; locks the `78 + 50` two-wave step and `WG0`/`WG1` split |
+| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`) | CUDA C++, `B=64, H=128, KV=2048` | 8 / 8 | **`+7.45%`** (`356 → 383 µs`), **`0 B` spill**, SW–HW delta `0.50%`; auto-selects full 2-wave `SM 2`, and Panel (D) locks `WG0`'s `47.3%` `kOScaleReady` wait directly onto `WG1`'s `QK + Softmax` |
 | **vLLM FLA FlashKDA** (`chunk_delta_h.py`) | Triton 3.6 PTX Auto-Async, `B=1, T=8192, H=64, D=128` | 4 / 4 | Round 1 dual-async `+18.77%` rejected → closed-loop coarsened to **`+4.08%`** (`544 → 566 µs`), **`0` spill**, SW–HW delta `0.21%`; Panel (D) exposes 5-stage `cp.async` ramps and `Exposed Wait` |
 
 ![FlashInfer 0.6.8 Hopper FA3 H20 S=4096 Four-Panel Aligned View](docs/images/case_h20_flashinfer_fa3.png)
-![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=4096 Four-Panel Aligned View](docs/images/case_h20_flashmla.png)
+![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=2048 Four-Panel Aligned View](docs/images/case_h20_flashmla.png)
 ![vLLM FLA FlashKDA H20 T=8192 Triton PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_flashkda.png)
 
 ---

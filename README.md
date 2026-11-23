@@ -27,7 +27,7 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 
 ## 2. 四联对齐图读法
 
-默认直接输出静态 PNG（`overview.png`），不落盘大体积 `.perfetto.json.gz`。前 3 栏共享同一微秒（`µs`）横轴，当全核事件过密（相邻间距 `< 12 px`）时自动追加第 4 栏：
+默认直接输出静态 PNG（`overview.png`），不落盘大体积 `.perfetto.json.gz`。前 3 栏共享同一微秒（`µs`）横轴，当全核事件过密（相邻间距 `< 28 px`）时自动追加第 4 栏：
 
 - **(A) 硬件利用率曲线**：同次采集的整卡指标（0–100%，NVIDIA 为 200 kHz `nsys`，AMD 为 `rocprof-sys`），含计算流水线（Tensor / MFMA）、HBM 读+写总带宽、独立绘制的全双工互联（`NVLink TX` 与 `NVLink RX` 绝不合并；AMD 为 `xGMI`）、可选跨机 RDMA 以及活跃 SM/CU 占比；**缺少同次真实硬件曲线时默认失败退出（fail-closed）**。
 - **(B) 全卡物理 SM / CU 瀑布**：纵轴列出全部物理核心，直观暴露波次台阶、尾波拖尾与负载倾斜。
@@ -88,11 +88,11 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 | 开源算子 | 前端与规模（H20 `sm_90a`） | 物理 Warp 覆盖 | 稳态相对开销与实测结果 |
 | --- | --- | :---: | --- |
 | **FlashInfer 0.6.8 Hopper FA3**（跨 3 头文件） | CUDA C++，`B=5, H=16, S=4096, D=128` | 12 / 12 | **`+0.13%`**（`2,629 → 2,633 µs`），软硬边界差 `0.08%`，Panel (D) 清晰呈现 `W00` TMA 预取与双计算组反相 Ping-Pong 调度 |
-| **FlashInfer 0.6.8 Hopper FlashMLA**（`mla_hopper.cuh`） | CUDA C++，`B=64, H=128, KV=4096` | 8 / 8 | **`+6.23%`**（`687 → 729 µs`），**`0 B` spill**，软硬边界差 `0.24%`，精准对齐 `78 + 50` 双波次掉谷与 `WG0`/`WG1` 分工 |
+| **FlashInfer 0.6.8 Hopper FlashMLA**（`mla_hopper.cuh`） | CUDA C++，`B=64, H=128, KV=2048` | 8 / 8 | **`+7.45%`**（`356 → 383 µs`），**`0 B` spill**，软硬边界差 `0.50%`；自动选取满载双波次 `SM 2`，Panel (D) 直接定位 `WG0` 在 `kOScaleReady` 上 `47.3%` 的等待对齐 `WG1` 的 `QK + Softmax` |
 | **vLLM FLA FlashKDA**（`chunk_delta_h.py`） | Triton 3.6 PTX 自动异步，`B=1, T=8192, H=64, D=128` | 4 / 4 | 第 1 轮双异步 `+18.77%` 被拦截 → 闭环粗化后 **`+4.08%`**（`544 → 566 µs`），**`0` spill**，软硬边界差 `0.21%`，Panel (D) 完整展开每轮 5 级 `cp.async` 深度与 `Exposed Wait` |
 
 ![FlashInfer 0.6.8 Hopper FA3 H20 S=4096 四联对齐图](docs/images/case_h20_flashinfer_fa3.png)
-![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=4096 四联对齐图](docs/images/case_h20_flashmla.png)
+![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=2048 四联对齐图](docs/images/case_h20_flashmla.png)
 ![vLLM FLA FlashKDA H20 T=8192 Triton PTX 自动异步四联对齐图](docs/images/case_h20_flashkda.png)
 
 ---

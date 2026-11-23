@@ -944,9 +944,9 @@ def _pick_micro_zoom_window(
                 out.append(t)
         return out
 
-    # Step 1: Deterministic density trigger (`delta_px < 12 px` on ~2400 px plot width)
+    # Step 1: Deterministic density trigger (`delta_px < 28 px` on ~2400 px plot width)
     # Check both async issue spacing AND main-track stage spacing so multi-stage loops
-    # (e.g. FlashMLA QK/Softmax/PV) trigger micro-zoom whenever per-stage bars get < 12 px wide.
+    # (e.g. FlashMLA QK/Softmax/PV) trigger micro-zoom whenever per-stage bars get crowded.
     def _med_gap_px(ts_by_warp: Mapping[int, Sequence[float]]) -> float:
         gs: List[float] = []
         for _w, ts_l in ts_by_warp.items():
@@ -970,7 +970,7 @@ def _pick_micro_zoom_window(
     async_gaps.sort()
     med_gap = async_gaps[len(async_gaps) // 2] if async_gaps else t_max
     delta_px = min(_med_gap_px(all_issue_ts_by_warp), _med_gap_px(all_main_ts_by_warp))
-    if zoom_cta is None and delta_px >= 12.0:
+    if zoom_cta is None and delta_px >= 28.0:
         return None
 
     # Deduplicate per-CTA issue timestamps across one representative warp to count true iterations
@@ -1480,15 +1480,16 @@ def render_swhw_overview_png(
     if focus_sm is not None and focus_sm in sm_roles:
         rep_sm = int(focus_sm)
     elif sms:
-        # Prefer an SM that ran the maximum wave count (distinct CTAs) so partial-wave
-        # tail-idle SMs (e.g. SM 0 in a 78+50 two-wave launch) don't hide Wave 2 in Panel (C).
+        # Prefer an SM with the highest wave/CTA count and highest work/event count so
+        # partial-wave tail-idle SMs (both multi-CTA and persistent-kernel tail-idle SM 0)
+        # don't hide active waves or prevent Panel (D) micro-zoom.
         sm_ctas: Dict[int, set[int]] = defaultdict(set)
         sm_ev_cnt: Dict[int, int] = defaultdict(int)
         for sp in sw_spans:
             s_i = int(sp["sm"])
             sm_ctas[s_i].add(int(sp["cta"]))
             sm_ev_cnt[s_i] += 1
-        rep_sm = max(sms, key=lambda s: (len(sm_ctas.get(s, ())), len(sm_roles.get(s, ())), sm_ev_cnt.get(s, 0) > 0, -s))
+        rep_sm = max(sms, key=lambda s: (len(sm_ctas.get(s, ())), len(sm_roles.get(s, ())), sm_ev_cnt.get(s, 0), -s))
     else:
         rep_sm = 0
 

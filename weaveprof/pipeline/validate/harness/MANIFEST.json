@@ -1,9 +1,9 @@
 {
   "file_count": 331,
   "files": {
-    "README.md": "ceee47573918297f5da4f4114f46a4e9488e8684459425c2eecd4d0567005487",
-    "README_EN.md": "1bd1ea9b53399ec9afc08b76916c4b6da67bde79d7a1cd81e96d66c68eebdeb1",
-    "SKILL.md": "9d46e546081d83629219bd083bcbceb5027d3d4115d65c3c5171dbacc49b7193",
+    "README.md": "b2249a8d345d12b452cbba8e226355e77e2affb3460bf300b6657b2a411cd3a1",
+    "README_EN.md": "a113f10f6a8a8b92a08ae44f38a12e403092446d7f9d69cff717a5a13cf7fd8f",
+    "SKILL.md": "3494547352c564c4e314435327f4627fe08add41b653feecbbb990c67703331f",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
     "configs/cards/b300_sm_100a.json": "e26f9dfa658c1c340549b9d41266be217b5a16475df1ab4649ef3d63335c8621",
@@ -61,7 +61,7 @@
     "docs/design.md": "e94c0b602e40a22435ca8442f00d0198afc848012c55535bb515c64d2fb03004",
     "docs/images/case_h20_flashinfer_fa3.png": "01e87165594a35bbfaf494926ea2c8b3b4d2632b56e8050cb872424d9471f6c5",
     "docs/images/case_h20_flashkda.png": "16ac04a1e2be889eda45131c28ff34900b943b93e37416e7feec3db0e4632ac2",
-    "docs/images/case_h20_flashmla.png": "7c8b59e617adfa01d8dc8f6b3c9a8dd98dcb9d5bc1a252e95a260799621a030c",
+    "docs/images/case_h20_flashmla.png": "4a37c63d5ec22815f418ee858edfa0585b5f0b6b65e124bce31e0cc46bd2428f",
     "docs/images/case_h20_megamoe_1p47x.png": "c3ee9f84f7bedc2db314af7079c4f09a18dfd692414fff0979da1038de5f347a",
     "docs/images/case_h20_triton_s5_4panel.png": "63cbc5e6d846163d5d01ee474b5f4b4e0f25f887d43e2c2e2dbd42d17d64c70f",
     "docs/images/case_sm86_cuda_s6_4panel.png": "096c73cfa45bdbadac1a7ba51d786ace41a573c2d80626b13454e9c9e68c8bbf",
@@ -330,11 +330,11 @@
     "weaveprof/pipeline/validate/validate_run.py": "2b785579616c820a5444f77484630fb0e11e8ee1ba9be4f591f7d2d2a1f0d9cd",
     "weaveprof/preview.py": "dfd402f6be05d5c990a7b0a1404f0c8273db7763eb9704f4599160261e6b38bf",
     "weaveprof/replay.py": "3d6c39de92302bc222bfa69f6b7bd4b7b4dcd94aaa12a20042d4edd39d4d35df",
-    "weaveprof/viz.py": "3203a67845097e361e12dad4cc3845b85aa90c9d4b4a2ad81b9af7fd5440bf26",
+    "weaveprof/viz.py": "c7a979aba863ec96f9f9b0c63e37e3c491ee1b08f1ffd90355f9ce93be4b22ad",
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
-  "generated_at_utc": "2026-11-23T11:09:58.485763Z",
-  "root_sha256": "8b0eabad6003abeb042df2478ef27bfeecd23e6b16296b50014c10adeedce1bb",
+  "generated_at_utc": "2026-11-23T11:25:55.393882Z",
+  "root_sha256": "e3770bff3738e9115a4d7ef7d726c3467c5b5ff8d18da3c668436815cd3b11cc",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }
