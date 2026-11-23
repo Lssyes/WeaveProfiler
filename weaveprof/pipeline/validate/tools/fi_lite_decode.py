@@ -474,6 +474,11 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
     ev_name = {int(k): v for k, v in names.get("events", {}).items()}
     ev_label = {int(k): str(v) for k, v in (names.get("labels") or {}).items() if str(v).strip()}
     ev_fabric = {int(k): str(v) for k, v in (names.get("fabrics") or {}).items() if str(v).strip()}
+    ev_async_engine = {
+        int(k): str(v).strip().lower()
+        for k, v in (names.get("async_engines") or {}).items()
+        if str(v).strip().lower() in ("mem", "mma")
+    }
     ev_sem = {int(k): v for k, v in semantic_contract["events"].items()}
     role_name = {int(k): v for k, v in names.get("roles", {}).items()}
     aux_name = {int(k): v for k, v in names.get("aux", {}).items()}
@@ -820,6 +825,17 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
             return sid
         return f"{n} #{aux}" if label_aux and i in aux_name else n
 
+    def async_engine_of(i, is_mark=False, has_multi_sub=False):
+        if i in ev_async_engine:
+            return ev_async_engine[i]
+        if i in slotted_ids or i in cross or is_mark or (pair == "aux" and has_multi_sub):
+            sid, _, _ = canonical_semantic(i)
+            if sid in ("mma", "gemm"):
+                return "mma"
+            if sid in ("load", "dispatch", "communication", "store"):
+                return "mem"
+        return None
+
     span_order = sorted(range(len(spans)), key=lambda k: (round(spans[k][3], 3), -round(spans[k][4], 3), k))
     for k in span_order:
         s, j, i, a, b, ba, ea = spans[k]
@@ -851,6 +867,9 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
             args["display_label"] = ev_label[i]
         if i in ev_fabric:
             args["fabric"] = ev_fabric[i]
+        eng = async_engine_of(i, is_mark=False, has_multi_sub=(n_sub.get(s, 1) > 1))
+        if eng:
+            args["async_engine"] = eng
         if semantic_row.get("detail"):
             args["semantic_detail"] = semantic_row["detail"]
         if i in aux_name:
@@ -869,7 +888,24 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
     for k, (s, j, i, a, aux) in enumerate(marks):
         c, w = divmod(s, wpc)
         p, tid = ensure_thread(s, j, cu_mark_tid[k] if cu_mark_tid is not None else None)
-        tev.append(dict(ph="i", s="t", pid=p, tid=tid, ts=round(a, 3), name=lab(i, aux), args=dict(cta=c, warp=w, aux=aux)))
+        sid, canonical_label, semantic_row = canonical_semantic(i)
+        m_args = dict(
+            cta=c, warp=w, sm=cta_sm.get(c),
+            role=role_name.get(slot_role.get(s, -1), slot_role.get(s, -1)),
+            aux=aux, semantic_id=sid, display_name=sid, event_id=i,
+            original_label=semantic_row.get("input_label", ev_name.get(i, "")),
+        )
+        if i in ev_label:
+            m_args["display_label"] = ev_label[i]
+        eng = async_engine_of(i, is_mark=True)
+        if eng:
+            m_args["async_engine"] = eng
+        if amd:
+            hw = cta_hw.get(c)
+            if hw:
+                m_args.update(xcc=hw[0], se=hw[1], cu=hw[2], simd=hw[3])
+        tev.append(dict(ph="i", s="t", pid=p, tid=tid, ts=round(a, 3), name=lab(i, aux),
+                        cat=canonical_label, args=m_args))
     # SM 粒度：每个 SM 再加一条"SM 占用"整条（cat=info，fi_overview 的覆盖率自检会跳过这一类），
     # 一眼看出各 SM 的驻留起止与负载不均；FI_LEVEL=1 的转储（没有区间）也因此在 trace 里非空。
     if sm_group and sm_bar:

@@ -987,6 +987,90 @@ class MegakernelAuditTest(_TmpCase):
         self.assertEqual(seal["region_lock"]["label"], "megakernel_audit")
         self.assertIsNotNone(seal["artifacts"]["instrumented_source"])
 
+    def test_async_engine_depth_pins_4panel_and_triton_ptx_pass(self):
+        from weaveprof.pipeline.instrument.triton_ptx_async import instrument_triton_ptx_async
+        from weaveprof.viz import _compute_depth_segments, _pick_micro_zoom_window, render_swhw_overview_png
+
+        # 1. Exact sweep-line depth math (0->1->2->3->2->1->0)
+        segs, avg_d, max_d = _compute_depth_segments([(0.0, 3.0), (1.0, 4.0), (2.0, 5.0)])
+        self.assertEqual(max_d, 3)
+        self.assertGreater(avg_d, 1.5)
+        self.assertEqual([(round(a, 1), round(b, 1), d) for a, b, d in segs],
+                         [(0.0, 1.0, 1), (1.0, 2.0, 2), (2.0, 3.0, 3), (3.0, 4.0, 2), (4.0, 5.0, 1)])
+
+        # 2. Triton PTX async pass handles cp.async + wait_group + mma.sync + wgmma + cursor rebinding
+        fake_ptx = "\n".join([
+            ".visible .entry k_test() {",
+            "\t.reg .b32 %r<8>;",
+            "\t.reg .b64 %rd<4>;",
+            "\t// begin inline asm",
+            "\tmov.u32 pid, %r1;",
+            "\tmov.u32 n, %r2;",
+            "\tsetp.lt.u32 p_bounds, warp, 4;",
+            "\tsetp.lt.u32 p_cap, slot, 64;",
+            "\tadd.u64 addr, %rd1, off;",
+            "\tsetp.lt.u32 p_cap, n, 256;",
+            "\t@p_store st.global.cs.v4.u32 [addr], {tlo0, thi0, 1073741824, sm};",
+            "\t@p_store st.global.cs.v4.u32 [addr+16], {tlo1, thi1, 268435456, 0};",
+            "\t@p_ovf atom.global.or.b32 ovfold, [%rd2], 1;",
+            "\t// end inline asm",
+            "\tcp.async.commit_group;",
+            "\tcp.async.wait_group 0;",
+            "\tbar.sync 0;",
+            "\tmma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {}, {}, {}, {};",
+            "\twgmma.commit_group.sync.aligned;",
+            "\twgmma.wait_group.sync.aligned 0;",
+            "\t// begin inline asm",
+            "\tmov.u32 n, %r3;",
+            "\t@p_store st.global.cs.v4.u32 [addr], {tlo0, thi0, 134217728, 0};",
+            "\t@p_store st.global.cs.v4.u32 [addr+16], {tlo1, thi1, 268435456, 1};",
+            "\t// end inline asm",
+            "\tret;",
+            "}",
+        ])
+        patched, st = instrument_triton_ptx_async(fake_ptx)
+        self.assertEqual(st["patched"], 1)
+        self.assertEqual(st["cp_async_commits"], 1)
+        self.assertEqual(st["cp_async_waits"], 1)
+        self.assertEqual(st["wgmma_commits"], 1)
+        self.assertEqual(st["wgmma_waits"], 1)
+        self.assertEqual(st["mma_clusters"], 1)
+        self.assertIn("mov.u32 n, %wp_cur;", patched)
+        self.assertIn("$L__WP_DRAIN_1:", patched)
+        self.assertIn("$L__WP_WDRAIN_2:", patched)
+
+        # 3. Deterministic 4-panel viz with HW curves + dual MEM & MMA async engines + micro-zoom
+        evs = [
+            {"ph": "C", "pid": 90000, "name": "Tensor Active [Throughput %]", "ts": 0.0, "args": {"value": 72.0}},
+            {"ph": "C", "pid": 90000, "name": "Tensor Active [Throughput %]", "ts": 200.0, "args": {"value": 68.0}},
+            {"ph": "C", "pid": 90000, "name": "DRAM Read Bandwidth [Throughput %]", "ts": 0.0, "args": {"value": 40.0}},
+            {"ph": "C", "pid": 90000, "name": "DRAM Write Bandwidth [Throughput %]", "ts": 0.0, "args": {"value": 20.0}},
+            {"ph": "C", "pid": 90000, "name": "DRAM Read Bandwidth [Throughput %]", "ts": 200.0, "args": {"value": 35.0}},
+            {"ph": "C", "pid": 90000, "name": "DRAM Write Bandwidth [Throughput %]", "ts": 200.0, "args": {"value": 15.0}},
+            {"ph": "X", "pid": 90000, "tid": 0, "ts": 0.0, "dur": 200.0, "name": "dual_async_gemm", "cat": "hardware", "args": {"kind": "dispatch"}},
+        ]
+        # 5 dense CTA waves on SM 0 (wave 2 has peak exposed wait -> deterministic winner!)
+        for cta in range(5):
+            base = cta * 40.0
+            for k in range(20):
+                t = base + k * 1.8
+                evs.append({"ph": "X", "pid": 100000, "tid": 1, "ts": t, "dur": 3.2, "name": "load",
+                            "args": {"sm": 0, "warp": 0, "cta": cta, "role": "worker", "semantic_id": "load", "async_engine": "mem"}})
+                evs.append({"ph": "X", "pid": 100000, "tid": 1, "ts": t + 0.2, "dur": 2.4, "name": "mma",
+                            "args": {"sm": 0, "warp": 0, "cta": cta, "role": "worker", "semantic_id": "mma", "async_engine": "mma"}})
+                w_dur = 0.7 if cta == 2 else 0.1
+                evs.append({"ph": "X", "pid": 100000, "tid": 1, "ts": t + 0.1, "dur": w_dur, "name": "wait",
+                            "args": {"sm": 0, "warp": 0, "cta": cta, "role": "worker", "semantic_id": "wait"}})
+                evs.append({"ph": "X", "pid": 100000, "tid": 1, "ts": t + 0.1 + w_dur, "dur": 0.8, "name": "compute",
+                            "args": {"sm": 0, "warp": 0, "cta": cta, "role": "worker", "semantic_id": "compute"}})
+        synth_4p = {"otherData": {"platform": "nv", "arch": "sm_90", "meta": {"card": "h20", "arch": "sm_90"}}, "traceEvents": evs}
+        try:
+            import matplotlib  # noqa: F401
+            out_png = render_swhw_overview_png(synth_4p, self.tmp / "dual_async_4panel.png", dpi=110)
+            self.assertTrue(out_png.is_file() and out_png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        except ImportError:
+            pass
+
 
 class HygieneTest(unittest.TestCase):
     OWNED = (

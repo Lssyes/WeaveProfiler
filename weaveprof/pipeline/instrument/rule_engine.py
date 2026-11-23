@@ -71,6 +71,7 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
     probe_ids = {}
     labels_map: Dict[str, str] = {}
     fabrics_map: Dict[str, str] = {}
+    async_engines_map: Dict[str, str] = {}
 
     op_fam = str(probe_spec.get("operator_family") or "gemm").strip().lower()
     if op_fam in STAGE_EVENT_IDS:
@@ -103,6 +104,14 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
         if begin_role != end_role:
             cross_warp[str(ev_id)] = dict(id=probe_id, begin_role=begin_role,
                                           end_role=end_role, slot=pr.get("slot", 0))
+        raw_eng = str(pr.get("async_engine") or "").strip().lower()
+        if raw_eng in ("mem", "mma"):
+            async_engines_map[str(ev_id)] = raw_eng
+        elif (slot_expr is not None and str(slot_expr).strip() not in ("", "0", "0u")) or begin_role != end_role or str(pr.get("kind") or "").lower() == "mark":
+            if sem in ("mma", "gemm"):
+                async_engines_map[str(ev_id)] = "mma"
+            elif sem in ("load", "dispatch", "communication", "store"):
+                async_engines_map[str(ev_id)] = "mem"
 
     roles_map: Dict[str, str] = {"0": "cta_worker"}
     for r in probe_spec.get("warp_roles") or []:
@@ -135,6 +144,8 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
         out_doc["labels"] = labels_map
     if fabrics_map:
         out_doc["fabrics"] = fabrics_map
+    if async_engines_map:
+        out_doc["async_engines"] = async_engines_map
     return out_doc
 
 

@@ -245,7 +245,8 @@ def align(trace, summary, window, runtime=None):
             ))
 
         for e in trace["traceEvents"]:
-            if e.get("ph") != "X":
+            ph = e.get("ph")
+            if ph not in ("X", "i"):
                 continue
             args = dict(e.get("args") or {})
             cta = int(args.get("cta", 0))
@@ -256,6 +257,13 @@ def align(trace, summary, window, runtime=None):
             sub_inst = int(args.get("instance", 0))
             tid = 1 + sl * 32 + w
             ts_ns = origin + round(float(e["ts"]) * 1000) + offset
+            if ph == "i":
+                args.update(cta=cta, warp=w, wave=w, sm=sm, resident_slot=sl, sublane=sub_inst, kind="mark")
+                clean_events.append(dict(
+                    ph="i", s=e.get("s", "t"), pid=pid, tid=tid, ts_ns=ts_ns, ts=ts_ns / 1000.0,
+                    name=e["name"], cat=e.get("cat", "mark"), args=args,
+                ))
+                continue
             dur_us = float(e["dur"])
             end_ns = ts_ns + round(dur_us * 1000)
             args.update(cta=cta, warp=w, wave=w, sm=sm, resident_slot=sl, sublane=sub_inst, kind="stage")

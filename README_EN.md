@@ -2,19 +2,19 @@
 
 [简体中文](README.md) | English
 
-WeaveProfiler is a low-overhead intra-kernel GPU profiler and software–hardware timeline alignment system designed for kernel engineers and AI coding agents (Claude Code, OpenAI Codex CLI, Qwen Code, Antigravity, etc.). Existing profilers report whole-kernel latency or aggregate hardware utilization without showing which algorithm stage every Streaming Multiprocessor (SM/CU) and every warp/wavefront executes microsecond by microsecond. WeaveProfiler couples read-only LLM stage identification with deterministic probe injection, four blocking verification checks, same-run hardware counter alignment, and three-panel visualization in a closed loop. Under the default profiling workflow, all instrumentation, compilation, and measurement execute in an isolated temporary copy without altering protected source files, function signatures, or caller code.
+WeaveProfiler is a low-overhead intra-kernel GPU profiler and software–hardware timeline alignment tool for both kernel engineers and AI coding agents (Claude Code, OpenAI Codex CLI, Qwen Code, Antigravity). It aligns microsecond-resolution per-SM/CU, per-warp/wave stages—including asynchronous memory and matrix-multiply in-flight depth, issue markers, and exposed waits—with same-run 200 kHz hardware utilization curves in a single **four-panel PNG diagnostic view**. All instrumentation, compilation, and measurement run inside an isolated temporary copy, leaving protected source files, function signatures, and caller code untouched.
 
 ---
 
-## 1. Motivation
+## 1. Why WeaveProfiler
 
-Diagnosing performance bottlenecks in modern GPU kernels—such as fused Mixture-of-Experts megakernels, paged attention, and persistent matrix multiplication—faces three compounding obstacles:
+Optimizing modern GPU kernels (MoE, FlashAttention, persistent GEMM) runs into three practical bottlenecks:
 
-1. **Lack of intra-kernel attribution in existing tools**. Vendor profilers (NVIDIA `nsys`, AMD `rocprof-sys` / `rocprofv3`) capture chip-wide compute, High-Bandwidth Memory (HBM), and interconnect curves, yet treat each kernel launch as an opaque box. Engineers see a utilization trough without knowing which SM or warp role stalled on memory or synchronization.
-2. **High cost and perturbation of manual instrumentation**. Hand-inserting timing calls into register- and shared-memory-constrained inner loops frequently changes compiler loop unrolling or triggers register spilling to local stack memory, distorting the very execution timeline being measured.
-3. **New correctness and integrity risks from agent automation**. When coding agents directly edit kernel files and run profiling commands, they can place probes inside polling spin loops, drop events, exceed overhead budgets, leave timing macros in production code, or bypass live execution by feeding self-reported metrics or pre-recorded trace dumps into verification interfaces.
+1. **Existing vendor tools do not give an intra-kernel microsecond timeline.** `nsys` and `rocprof-sys` report chip-wide compute, HBM, and NVLink/xGMI utilization curves, but treat each kernel launch as a black box. `ncu` inspects inside a kernel, yet relies on multi-pass replay to produce whole-kernel averages—losing the time axis (tail waves, cross-SM skew, microsecond pipeline bubbles), running tens of times slower, and failing on persistent or multi-GPU collective kernels.
+2. **Manual in-kernel timing easily distorts the kernel and misses async pipelines.** Register- and SMEM-bound inner loops quickly spill or change unrolling when timing code is inserted by hand. Modern kernels also rely heavily on asynchronous execution (`cp.async`, TMA, `wgmma`, `tcgen05`), where synchronous bracketing cannot separate background in-flight depth from true exposed waits—and rewriting recorders across NVIDIA/AMD architectures and CUDA/HIP/CuTeDSL/Triton is expensive.
+3. **AI coding agents need deterministic guardrails during profiling and optimization.** Editing source files directly leads to probes dropped inside spin loops, bloated overhead, leftover timing macros in production code, or optimization decisions made without real aligned timelines.
 
-WeaveProfiler addresses these three challenges through: (1) **separated closed-loop instrumentation**, decoupling read-only stage identification from deterministic injection and blocking four-check verification; (2) **low-perturbation in-kernel recording with unchanged call signatures**, avoiding hot-path atomics and cache pollution across C++ and Python DSL frontends; and (3) **verifiable supervision and cryptographic sealing**, constraining agent actions via a separate verifier process, an out-of-workspace session key, and lifecycle hooks.
+WeaveProfiler solves these directly through: (1) **isolated closed-loop verification**—read-only stage identification followed by deterministic injection in a temporary copy, gated by four blocking checks (disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead, auto-coarsening on failure); (2) **low-perturbation recording with async engine modeling**—atomic-free hot paths, unchanged call signatures across CUDA/HIP/CuTeDSL/Triton, plus a PTX-level async pass for Triton that peels out compiler-hidden `cp.async`/`wgmma` waits and renders **main track + thin in-flight depth strip + fixed-pixel issue pins (`▼`)**; and (3) **four-panel PNG-only delivery with lifecycle hooks**—pairing same-run hardware curves, all-SM waterfall, SM-0 per-warp async view, and deterministic single-CTA micro-zoom while keeping source files clean.
 
 ---
 
@@ -121,23 +121,22 @@ Hardware and software timelines come from the **same physical run**, rigidly ali
    (3) Stop Check ───► Before exit: live source SHA-256 == a valid seal SHA-256 AND zero probe macros
 ```
 
-### 3.3 How to Read the Three-Panel Aligned View
+### 3.3 How to Read the Four-Panel Aligned View
 
-Every three-panel aligned view below shares **one locked microsecond (`µs`) horizontal axis**, with a dashed vertical line marking the kernel end reported by the hardware profiler:
+WeaveProfiler defaults to PNG-only visual delivery (`overview.png`) and blocks stray `.perfetto.json.gz` dumps unless explicitly requested. Panels (A)–(C) share **one locked microsecond (`µs`) horizontal axis**, and Panel (D) automatically adds a deterministic single-CTA micro-zoom whenever full-kernel event spacing is denser than `12 px`:
 
-- **Panel (A) — Hardware Utilization Curves**: Same-run chip-wide metrics (0–100%), showing compute pipeline activity (Tensor / Matrix Core), HBM Read+Write bandwidth, separate intra-node interconnect links (`NVLink TX` and `NVLink RX` on NVIDIA; `xGMI` on AMD), optional inter-node RDMA NIC utilization on multi-node runs, and active SM/CU percentage.
-- **Panel (B) — All-SM / All-CU Execution Waterfall**: Every physical core (`SM0..SM77` on H20, `CU0..CU79` on MI308X) on the vertical axis, displaying per-block stage spans across time to expose tail waves, cross-core load skew, and inter-kernel bubbles.
-- **Panel (C) — Representative SM / CU Per-Warp / Per-Wave Timeline**: Magnified view of every physical warp/wave (labeled by role) inside one representative core (default `SM 0` / `CU 0`), revealing overlap or serialization between DMA prefetch, matrix compute, synchronization waits, and communication offload.
+- **Panel (A) — Hardware Utilization Curves**: Same-run chip-wide metrics (0–100%, 200 kHz `nsys` on NVIDIA, `rocprof-sys` on AMD), showing compute pipeline activity (Tensor / Matrix Core), HBM Read+Write bandwidth, separate intra-node interconnect links (`NVLink TX` and `NVLink RX` on NVIDIA; `xGMI` on AMD), optional inter-node RDMA NIC utilization on multi-node runs, and active SM/CU percentage.
+- **Panel (B) — All-SM / All-CU Execution Waterfall**: Every physical core on the vertical axis, displaying per-block stage spans, tail waves, cross-core load skew, and exposed wait clusters.
+- **Panel (C) — Representative SM / CU Per-Warp / Per-Wave Timeline**: Each warp uses a **two-part lane: an upper main execution track (`MMA` / amber hatched `Exposed Wait` / `Store`) plus 0, 1, or 2 on-demand thin async engine sub-tracks (`MEM` emerald depth strip + magenta issue pins `▼`; `MMA` azure depth strip + violet issue pins `▼`)**, compressing arbitrary pipeline stage counts into a 3-shade depth band without exploding into N stage sub-lanes.
+- **Panel (D) — Deterministic Single-CTA Micro-Zoom**: Auto-triggered on dense timelines; picks the complete CTA with highest `Exposed Wait` ratio (or steady-state p50 CTA when zero waits exist), caps long loops to a crisp 32-iteration window (`--zoom-cta` / `--zoom-window` overrides supported), and isolates that single CTA's issue pins, depth ramp/drain, and wait bubbles while highlighting the exact same window across Panels (A)–(C).
 
 ---
 
-## 4. Verification & Isolation Guarantees
+## 4. Deterministic Verification & Safeguards
 
-### 4.1 Threat Model
+### 4.1 Why Verification Runs Outside the Agent Workspace
 
-WeaveProfiler treats an AI coding agent with workspace file and shell permissions as untrusted with respect to measurement integrity: it may skip baseline profiling, paste timing macros directly into production code, alter verifier scripts or seals, or pass fabricated timings and output flags.
-
-The trusted computing base consists of: (1) the separate MCP verifier process; (2) the out-of-workspace session key, signed session policy, and clean source backups under `~/.cache/weaveprof/sessions/<workspace_hash>/` (overridable via environment variables); and (3) lifecycle hook scripts (augmented on Linux by `guard-exec` read-only `bubblewrap` mounts over verifier scripts, configs, and keys).
+When coding agents automate GPU profiling and tuning, failures are overwhelmingly practical engineering mistakes: editing kernels before measuring a baseline, leaving timing macros in production source, placing probes inside spin loops, or skipping real runs. WeaveProfiler keeps the verifier process, clean source backups, session state, and signing keys outside the workspace under `~/.cache/weaveprof/sessions/` and enforces simple lifecycle hooks (`PreToolUse` / `PostToolUse` / `Stop`) so source files stay clean and every completed run delivers a verified PNG timeline.
 
 ### 4.2 Four Blocking Checks
 

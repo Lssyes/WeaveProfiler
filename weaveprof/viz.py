@@ -30,7 +30,7 @@ STAGE_COLORS: Dict[str, Tuple[str, str]] = {
     "compute": ("#42A5F5", "Compute / ALU"),
     "epilogue": ("#FB8C00", "Epilogue"),
     "store": ("#D84315", "Store"),
-    "wait": ("#90A4AE", "Wait / Sync"),
+    "wait": ("#F5A623", "Exposed Wait / Sync"),
     "barrier": ("#607D8B", "Route / Barrier Sync"),
     "communication": ("#8E24AA", "Communication"),
     "reduction": ("#C2185B", "Combine / Reduce"),
@@ -53,7 +53,7 @@ _SEMANTIC_SHADES: Dict[str, Tuple[str, ...]] = {
     "communication": ("#8E24AA", "#AB47BC", "#7B1FA2", "#9C27B0"),
     "reduction": ("#C2185B", "#D81B60", "#AD1457", "#E91E63"),
     "dispatch": ("#00838F", "#00897B", "#00695C", "#26A69A"),
-    "wait": ("#90A4AE", "#B0BEC5", "#A1B2BA"),
+    "wait": ("#F5A623", "#FFB300", "#E68A00"),
     "barrier": ("#607D8B", "#78909C", "#455A64"),
 }
 _OVERFLOW_SHADES: Tuple[str, ...] = (
@@ -61,9 +61,31 @@ _OVERFLOW_SHADES: Tuple[str, ...] = (
 )
 _DEFAULT_COLOR = ("#37474F", "Other Stage")
 _STAGE_DRAW_PRIORITY = {
-    "wait": 0, "barrier": 1, "load": 2, "dispatch": 3, "compute": 4,
-    "softmax": 5, "mma": 6, "gemm": 6, "communication": 7, "reduction": 7,
+    "barrier": 1, "load": 2, "dispatch": 3, "compute": 4,
+    "softmax": 5, "mma": 6, "gemm": 6, "wait": 7, "communication": 7, "reduction": 7,
     "epilogue": 8, "store": 8,
+}
+_ASYNC_ENGINE_STYLE: Dict[str, Dict[str, Any]] = {
+    "mem": {
+        "short": "mem",
+        "depth_colors": ("#C6F1E2", "#5ED0A8", "#0E8561"),  # depth 1, 2, 3+
+        "rail_bg": "#EFF5F3",
+        "rail_ec": "#D2E0DC",
+        "pin_color": "#D81B60",                              # vivid magenta ▼
+        "pin_label": "Mem Async Issue (v)",
+        "depth_label": "Mem In-Flight Depth (1 / 2 / 3+)",
+        "panel_b_color": "#0E8561",
+    },
+    "mma": {
+        "short": "mma",
+        "depth_colors": ("#CFE3FF", "#68A4F1", "#1B4DB1"),  # depth 1, 2, 3+
+        "rail_bg": "#EEF3FA",
+        "rail_ec": "#CFDCEB",
+        "pin_color": "#7B1FA2",                              # vivid violet ▼
+        "pin_label": "MMA Async Issue (v)",
+        "depth_label": "MMA In-Flight Depth (1 / 2 / 3+)",
+        "panel_b_color": "#1B4DB1",
+    },
 }
 
 # Dual-color Inter-Node vs Intra-Node Fabric Palette (NVIDIA IB/RDMA vs NVLink, AMD RDMA vs xGMI).
@@ -358,6 +380,7 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
     nsys_kernel: Optional[Dict[str, Any]] = None
     info_dur_us: Optional[float] = None
     sw_spans: List[Dict[str, Any]] = []
+    sw_marks: List[Dict[str, Any]] = []
     sm_set: set[int] = set()
     stages_seen: Dict[str, float] = defaultdict(float)
     meta_warps_by_sm: Dict[int, Dict[int, str]] = defaultdict(dict)
@@ -407,16 +430,22 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
                 if m:
                     w_id = int(m.group(1))
                     m_role_bracket = re.search(r"\[(Compute|Comm|Dispatch|Scatter|Math|Epilogue|DMA|Producer|Consumer)[^\]]*\]", tname, re.I)
+                    m_role_paren = re.search(r"\(([A-Za-z0-9_/\-\s]+)\)", tname)
                     if m_role_bracket:
                         role_part = m_role_bracket.group(1).strip()
+                    elif m_role_paren:
+                        role_part = m_role_paren.group(1).strip()
                     elif "·" in tname:
                         cand_r = tname.split("·")[-1].strip()
-                        role_part = f"w{w_id:02d}" if re.match(r"^slot\s+\d+$", cand_r, re.I) else cand_r
+                        if re.match(r"^(?:slot\s*\d+|实例\s*\d+|instance\s*\d+)$", cand_r, re.I) or any(ord(ch) > 127 for ch in cand_r):
+                            role_part = f"w{w_id:02d}"
+                        else:
+                            role_part = cand_r
                     elif "/" in tname:
                         role_part = tname.split("/")[-1].strip()
                     else:
                         role_part = f"w{w_id:02d}"
-                    if re.fullmatch(r"[wW]\d+", role_part):
+                    if re.fullmatch(r"[wW]\d+", role_part) or any(ord(ch) > 127 for ch in role_part):
                         role_part = f"w{w_id:02d}"
                     meta_warps_by_sm[sm].setdefault(w_id, role_part)
                     sm_set.add(sm)
@@ -495,12 +524,60 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
             cta = int(args.get("cta", 0))
             role = str(args.get("role") or meta_warps_by_sm.get(sm, {}).get(warp) or f"w{warp:02d}")
             fabric = str(args.get("fabric") or "").strip().lower()
+            async_engine = str(args.get("async_engine") or "").strip().lower()
+            if async_engine not in ("mem", "mma"):
+                async_engine = ""
             sm_set.add(sm)
             stages_seen[sem] += dur
             sw_spans.append({
                 "ts": ts, "dur": dur, "end": ts + dur, "sem": sem,
                 "label": disp_label, "raw_name": raw_name, "fabric": fabric,
+                "async_engine": async_engine,
                 "sm": sm, "warp": warp, "cta": cta, "role": role,
+            })
+        elif ph == "i":
+            pid = ev.get("pid")
+            args = ev.get("args") or {}
+            if has_high_unit_pids and isinstance(pid, int) and pid < 100:
+                continue
+            ts = float(ev.get("ts") or 0.0)
+            if not math.isfinite(ts):
+                continue
+            raw_name = str(ev.get("name") or "").strip()
+            disp_label = str(
+                args.get("display_label")
+                or args.get("original_label")
+                or raw_name
+                or args.get("semantic_id")
+                or "load"
+            ).strip()
+            sem_raw = str(args.get("semantic_id") or ev.get("cat") or raw_name or "load").lower()
+            if sem_raw not in STAGE_COLORS:
+                from .contract import resolve_semantic_id
+                sem = resolve_semantic_id(disp_label or raw_name or sem_raw)
+            else:
+                sem = sem_raw
+            sm = args.get("sm")
+            if sm is None:
+                u = _pid_to_unit(pid)
+                sm = u if u is not None else 0
+            else:
+                sm = int(sm)
+            if args.get("warp") is not None:
+                warp = int(args["warp"])
+            elif args.get("wave") is not None:
+                warp = int(args["wave"])
+            else:
+                warp = 0
+            cta = int(args.get("cta", 0))
+            role = str(args.get("role") or meta_warps_by_sm.get(sm, {}).get(warp) or f"w{warp:02d}")
+            async_engine = str(args.get("async_engine") or "").strip().lower()
+            if async_engine not in ("mem", "mma"):
+                async_engine = "mma" if sem in ("mma", "gemm") else ("mem" if sem in ("load", "dispatch", "store", "communication") else "mem")
+            sm_set.add(sm)
+            sw_marks.append({
+                "ts": ts, "sem": sem, "label": disp_label, "raw_name": raw_name,
+                "async_engine": async_engine, "sm": sm, "warp": warp, "cta": cta, "role": role,
             })
 
     for k in hw_curves:
@@ -591,17 +668,66 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         min_sw = min(sp["ts"] for sp in sw_spans)
         if math.isfinite(min_sw):
             t_candidates.append(min_sw)
+    if sw_marks:
+        min_mk = min(mk["ts"] for mk in sw_marks)
+        if math.isfinite(min_mk):
+            t_candidates.append(min_mk)
     t_origin = min(t_candidates) if t_candidates else 0.0
     if t_origin > 1.0 or t_origin < -1.0:
         for sp in sw_spans:
             sp["ts"] = max(0.0, sp["ts"] - t_origin)
             sp["end"] = max(sp["ts"], sp["end"] - t_origin)
+        for mk in sw_marks:
+            mk["ts"] = max(0.0, mk["ts"] - t_origin)
         for k in list(hw_curves.keys()):
             hw_curves[k] = [(t - t_origin, v) for t, v in hw_curves[k]]
         if nsys_kernel is not None and nsys_kernel.get("ts") is not None:
             nsys_kernel["ts"] = max(0.0, float(nsys_kernel["ts"]) - t_origin)
 
-    sw_end = max((s["end"] for s in sw_spans), default=0.0)
+    # Auto-promote sub-microsecond non-blocking `load` issue pulses (e.g. Triton `tl.load` -> `cp.async`
+    # taking ~40 ns inside a K-loop) into crisp fixed-pixel `mem` async issue pins so they are never
+    # drowned out to sub-pixel hairlines or allowed to overwrite MMA bars.
+    if not dual_fabric and sw_spans:
+        comp_durs = sorted(sp["dur"] for sp in sw_spans if sp["sem"] in ("mma", "gemm", "compute") and not sp["async_engine"])
+        med_comp = comp_durs[len(comp_durs) // 2] if comp_durs else 0.0
+        if med_comp >= 0.8:
+            load_durs_by_lbl: Dict[str, List[float]] = defaultdict(list)
+            for sp in sw_spans:
+                if sp["sem"] == "load" and not sp["async_engine"]:
+                    load_durs_by_lbl[sp["label"]].append(sp["dur"])
+            promote_load_lbls = set()
+            for lbl_k, dl in load_durs_by_lbl.items():
+                dl.sort()
+                med_l = dl[len(dl) // 2]
+                if med_l <= 0.30 and med_l <= 0.12 * med_comp:
+                    promote_load_lbls.add(lbl_k)
+            if promote_load_lbls:
+                kept_spans = []
+                for sp in sw_spans:
+                    if sp["sem"] == "load" and not sp["async_engine"] and sp["label"] in promote_load_lbls:
+                        sw_marks.append({
+                            "ts": sp["ts"], "sem": "load", "label": sp["label"], "raw_name": sp["raw_name"],
+                            "async_engine": "mem", "sm": sp["sm"], "warp": sp["warp"],
+                            "cta": sp["cta"], "role": sp["role"],
+                        })
+                    else:
+                        kept_spans.append(sp)
+                sw_spans = kept_spans
+                stages_seen = defaultdict(float)
+                for sp in sw_spans:
+                    if not sp["async_engine"]:
+                        stages_seen[sp["sem"]] += sp["dur"]
+
+    async_spans = [sp for sp in sw_spans if sp["async_engine"] in ("mem", "mma")]
+    main_spans = [sp for sp in sw_spans if not sp["async_engine"]]
+    stages_seen = defaultdict(float)
+    for sp in main_spans:
+        stages_seen[sp["sem"]] += sp["dur"]
+
+    sw_end = max(
+        [s["end"] for s in sw_spans] + [m["ts"] for m in sw_marks],
+        default=0.0,
+    )
     k_dur = (
         float(nsys_kernel["dur"]) if (nsys_kernel and nsys_kernel.get("dur"))
         else (info_dur_us if info_dur_us else sw_end)
@@ -613,6 +739,9 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         "hw_labels": hw_labels,
         "nsys_kernel": nsys_kernel,
         "sw_spans": sw_spans,
+        "main_spans": main_spans,
+        "async_spans": async_spans,
+        "sw_marks": sw_marks,
         "sms": sorted(sm_set),
         "meta_warps_by_sm": {k: dict(v) for k, v in meta_warps_by_sm.items()},
         "stages_seen": dict(stages_seen),
@@ -679,6 +808,494 @@ def _compute_panel_c_role_labels(
     return out
 
 
+def _compute_depth_segments(intervals: Sequence[Tuple[float, float]]) -> Tuple[List[Tuple[float, float, int]], float, int]:
+    """Sweep-line exact in-flight concurrency depth over ``[(ts, end), ...]``.
+
+    Returns ``(segments, avg_depth, max_depth)`` where each segment is ``(t0, t1, depth)`` for ``depth >= 1``
+    and ``avg_depth`` is time-weighted over the active (depth >= 1) union duration.
+    """
+    events: List[Tuple[float, int]] = []
+    for ts, end in intervals:
+        if end > ts + 1e-6:
+            events.append((float(ts), 1))
+            events.append((float(end), -1))
+    if not events:
+        return [], 0.0, 0
+    # Process completions (-1) before simultaneous launches (+1) to avoid false depth spikes at boundaries.
+    events.sort(key=lambda kv: (kv[0], kv[1]))
+    segs: List[Tuple[float, float, int]] = []
+    cur = 0
+    max_d = 0
+    area = 0.0
+    active_dur = 0.0
+    prev_t = events[0][0]
+    for t, delta in events:
+        dt = t - prev_t
+        if dt > 1e-6 and cur > 0:
+            segs.append((prev_t, t, cur))
+            area += dt * cur
+            active_dur += dt
+        cur = max(0, cur + delta)
+        if cur > max_d:
+            max_d = cur
+        prev_t = t
+    avg_d = (area / active_dur) if active_dur > 1e-6 else 0.0
+    return segs, avg_d, max_d
+
+
+def _pick_micro_zoom_window(
+    rep_main: Sequence[Mapping[str, Any]],
+    rep_async: Sequence[Mapping[str, Any]],
+    rep_marks: Sequence[Mapping[str, Any]],
+    t_max: float,
+    *,
+    zoom_cta: Optional[int] = None,
+    zoom_window: Optional[Tuple[float, float]] = None,
+) -> Optional[Tuple[float, float, Optional[int], float, str]]:
+    """Deterministic micro-zoom selector (Panel D).
+
+    1. Explicit overrides (`zoom_window` / `zoom_cta`) always win.
+    2. Trigger rule: compute median inter-event gap on representative SM; activate only when
+       `delta_px = (median_gap_us / t_max) * 2400 < 12.0` (dense full-kernel view).
+    3. Multi-wave kernels: pick the complete CTA with highest `wait_ratio = wait_us / dur_us`
+       (tie-break: closest to middle wave, then smallest CTA id); if zero exposed wait, pick
+       the median-duration (p50) steady-state CTA.
+    4. Width cap: show full CTA when `8 <= n_iters <= 48`; cap to a deterministic 32-iteration
+       window (`[peak-12, peak+20]` around the worst wait, or middle 32 iters) when `n_iters > 48`;
+       include adjacent CTA when `n_iters < 8`.
+    5. Single-wave / persistent kernels: sliding-window scan maximizing exposed wait (or steady
+       50% midpoint) at the 32-iteration target width.
+    """
+    if zoom_window is not None:
+        z0, z1 = float(zoom_window[0]), float(zoom_window[1])
+        if z1 > z0:
+            return max(0.0, z0), min(t_max * 1.015, z1), zoom_cta, 0.0, "user-specified window"
+
+    cta_bounds: Dict[int, List[float]] = {}
+    cta_wait: Dict[int, float] = defaultdict(float)
+    cta_wait_spans: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
+    cta_issues: Dict[int, List[float]] = defaultdict(list)
+    all_issue_ts_by_warp: Dict[int, List[float]] = defaultdict(list)
+
+    for sp in rep_main:
+        c = int(sp["cta"])
+        t0, t1 = float(sp["ts"]), float(sp["end"])
+        b = cta_bounds.get(c)
+        cta_bounds[c] = [t0, t1] if b is None else [min(b[0], t0), max(b[1], t1)]
+        if sp["sem"] == "wait":
+            cta_wait[c] += (t1 - t0)
+            cta_wait_spans[c].append((t0, t1))
+    for sp in rep_async:
+        c = int(sp["cta"])
+        t0, t1 = float(sp["ts"]), float(sp["end"])
+        b = cta_bounds.get(c)
+        cta_bounds[c] = [t0, t1] if b is None else [min(b[0], t0), max(b[1], t1)]
+        cta_issues[c].append(t0)
+        all_issue_ts_by_warp[int(sp["warp"])].append(t0)
+    for mk in rep_marks:
+        c = int(mk["cta"])
+        t0 = float(mk["ts"])
+        b = cta_bounds.get(c)
+        cta_bounds[c] = [t0, t0] if b is None else [min(b[0], t0), max(b[1], t0)]
+        cta_issues[c].append(t0)
+        all_issue_ts_by_warp[int(mk["warp"])].append(t0)
+
+    def _dedup_sorted(ts_list: Sequence[float]) -> List[float]:
+        out: List[float] = []
+        for t in sorted(ts_list):
+            if not out or (t - out[-1]) > 0.015:
+                out.append(t)
+        return out
+
+    # Step 1: Deterministic density trigger (`delta_px < 12 px` on ~2400 px plot width)
+    gaps: List[float] = []
+    for _w, ts_l in all_issue_ts_by_warp.items():
+        ds = _dedup_sorted(ts_l)
+        for i in range(1, len(ds)):
+            g = ds[i] - ds[i - 1]
+            if g > 1e-4:
+                gaps.append(g)
+    gaps.sort()
+    med_gap = gaps[len(gaps) // 2] if gaps else t_max
+    delta_px = (med_gap / max(t_max, 1e-6)) * 2400.0
+    if zoom_cta is None and delta_px >= 12.0:
+        return None
+
+    # Deduplicate per-CTA issue timestamps across one representative warp to count true iterations
+    rep_w_first = min(all_issue_ts_by_warp.keys()) if all_issue_ts_by_warp else 0
+    cta_warp_iters: Dict[int, List[float]] = defaultdict(list)
+    for sp in rep_async:
+        if int(sp["warp"]) == rep_w_first:
+            cta_warp_iters[int(sp["cta"])].append(float(sp["ts"]))
+    for mk in rep_marks:
+        if int(mk["warp"]) == rep_w_first:
+            cta_warp_iters[int(mk["cta"])].append(float(mk["ts"]))
+    cta_iter_ts = {c: _dedup_sorted(v) for c, v in cta_warp_iters.items()}
+
+    def _cap_to_32_iters(c_id: int, t0: float, t1: float, reason: str) -> Tuple[float, float, Optional[int], float, str]:
+        its = cta_iter_ts.get(c_id) or _dedup_sorted(cta_issues.get(c_id, ()))
+        n_it = len(its)
+        w_us = cta_wait.get(c_id, 0.0)
+        if n_it > 48:
+            # Cap strictly to 32 iterations centered on worst wait bubble (or steady midpoint)
+            ws = cta_wait_spans.get(c_id, [])
+            if ws:
+                peak_t = max(ws, key=lambda x: x[1] - x[0])[0]
+                peak_idx = min(range(n_it), key=lambda i: abs(its[i] - peak_t))
+                lo_i = max(0, min(n_it - 32, peak_idx - 12))
+            else:
+                lo_i = max(0, (n_it - 32) // 2)
+            hi_i = min(n_it - 1, lo_i + 31)
+            z0, z1 = its[lo_i], (its[hi_i] + med_gap * 1.5)
+            pad = max(0.25, (z1 - z0) * 0.04)
+            return max(t0, z0 - pad), min(t1 + pad, z1 + pad), c_id, w_us, f"{reason}, 32-iter cap"
+        pad = max(0.25, (t1 - t0) * 0.04)
+        return max(0.0, t0 - pad), min(t_max * 1.015, t1 + pad), c_id, w_us, reason
+
+    # Explicit CTA override
+    if zoom_cta is not None and zoom_cta in cta_bounds:
+        t0, t1 = cta_bounds[zoom_cta]
+        return _cap_to_32_iters(zoom_cta, t0, t1, f"CTA {zoom_cta}")
+
+    # Step 2: Multi-wave CTA selection vs single-wave persistent kernel
+    cands = []
+    for c, (t0, t1) in cta_bounds.items():
+        dur = t1 - t0
+        n_it = len(cta_iter_ts.get(c, ()))
+        if dur >= 0.4 and n_it >= 2:
+            w_ratio = cta_wait.get(c, 0.0) / max(dur, 1e-6)
+            cands.append((c, t0, t1, dur, cta_wait.get(c, 0.0), w_ratio, n_it))
+
+    if len(cands) >= 2:
+        cands.sort(key=lambda x: x[1])
+        mid_t = cands[len(cands) // 2][1]
+        best_wait_ratio = max(x[5] for x in cands)
+        if best_wait_ratio > 0.005:
+            # Highest exposed wait ratio -> tie-break: closest to middle wave, then smallest CTA id
+            chosen = max(cands, key=lambda x: (round(x[5], 4), -abs(x[1] - mid_t), -x[0]))
+            reason = f"peak wait_ratio {chosen[5]*100:.1f}%"
+        else:
+            # Steady-state median-duration (p50) CTA
+            by_dur = sorted(cands, key=lambda x: (x[3], x[0]))
+            chosen = by_dur[len(by_dur) // 2]
+            reason = "steady-state p50 CTA"
+        c_id, t0, t1, dur, _w, _wr, n_it = chosen
+        # If very short CTA (< 8 iters), extend to next adjacent CTA on the same SM
+        if n_it < 8:
+            pos = next(i for i, x in enumerate(cands) if x[0] == c_id)
+            if pos + 1 < len(cands):
+                t1 = max(t1, cands[pos + 1][2])
+                reason += " + next CTA"
+        if (t1 - t0) > 0.70 * t_max and n_it <= 48:
+            return None
+        return _cap_to_32_iters(c_id, t0, t1, reason)
+
+    if len(cands) == 1:
+        # Single-wave persistent kernel / megakernel: cap to 32-iter sliding window if dense (> 48 iters)
+        c_id, t0, t1, _dur, _w, _wr, n_it = cands[0]
+        if n_it > 48:
+            return _cap_to_32_iters(c_id, t0, t1, "persistent-kernel 32-iter window")
+    return None
+
+
+def _render_warp_panel(
+    ax: Any,
+    *,
+    rep_main: Sequence[Mapping[str, Any]],
+    rep_async: Sequence[Mapping[str, Any]],
+    rep_marks: Sequence[Mapping[str, Any]],
+    n_rep_rows: int,
+    use_cta_slots: bool,
+    rep_cta_slot: Mapping[int, int],
+    warp_to_y: Mapping[int, int],
+    span_color_fn: Any,
+    dual_fabric: bool,
+    x_lim: Tuple[float, float],
+    k_dur: float,
+    is_zoom: bool = False,
+    show_right_stats: bool = False,
+) -> Dict[int, Dict[str, Any]]:
+    """Render per-warp/CTA main execution bars + on-demand thin async engine depth strips & ▼ issue pins."""
+    from matplotlib.collections import LineCollection, PolyCollection
+    import matplotlib.patches as mpatches
+
+    ax.set_facecolor("#FFFFFF")
+    ax.grid(True, axis="x", linestyle="-", linewidth=0.45, color="#ECEFF1", zorder=0)
+    x_lo, x_hi = float(x_lim[0]), float(x_lim[1])
+    x_span = max(x_hi - x_lo, 1e-6)
+    min_vis_us = x_span * (2.0 / 2800.0)
+
+    def _row_of(ev: Mapping[str, Any]) -> Optional[int]:
+        return rep_cta_slot.get(int(ev["cta"])) if use_cta_slots else warp_to_y.get(int(ev["warp"]))
+
+    # Filter to visible window [x_lo, x_hi] for zoom speed & accuracy
+    vis_main = [sp for sp in rep_main if float(sp["end"]) >= x_lo and float(sp["ts"]) <= x_hi]
+    vis_async = [sp for sp in rep_async if float(sp["end"]) >= x_lo and float(sp["ts"]) <= x_hi]
+    vis_marks = [mk for mk in rep_marks if x_lo <= float(mk["ts"]) <= x_hi]
+
+    # Discover active async engines & whether each row has main spans
+    row_has_main: Dict[int, bool] = defaultdict(bool)
+    row_engines: Dict[int, set[str]] = defaultdict(set)
+    for sp in vis_main:
+        r = _row_of(sp)
+        if r is not None:
+            row_has_main[r] = True
+    for sp in vis_async:
+        r = _row_of(sp)
+        if r is not None and sp["async_engine"] in _ASYNC_ENGINE_STYLE:
+            row_engines[r].add(sp["async_engine"])
+    for mk in vis_marks:
+        r = _row_of(mk)
+        if r is not None and mk["async_engine"] in _ASYNC_ENGINE_STYLE:
+            row_engines[r].add(mk["async_engine"])
+
+    # Compute exact vertical geometry per row (note: inverted Y-axis -> smaller y is visual TOP!)
+    # Returns (main_top, main_bot), {engine: (sub_top, sub_bot)}
+    row_geom: Dict[int, Tuple[Tuple[float, float], Dict[str, Tuple[float, float]]]] = {}
+    for r in range(n_rep_rows):
+        engs = [e for e in ("mem", "mma") if e in row_engines.get(r, ())]
+        if not engs or dual_fabric:
+            row_geom[r] = ((r - 0.36, r + 0.36), {})
+        elif not row_has_main.get(r, False) and len(engs) == 1:
+            # Pure-async Producer warp (e.g. TMA Producer): fill full row height with depth strip + ▼ pins
+            row_geom[r] = ((r - 0.36, r + 0.36), {engs[0]: (r - 0.36, r + 0.36)})
+        elif len(engs) == 1:
+            row_geom[r] = ((r - 0.38, r + 0.12), {engs[0]: (r + 0.15, r + 0.38)})
+        else:
+            row_geom[r] = ((r - 0.39, r + 0.01), {"mem": (r + 0.04, r + 0.20), "mma": (r + 0.23, r + 0.39)})
+
+    # 1) Draw Main Execution Track spans
+    verts_by_color: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
+    durs_by_color: Dict[str, List[float]] = defaultdict(list)
+    sem_by_color: Dict[str, str] = {}
+    is_priority_color: Dict[str, bool] = {}
+    wait_verts: List[List[Tuple[float, float]]] = []
+    row_wait_us: Dict[int, float] = defaultdict(float)
+    row_main_us: Dict[int, float] = defaultdict(float)
+
+    for sp in vis_main:
+        r = _row_of(sp)
+        if r is None:
+            continue
+        x0 = max(x_lo, float(sp["ts"]))
+        x1 = min(x_hi, float(sp["end"]))
+        is_crit = dual_fabric and sp.get("_frole") in ("inter_dispatch", "inter_combine", "intra_combine")
+        if is_crit and (x1 - x0) < min_vis_us:
+            x1 = x0 + min_vis_us
+        if (x1 - x0) <= 0.0:
+            continue
+        row_main_us[r] += (x1 - x0)
+        y_top, y_bot = row_geom[r][0]
+        poly = [(x0, y_top), (x1, y_top), (x1, y_bot), (x0, y_bot)]
+        if sp["sem"] == "wait" and not dual_fabric:
+            row_wait_us[r] += (x1 - x0)
+            wait_verts.append(poly)
+            continue
+        col_hex = span_color_fn(sp)
+        verts_by_color[col_hex].append(poly)
+        durs_by_color[col_hex].append(float(sp["dur"]))
+        sem_by_color.setdefault(col_hex, sp["sem"])
+        if is_crit:
+            is_priority_color[col_hex] = True
+
+    ordered_color_layers = sorted(
+        verts_by_color.items(),
+        key=lambda kv: (
+            2 if is_priority_color.get(kv[0]) else (0 if sem_by_color.get(kv[0]) == "barrier" else 1),
+            -sorted(durs_by_color[kv[0]])[len(durs_by_color[kv[0]]) // 2],
+        ),
+    )
+    dense_main = len(vis_main) > 240
+    for layer_idx, (col_hex, verts) in enumerate(ordered_color_layers):
+        no_edge = is_priority_color.get(col_hex) or dense_main
+        pc = PolyCollection(
+            verts, facecolors=col_hex, edgecolors="none" if no_edge else "#FFFFFF",
+            linewidths=0.0 if no_edge else 0.16,
+            antialiased=not no_edge,
+            zorder=3 + layer_idx * 0.05,
+        )
+        ax.add_collection(pc)
+
+    # High-visibility Amber Gold Exposed Wait layer (always drawn above MMA, with crisp /// hatch when zoomed!)
+    if wait_verts:
+        dense_wait = len(wait_verts) > 120 and not is_zoom
+        pc_w = PolyCollection(
+            wait_verts,
+            facecolors="#F5A623",
+            edgecolors="#B87A00" if not dense_wait else "none",
+            linewidths=0.55 if is_zoom else (0.30 if not dense_wait else 0.0),
+            hatch="///" if (is_zoom or len(wait_verts) <= 48) else None,
+            zorder=4.8,
+        )
+        ax.add_collection(pc_w)
+
+    # 2) Draw Thin Async Engine Sub-Tracks (In-Flight Depth Strips + Vivid Fixed-Pixel ▼ Issue Pins)
+    row_stats: Dict[int, Dict[str, Any]] = {}
+    if not dual_fabric and any(row_engines.values()):
+        # Collect async spans (with CTA id) & issue timestamps per (row, engine)
+        async_by_re: Dict[Tuple[int, str], List[Tuple[float, float, int]]] = defaultdict(list)
+        issues_by_re: Dict[Tuple[int, str], List[float]] = defaultdict(list)
+        for sp in vis_async:
+            r = _row_of(sp)
+            eng = sp["async_engine"]
+            if r is not None and eng in _ASYNC_ENGINE_STYLE:
+                async_by_re[(r, eng)].append((float(sp["ts"]), float(sp["end"]), int(sp["cta"])))
+                if x_lo <= float(sp["ts"]) <= x_hi:
+                    issues_by_re[(r, eng)].append(float(sp["ts"]))
+        for mk in vis_marks:
+            r = _row_of(mk)
+            eng = mk["async_engine"]
+            if r is not None and eng in _ASYNC_ENGINE_STYLE:
+                issues_by_re[(r, eng)].append(float(mk["ts"]))
+
+        # Deduplicate close issue timestamps (e.g. both explicit mark + async span start at same op)
+        dedup_issues: Dict[Tuple[int, str], List[float]] = {}
+        for key, ts_list in issues_by_re.items():
+            ts_list.sort()
+            out_t: List[float] = []
+            for t in ts_list:
+                if not out_t or (t - out_t[-1]) > 0.015:
+                    out_t.append(t)
+            dedup_issues[key] = out_t
+
+        # Batched collections per engine
+        rail_polys: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
+        depth_polys: Dict[Tuple[str, int], List[List[Tuple[float, float]]]] = defaultdict(list)
+        pin_stems: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
+        pin_pts_x: Dict[str, List[float]] = defaultdict(list)
+        pin_pts_y: Dict[str, List[float]] = defaultdict(list)
+        tick_segs: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
+
+        # Adaptive LOD pixel threshold (~11 px between full ▼ triangles in macro view)
+        min_pin_gap_us = x_span * (11.0 / 2200.0)
+        min_tick_gap_us = x_span * (4.5 / 2200.0)
+
+        for r in range(n_rep_rows):
+            sub_map = row_geom[r][1]
+            if not sub_map:
+                continue
+            stat_parts: List[str] = []
+            for eng in ("mem", "mma"):
+                if eng not in sub_map:
+                    continue
+                y_top, y_bot = sub_map[eng]
+                is_pure_prod = not row_has_main.get(r, False)
+                rail_x1 = min(x_hi, max(k_dur, x_lo))
+                rail_polys[eng].append([(x_lo, y_top), (rail_x1, y_top), (rail_x1, y_bot), (x_lo, y_bot)])
+
+                # Exact per-CTA in-flight depth (so concurrent resident CTAs on one SM don't double-count stage depth!)
+                ivs_cta = async_by_re.get((r, eng), [])
+                by_cta_ivs: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
+                for ts_a, en_a, cta_a in ivs_cta:
+                    by_cta_ivs[cta_a].append((ts_a, en_a))
+                cta_avgs: List[float] = []
+                max_d = 0
+                if len(by_cta_ivs) <= 1:
+                    only_ivs = [(a, b) for a, b, _ in ivs_cta]
+                    d_segs, avg_d, max_d = _compute_depth_segments(only_ivs)
+                else:
+                    # Take max per-CTA depth at each time point for visual strip, and mean per-CTA depth for stats
+                    all_d_segs: List[Tuple[float, float, int]] = []
+                    for _c_id, c_ivs in by_cta_ivs.items():
+                        c_segs, c_avg, c_max = _compute_depth_segments(c_ivs)
+                        if c_max > 0:
+                            cta_avgs.append(c_avg)
+                            max_d = max(max_d, c_max)
+                            all_d_segs.extend(c_segs)
+                    # Draw lower depths first so deeper active CTA stages remain visible on top
+                    all_d_segs.sort(key=lambda x: x[2])
+                    d_segs = all_d_segs
+                    avg_d = (sum(cta_avgs) / len(cta_avgs)) if cta_avgs else 0.0
+
+                for s0, s1, d in d_segs:
+                    cx0, cx1 = max(x_lo, s0), min(x_hi, s1)
+                    if cx1 > cx0:
+                        bucket = 0 if d == 1 else (1 if d == 2 else 2)
+                        depth_polys[(eng, bucket)].append([(cx0, y_top), (cx1, y_top), (cx1, y_bot), (cx0, y_bot)])
+
+                # Prominent Fixed-Pixel ▼ Async Issue Pins (with clean Adaptive LOD so emerald depth strip stays crisp!)
+                ts_all = dedup_issues.get((r, eng), [])
+                if ts_all:
+                    gaps = sorted(ts_all[i] - ts_all[i - 1] for i in range(1, len(ts_all)))
+                    med_gap = gaps[len(gaps) // 2] if gaps else x_span
+                    dense_pins = (not is_zoom) and (len(ts_all) > 40 or med_gap < min_pin_gap_us)
+                    stem_top = y_top if is_pure_prod else (y_top - 0.05)
+                    pin_y = y_top + (0.01 if is_pure_prod else -0.01)
+                    tick_bot = y_top + (y_bot - y_top) * 0.45 if max_d >= 1 else y_bot
+                    last_pin_t = -1e18
+                    last_tick_t = -1e18
+                    for idx_t, t_val in enumerate(ts_all):
+                        is_wave_head = (idx_t == 0) or ((t_val - ts_all[idx_t - 1]) > max(2.2 * med_gap, min_pin_gap_us))
+                        if (not dense_pins) or (is_wave_head and (t_val - last_pin_t) >= min_pin_gap_us * 0.9):
+                            pin_stems[eng].append([(t_val, stem_top), (t_val, y_bot)])
+                            pin_pts_x[eng].append(t_val)
+                            pin_pts_y[eng].append(pin_y)
+                            last_pin_t = t_val
+                            last_tick_t = t_val
+                        elif (t_val - last_tick_t) >= min_tick_gap_us:
+                            tick_segs[eng].append([(t_val, y_top - 0.01), (t_val, tick_bot)])
+                            last_tick_t = t_val
+
+                n_iss = len(ts_all)
+                if max_d >= 1:
+                    stat_parts.append(f"{n_iss} {eng} · d={avg_d:.1f}")
+                elif n_iss > 0:
+                    stat_parts.append(f"{n_iss} {eng} issues")
+
+            if row_wait_us.get(r, 0.0) > 0.0 and row_main_us.get(r, 0.0) > 0.0:
+                wpct = 100.0 * row_wait_us[r] / row_main_us[r]
+                stat_parts.append(f"wait {wpct:.1f}%")
+            if stat_parts:
+                row_stats[r] = {"text": " · ".join(stat_parts)}
+
+        # Add batched async artists
+        for eng in ("mem", "mma"):
+            st = _ASYNC_ENGINE_STYLE[eng]
+            if rail_polys.get(eng):
+                ax.add_collection(PolyCollection(
+                    rail_polys[eng], facecolors=st["rail_bg"], edgecolors=st["rail_ec"],
+                    linewidths=0.45, zorder=2.2,
+                ))
+            for bucket, dcol in enumerate(st["depth_colors"]):
+                polys = depth_polys.get((eng, bucket))
+                if polys:
+                    ax.add_collection(PolyCollection(
+                        polys, facecolors=dcol, edgecolors="none", linewidths=0.0, antialiased=False,
+                        zorder=2.6 + bucket * 0.05,
+                    ))
+            if tick_segs.get(eng):
+                ax.add_collection(LineCollection(
+                    tick_segs[eng], colors=st["pin_color"], linewidths=0.9, alpha=0.88, zorder=5.2,
+                ))
+            if pin_stems.get(eng):
+                ax.add_collection(LineCollection(
+                    pin_stems[eng], colors=st["pin_color"], linewidths=1.75 if is_zoom else 1.4, zorder=5.6,
+                ))
+            if pin_pts_x.get(eng):
+                ax.scatter(
+                    pin_pts_x[eng], pin_pts_y[eng],
+                    marker="v", s=38 if is_zoom else 24,
+                    color=st["pin_color"], edgecolors="#FFFFFF", linewidths=0.55,
+                    zorder=6.2, clip_on=True,
+                )
+
+        if show_right_stats and row_stats:
+            trans = ax.get_yaxis_transform()
+            for r, info in row_stats.items():
+                ax.text(
+                    1.008, r, info["text"], transform=trans,
+                    va="center", ha="left", fontsize=7.6, color="#455A64",
+                    clip_on=False,
+                )
+
+    if x_lo <= k_dur <= x_hi:
+        ax.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=6.5)
+    ax.set_ylim(n_rep_rows - 0.48, -0.55)
+    ax.set_yticks(range(n_rep_rows))
+    ax.set_xlim(x_lo, x_hi)
+    return row_stats
+
+
 def render_swhw_overview_png(
     trace_or_path: Mapping[str, Any] | str | Path,
     out_png: str | Path,
@@ -686,9 +1303,11 @@ def render_swhw_overview_png(
     title: Optional[str] = None,
     subtitle: Optional[str] = None,
     focus_sm: Optional[int] = None,
+    zoom_cta: Optional[int] = None,
+    zoom_window: Optional[Tuple[float, float]] = None,
     dpi: int = 220,
 ) -> Path:
-    """Render a publication-grade 3-panel single-run SW+HW overview PNG on one locked time axis."""
+    """Render a publication-grade SW+HW overview PNG (with on-demand async depth strips, ▼ issue pins & micro-zoom)."""
     import matplotlib
     matplotlib.use("Agg")
     if sys.version_info >= (3, 14):
@@ -704,8 +1323,8 @@ def render_swhw_overview_png(
             return p
         _MplPath.__deepcopy__ = _safe_path_deepcopy
     import matplotlib.pyplot as plt
-    from matplotlib.collections import PolyCollection
-    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch, Rectangle
     import numpy as np
 
     trace = _load_trace(trace_or_path)
@@ -713,6 +1332,9 @@ def render_swhw_overview_png(
     hw_curves = parsed["hw_curves"]
     hw_labels = parsed["hw_labels"]
     sw_spans = parsed["sw_spans"]
+    main_spans = parsed["main_spans"]
+    async_spans = parsed["async_spans"]
+    sw_marks = parsed["sw_marks"]
     sms = parsed["sms"]
     t_max = parsed["t_max"]
     k_dur = parsed["k_dur"]
@@ -743,6 +1365,8 @@ def render_swhw_overview_png(
                         pass
     for sp in sw_spans:
         sm_warp_role[sp["sm"]].setdefault(sp["warp"], sp["role"])
+    for mk in sw_marks:
+        sm_warp_role[mk["sm"]].setdefault(mk["warp"], mk["role"])
     wpc_meta = int(
         other.get("wpc")
         or meta.get("wpc")
@@ -768,6 +1392,19 @@ def render_swhw_overview_png(
 
     rep_warps = list(sm_roles.get(rep_sm, ()))
     rep_spans_raw = [sp for sp in sw_spans if sp["sm"] == rep_sm]
+    rep_main_raw = [sp for sp in main_spans if sp["sm"] == rep_sm]
+    rep_async_raw = [sp for sp in async_spans if sp["sm"] == rep_sm]
+    rep_marks_raw = [mk for mk in sw_marks if mk["sm"] == rep_sm]
+    active_async_engines = sorted(
+        {sp["async_engine"] for sp in async_spans if sp["async_engine"] in _ASYNC_ENGINE_STYLE}
+        | {mk["async_engine"] for mk in sw_marks if mk["async_engine"] in _ASYNC_ENGINE_STYLE}
+    )
+    has_async_depth = {
+        eng: any(sp["async_engine"] == eng for sp in async_spans)
+        for eng in active_async_engines
+    }
+    has_async_rep = (not dual_fabric) and bool(rep_async_raw or rep_marks_raw)
+
     use_cta_slots = False
     rep_cta_slot: Dict[int, int] = {}
     rep_slot_count = 1
@@ -779,12 +1416,23 @@ def render_swhw_overview_png(
     n_sms = max(1, len(sms))
     n_rep_rows = rep_slot_count if use_cta_slots else max(1, len(rep_warps))
 
+    zoom_win = (
+        _pick_micro_zoom_window(
+            rep_main_raw, rep_async_raw, rep_marks_raw, t_max,
+            zoom_cta=zoom_cta, zoom_window=zoom_window,
+        )
+        if (has_async_rep or zoom_cta is not None or zoom_window is not None) else None
+    )
+    has_zoom = zoom_win is not None
+
     has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw", "nvlink_tx", "nvlink_rx", "nvlink_bw", "inter_rdma"))
-    panel_c_h = max(2.2, min(4.8, (0.26 if n_rep_rows >= 8 else 0.40) * n_rep_rows + 1.05))
-    panel_b_h = max(3.1, min(4.4, 0.036 * n_sms + 1.55))
+    row_h_unit = 0.50 if (has_async_rep and n_rep_rows <= 6) else (0.28 if n_rep_rows >= 8 else 0.40)
+    panel_c_h = max(2.25, min(5.0, row_h_unit * n_rep_rows + 1.05))
+    panel_d_h = max(2.15, min(4.2, row_h_unit * n_rep_rows + 0.90)) if has_zoom else 0.0
+    panel_b_h = max(2.9, min(4.2, 0.036 * n_sms + 1.45))
     panel_a_h = 2.25 if has_hw else 0.0
-    fig_h = 2.25 + panel_a_h + panel_b_h + panel_c_h
-    fig_w = 16.0
+    fig_h = 2.25 + panel_a_h + panel_b_h + panel_c_h + panel_d_h
+    fig_w = 16.8 if has_async_rep else 16.0
 
     plt.rcParams.update({
         "font.family": "DejaVu Sans",
@@ -795,21 +1443,26 @@ def render_swhw_overview_png(
         "text.color": "#111111",
     })
 
+    heights: List[float] = []
     if has_hw:
-        fig, axes = plt.subplots(
-            3, 1, figsize=(fig_w, fig_h), sharex=True,
-            gridspec_kw={"height_ratios": [panel_a_h, panel_b_h, panel_c_h], "hspace": 0.42 if dual_fabric else 0.28},
-        )
-        ax_hw, ax_sm, ax_wp = axes
-    else:
-        fig, axes = plt.subplots(
-            2, 1, figsize=(fig_w, fig_h), sharex=True,
-            gridspec_kw={"height_ratios": [panel_b_h, panel_c_h], "hspace": 0.28},
-        )
-        ax_hw = None
-        ax_sm, ax_wp = axes
-
-    fig.patch.set_facecolor("#FFFFFF")
+        heights.append(panel_a_h)
+    heights.extend([panel_b_h, panel_c_h])
+    if has_zoom:
+        heights.append(panel_d_h)
+    fig = plt.figure(figsize=(fig_w, fig_h), facecolor="#FFFFFF")
+    gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.40 if dual_fabric else 0.34)
+    idx_g = 0
+    ax_hw = fig.add_subplot(gs[idx_g]) if has_hw else None
+    if has_hw:
+        idx_g += 1
+    ax_sm = fig.add_subplot(gs[idx_g], sharex=ax_hw)
+    idx_g += 1
+    ax_wp = fig.add_subplot(gs[idx_g], sharex=ax_sm)
+    idx_g += 1
+    ax_zoom = fig.add_subplot(gs[idx_g]) if has_zoom else None
+    if ax_hw is not None:
+        ax_hw.tick_params(labelbottom=False)
+    ax_sm.tick_params(labelbottom=False)
 
     # ---- Title & subtitle ----
     kname = ""
@@ -844,13 +1497,17 @@ def render_swhw_overview_png(
             if use_cta_slots
             else f"{len(rep_warps) or 1} recorded {lane_nm} lane{'s' if len(rep_warps) != 1 else ''}/{unit_nm}"
         )
+        async_note = ""
+        if active_async_engines and not dual_fabric:
+            eng_desc = "+".join(e.upper() for e in active_async_engines)
+            async_note = f" · async {eng_desc} depth+pins"
         subtitle = (
             f"{arch_str}{len(sms)} physical {unit_nm}s × {lane_desc} · "
-            f"{len(sw_spans):,} software stage spans · {hw_tool_lbl} + {magic} timeline"
+            f"{len(sw_spans) + len(sw_marks):,} software events{async_note} · {hw_tool_lbl} + {magic}"
         )
 
-    fig.text(0.5, 0.985, title, ha="center", va="top", fontsize=14.2, fontweight="bold", color="#111111")
-    fig.text(0.5, 0.955, subtitle, ha="center", va="top", fontsize=9.1, color="#455A64")
+    fig.text(0.5, 0.986, title, ha="center", va="top", fontsize=14.2, fontweight="bold", color="#111111")
+    fig.text(0.5, 0.960 if has_zoom else 0.955, subtitle, ha="center", va="top", fontsize=9.0, color="#455A64")
 
     # ---- Stage / Dual-Fabric Color Map & Legends ----
     panel_b_fabric_handles: List[Patch] = []
@@ -889,12 +1546,12 @@ def render_swhw_overview_png(
     else:
         # Single-node / general kernel mode: preserve rich human-readable stage labels for EVERY stage!
         labels_by_sem: Dict[str, List[str]] = defaultdict(list)
-        for sp in sw_spans:
+        for sp in main_spans:
             lbl = str(sp.get("label") or sp["sem"]).strip()
             if lbl and lbl not in labels_by_sem[sp["sem"]]:
                 labels_by_sem[sp["sem"]].append(lbl)
         stage_color_map: Dict[Tuple[str, str], Tuple[str, str]] = {}
-        stage_order = ("load", "mma", "gemm", "softmax", "compute", "epilogue", "store", "wait", "barrier", "communication", "reduction", "dispatch")
+        stage_order = ("load", "mma", "gemm", "softmax", "compute", "wait", "epilogue", "store", "barrier", "communication", "reduction", "dispatch")
         ordered_sems = [s for s in stage_order if s in parsed["stages_seen"]] + sorted(
             s for s in parsed["stages_seen"] if s not in stage_order
         )
@@ -916,7 +1573,12 @@ def render_swhw_overview_png(
                     stage_color_map[(sem, lbl)] = (col, desc)
                     if desc not in seen_leg:
                         seen_leg.add(desc)
-                        top_legend_handles.append(Patch(facecolor=col, edgecolor="none", label=desc))
+                        top_legend_handles.append(Patch(
+                            facecolor=col,
+                            edgecolor="#B87A00" if sem == "wait" else "none",
+                            hatch="///" if sem == "wait" else None,
+                            label=desc,
+                        ))
             else:
                 only_lbl = lbls[0]
                 used_colors.add(base_col)
@@ -924,17 +1586,38 @@ def render_swhw_overview_png(
                 stage_color_map[(sem, only_lbl)] = (base_col, desc)
                 if desc not in seen_leg:
                     seen_leg.add(desc)
-                    top_legend_handles.append(Patch(facecolor=base_col, edgecolor="none", label=desc))
+                    top_legend_handles.append(Patch(
+                        facecolor=base_col,
+                        edgecolor="#B87A00" if sem == "wait" else "none",
+                        hatch="///" if sem == "wait" else None,
+                        label=desc,
+                    ))
+
+        # Add clean async engine legend handles (Issue ▼ pin + In-Flight Depth strip) on demand!
+        for eng in active_async_engines:
+            st = _ASYNC_ENGINE_STYLE[eng]
+            top_legend_handles.append(Line2D(
+                [0], [0], marker="v", color=st["pin_color"], markerfacecolor=st["pin_color"],
+                markeredgecolor="#FFFFFF", markeredgewidth=0.6, markersize=7.5, lw=1.6,
+                label=f"{eng.upper()} Async Issue",
+            ))
+            if has_async_depth.get(eng):
+                top_legend_handles.append(Patch(
+                    facecolor=st["depth_colors"][2], edgecolor=st["depth_colors"][1], linewidth=1.2,
+                    label=f"{eng.upper()} In-Flight Depth (1/2/3+)",
+                ))
 
         def _span_color(sp: Mapping[str, Any]) -> str:
+            if sp.get("async_engine") in _ASYNC_ENGINE_STYLE:
+                return _ASYNC_ENGINE_STYLE[sp["async_engine"]]["panel_b_color"]
             lbl = str(sp.get("label") or sp["sem"]).strip()
             return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
 
         if top_legend_handles:
-            leg_y = 0.928 if has_hw else 0.916
+            leg_y = 0.934 if has_zoom else (0.928 if has_hw else 0.916)
             fig.legend(
                 handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, leg_y),
-                ncol=min(len(top_legend_handles), 6), frameon=False, fontsize=8.8, handlelength=1.4, columnspacing=1.5,
+                ncol=min(len(top_legend_handles), 6), frameon=False, fontsize=8.4, handlelength=1.4, columnspacing=1.35,
             )
 
     x_pad = max(1.0, t_max * 0.015)
@@ -1054,10 +1737,19 @@ def render_swhw_overview_png(
     else:
         n_sub = max(1, len(all_warps))
     img = np.full((n_sms * n_sub, img_w, 3), 255, dtype=np.uint8)
+    panel_b_spans = sw_spans if dual_fabric else (main_spans + [
+        sp for sp in async_spans
+        if not any(m["sm"] == sp["sm"] and m["warp"] == sp["warp"] for m in main_spans[:256])
+    ] if not main_spans else main_spans)
+    # Also include pure-async producer warps (warps with zero main spans) on Panel (B)
+    if not dual_fabric and async_spans and main_spans:
+        main_sm_warps = {(sp["sm"], sp["warp"]) for sp in main_spans}
+        pure_async_b = [sp for sp in async_spans if (sp["sm"], sp["warp"]) not in main_sm_warps]
+        panel_b_spans = main_spans + pure_async_b
     sorted_spans = sorted(
-        sw_spans,
+        panel_b_spans,
         key=lambda s: (
-            0 if s["sem"] in ("wait", "barrier") else 1,
+            0 if s["sem"] == "barrier" else 1,
             _STAGE_DRAW_PRIORITY.get(s["sem"], 4),
             float(s["dur"]),
         ),
@@ -1103,70 +1795,40 @@ def render_swhw_overview_png(
             fontsize=10.5, fontweight="bold", color="#111111", pad=10,
         )
 
-    # ---- Panel (C): Representative SM/CU warp/wave role breakdown ----
-    ax_wp.set_facecolor("#FFFFFF")
-    ax_wp.grid(True, axis="x", linestyle="-", linewidth=0.4, color="#ECEFF1", zorder=0)
+    # ---- Panel (C): Representative SM/CU warp/wave role breakdown (+ thin async sub-tracks) ----
     warp_to_y = {w: idx for idx, (w, _r) in enumerate(rep_warps)}
-    verts_by_color: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
-    durs_by_color: Dict[str, List[float]] = defaultdict(list)
-    sem_by_color: Dict[str, str] = {}
-    is_priority_color: Dict[str, bool] = {}
-    bar_h = 0.72
-    rep_spans = [sp for sp in sorted_spans if sp["sm"] == rep_sm]
-    # Crisp minimum display width (~2 px on 16-inch 220 DPI figure) for short combine/RDMA slices on Panel C
-    min_vis_us = (t_max + x_pad) * (2.0 / 2800.0)
-    for sp in rep_spans:
-        if use_cta_slots:
-            y = rep_cta_slot.get(sp["cta"])
-        else:
-            y = warp_to_y.get(sp["warp"])
-        if y is None:
-            continue
-        x0, x1 = float(sp["ts"]), float(sp["end"])
-        is_crit = dual_fabric and sp.get("_frole") in ("inter_dispatch", "inter_combine", "intra_combine")
-        if is_crit and (x1 - x0) < min_vis_us:
-            x1 = x0 + min_vis_us
-        y0, y1 = y - bar_h / 2.0, y + bar_h / 2.0
-        col_hex = _span_color(sp)
-        verts_by_color[col_hex].append([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
-        durs_by_color[col_hex].append(float(sp["dur"]))
-        sem_by_color.setdefault(col_hex, sp["sem"])
-        if is_crit:
-            is_priority_color[col_hex] = True
-
-    ordered_color_layers = sorted(
-        verts_by_color.items(),
-        key=lambda kv: (
-            2 if is_priority_color.get(kv[0]) else (0 if sem_by_color.get(kv[0]) in ("wait", "barrier") else 1),
-            -sorted(durs_by_color[kv[0]])[len(durs_by_color[kv[0]]) // 2],
-        ),
+    rep_main_sorted = [sp for sp in sorted_spans if sp["sm"] == rep_sm and not sp.get("async_engine")]
+    rep_spans_for_lbl = [sp for sp in sorted_spans if sp["sm"] == rep_sm]
+    _render_warp_panel(
+        ax_wp,
+        rep_main=rep_main_sorted if not dual_fabric else rep_spans_for_lbl,
+        rep_async=[] if dual_fabric else rep_async_raw,
+        rep_marks=[] if dual_fabric else rep_marks_raw,
+        n_rep_rows=n_rep_rows,
+        use_cta_slots=use_cta_slots,
+        rep_cta_slot=rep_cta_slot,
+        warp_to_y=warp_to_y,
+        span_color_fn=_span_color,
+        dual_fabric=dual_fabric,
+        x_lim=x_lim,
+        k_dur=k_dur,
+        is_zoom=False,
+        show_right_stats=has_async_rep,
     )
-    dense_panel_c = len(rep_spans) > 240
-    for layer_idx, (col_hex, verts) in enumerate(ordered_color_layers):
-        no_edge = is_priority_color.get(col_hex) or dense_panel_c
-        pc = PolyCollection(
-            verts, facecolors=col_hex, edgecolors="none" if no_edge else "#FFFFFF",
-            linewidths=0.0 if no_edge else 0.16,
-            antialiased=not no_edge,
-            zorder=3 + layer_idx * 0.05,
-        )
-        ax_wp.add_collection(pc)
 
-    ax_wp.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=6)
-    ax_wp.set_ylim(n_rep_rows - 0.45, -0.55)
-    ax_wp.set_yticks(range(n_rep_rows))
     yt_fs = 7.8 if n_rep_rows >= 12 else 8.2
     if use_cta_slots:
         role_lbl = rep_warps[0][1] if rep_warps else "cta"
-        ax_wp.set_yticklabels([f"Slot {i} · {role_lbl}" for i in range(n_rep_rows)], fontsize=yt_fs)
+        c_yticks = [f"Slot {i} · {role_lbl}" for i in range(n_rep_rows)]
+        ax_wp.set_yticklabels(c_yticks, fontsize=yt_fs)
         ax_wp.set_ylabel(f"{unit_nm} {rep_sm} CTA slots", fontsize=9.5, color="#263238")
         ax_wp.set_title(
             f"(C) {unit_nm} {rep_sm} — {n_rep_rows} concurrent CTA slots ({len(rep_cta_slot)} CTAs total on {unit_nm} {rep_sm})",
             fontsize=10.5, fontweight="bold", color="#111111", pad=6,
         )
     else:
-        c_labels = _compute_panel_c_role_labels(rep_warps, rep_spans, sw_spans, dual_fabric=dual_fabric, is_amd=is_amd)
-        ax_wp.set_yticklabels(c_labels, fontsize=yt_fs)
+        c_yticks = _compute_panel_c_role_labels(rep_warps, rep_spans_for_lbl, sw_spans, dual_fabric=dual_fabric, is_amd=is_amd)
+        ax_wp.set_yticklabels(c_yticks, fontsize=yt_fs)
         ax_wp.set_ylabel(f"{unit_nm} {rep_sm} {lane_nm}", fontsize=9.5, color="#263238")
         if dual_fabric and panel_c_handles:
             ax_wp.set_title(
@@ -1179,18 +1841,65 @@ def render_swhw_overview_png(
             )
         else:
             role_names = ", ".join(dict.fromkeys(r for _, r in rep_warps))
+            async_tag = " · main track + async depth strip & issue pins (v)" if has_async_rep else ""
             ax_wp.set_title(
-                f"(C) {unit_nm} {rep_sm} — all {len(rep_warps)} {lane_nm}s ({role_names})",
+                f"(C) {unit_nm} {rep_sm} — all {len(rep_warps)} {lane_nm}s ({role_names}){async_tag}",
                 fontsize=10.5, fontweight="bold", color="#111111", pad=6,
             )
-    ax_wp.set_xlim(*x_lim)
-    ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=9.5, color="#263238")
+    if has_zoom and zoom_win is not None and ax_zoom is not None:
+        z0, z1, z_cta, z_wait, z_reason = zoom_win
+        if ax_hw is not None:
+            ax_hw.axvspan(z0, z1, facecolor="#FCE4EC", edgecolor="#D81B60", alpha=0.22, lw=1.2, ls="--", zorder=1.5)
+        ax_sm.axvspan(z0, z1, facecolor="none", edgecolor="#D81B60", alpha=0.85, lw=1.2, ls="--", zorder=5.0)
+        ax_wp.add_patch(Rectangle(
+            (z0, -0.46), z1 - z0, n_rep_rows - 0.08,
+            facecolor="none", edgecolor="#D81B60", linewidth=1.6, linestyle="--", zorder=7.0,
+        ))
+        ax_wp.set_xlabel("Full-kernel locked time (µs) — dashed magenta window zoomed in Panel (D)", fontsize=8.8, color="#455A64")
+        # Isolate the single featured CTA in Panel (D) when a single CTA is selected, so concurrent
+        # resident CTAs on the same SM never interleave their pins/stages in micro-zoom view!
+        if z_cta is not None:
+            z_main = [sp for sp in rep_main_sorted if int(sp["cta"]) == z_cta] or rep_main_sorted
+            z_async = [sp for sp in rep_async_raw if int(sp["cta"]) == z_cta]
+            z_marks = [mk for mk in rep_marks_raw if int(mk["cta"]) == z_cta]
+        else:
+            z_main, z_async, z_marks = rep_main_sorted, rep_async_raw, rep_marks_raw
+        _render_warp_panel(
+            ax_zoom,
+            rep_main=z_main,
+            rep_async=z_async,
+            rep_marks=z_marks,
+            n_rep_rows=n_rep_rows,
+            use_cta_slots=use_cta_slots,
+            rep_cta_slot=rep_cta_slot,
+            warp_to_y=warp_to_y,
+            span_color_fn=_span_color,
+            dual_fabric=False,
+            x_lim=(z0, z1),
+            k_dur=k_dur,
+            is_zoom=True,
+            show_right_stats=True,
+        )
+        ax_zoom.set_yticklabels(c_yticks, fontsize=yt_fs)
+        ax_zoom.set_ylabel(f"{unit_nm} {rep_sm} zoom", fontsize=9.5, color="#263238")
+        cta_lbl = f"CTA {z_cta} on {unit_nm} {rep_sm}" if z_cta is not None else f"{unit_nm} {rep_sm}"
+        ax_zoom.set_title(
+            f"(D) Deterministic Micro-Zoom: {cta_lbl} ({z0:.1f}–{z1:.1f} µs · {z_reason}) — every async issue pin (v) & stage depth",
+            fontsize=10.2, fontweight="bold", color="#880E4F", pad=6,
+        )
+        ax_zoom.set_xlabel("Zoomed time (µs) — isolated single-CTA async pipeline detail", fontsize=9.5, color="#263238")
+    else:
+        ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=9.5, color="#263238")
 
     yt_labels = [t.get_text() for t in ax_wp.get_yticklabels()]
     max_lbl = max((len(s) for s in yt_labels), default=10)
     left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
-    top_m = 0.855 if (has_hw and dual_fabric) else (0.805 if has_hw else 0.835)
-    fig.subplots_adjust(left=left_m, right=0.985, top=top_m, bottom=0.065)
+    right_m = 0.845 if has_async_rep else 0.985
+    if has_zoom:
+        top_m = 0.862 if has_hw else 0.870
+    else:
+        top_m = 0.855 if (has_hw and dual_fabric) else (0.805 if has_hw else 0.835)
+    fig.subplots_adjust(left=left_m, right=right_m, top=top_m, bottom=0.055 if has_zoom else 0.065)
 
     out_path = Path(out_png)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1207,9 +1916,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--title", default=None)
     ap.add_argument("--subtitle", default=None)
     ap.add_argument("--sm", type=int, default=None, help="Physical SM/CU id to feature in Panel (C)")
+    ap.add_argument("--zoom-cta", type=int, default=None, help="Override Panel (D) micro-zoom CTA id")
+    ap.add_argument("--zoom-window", default=None, help="Override Panel (D) micro-zoom window 't0,t1' in us")
     ap.add_argument("--dpi", type=int, default=220)
     args = ap.parse_args(argv)
-    out = render_swhw_overview_png(args.trace, args.out, title=args.title, subtitle=args.subtitle, focus_sm=args.sm, dpi=args.dpi)
+    zw = None
+    if args.zoom_window:
+        parts = [float(x.strip()) for x in str(args.zoom_window).split(",")]
+        if len(parts) == 2:
+            zw = (parts[0], parts[1])
+    out = render_swhw_overview_png(
+        args.trace, args.out, title=args.title, subtitle=args.subtitle,
+        focus_sm=args.sm, zoom_cta=args.zoom_cta, zoom_window=zw, dpi=args.dpi,
+    )
     print(f"RENDERED {out} ({out.stat().st_size} bytes)")
     return 0
 
