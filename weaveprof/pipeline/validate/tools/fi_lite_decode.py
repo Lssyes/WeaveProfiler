@@ -312,8 +312,47 @@ def pair_spans(rs, mode, errs, slotted_ids=frozenset()):
     return spans, marks
 
 
-def _match_handoffs(d, cross, lane_roles, errs):
-    """Match FIFO generations per CTA, event and pipeline slot across single- or multi-warp producer roles."""
+def _sweep_depth_ns(intervals_ns):
+    """Exact sweep-line concurrency depth over integer-ns ``[(start_ns, end_ns), ...]``.
+
+    Processes completions (-1) before simultaneous launches (+1) at equal timestamps so
+    back-to-back transfers do not produce spurious depth spikes.
+    Returns ``(segments_ns, avg_depth, max_depth)`` where each segment is ``(t0_ns, t1_ns, depth)``
+    for ``depth >= 1`` and ``avg_depth`` is time-weighted over active (depth >= 1) union duration.
+    """
+    events = []
+    for s_ns, e_ns in intervals_ns:
+        if e_ns > s_ns:
+            events.append((int(s_ns), 1))
+            events.append((int(e_ns), -1))
+    if not events:
+        return [], 0.0, 0
+    events.sort(key=lambda kv: (kv[0], kv[1]))
+    segs = []
+    cur = 0
+    max_d = 0
+    area = 0.0
+    active_ns = 0
+    prev_t = events[0][0]
+    for t, delta in events:
+        dt = t - prev_t
+        if dt > 0 and cur > 0:
+            segs.append((prev_t, t, cur))
+            area += float(dt) * cur
+            active_ns += dt
+        cur = max(0, cur + delta)
+        if cur > max_d:
+            max_d = cur
+        prev_t = t
+    avg_d = (area / active_ns) if active_ns > 0 else 0.0
+    return segs, avg_d, max_d
+
+
+def _match_handoffs_with_depth(d, cross, lane_roles, errs):
+    """Match FIFO generations per CTA, event and pipeline slot across producer->consumer roles,
+    AND compute deduplicated CTA-level cross-warp in-flight depth (using earliest consumer arrival
+    ``min_w t_wait_exit(w, g)`` as the conservative transfer-completion upper bound to avoid 1-to-N
+    fanout double-counting or slow-consumer inflation)."""
     producers = defaultdict(lambda: defaultdict(list))
     consumers = defaultdict(lambda: defaultdict(list))
     for lane, records in d["slots"].items():
@@ -333,8 +372,11 @@ def _match_handoffs(d, cross, lane_roles, errs):
                 producers[key][lane].append(t)
 
     by_lane = defaultdict(list)
+    # Deduplicated CTA-level in-flight intervals: (cta, event) -> [(t_issue_ns, min_consumer_exit_ns, aux), ...]
+    cta_ev_intervals = defaultdict(list)
+    cta_ev_prod_lane = {}
     for key in producers.keys() | consumers.keys():
-        _, event, aux = key
+        cta, event, aux = key
         prod_lanes = producers[key]
         if prod_lanes:
             lengths = [len(ts) for ts in prod_lanes.values()]
@@ -342,11 +384,14 @@ def _match_handoffs(d, cross, lane_roles, errs):
                 errs["unpaired_begin"] += max(lengths) - min(lengths)
             ordered_lists = [sorted(ts) for ts in prod_lanes.values()]
             starts = [min(col) for col in zip(*ordered_lists)]
+            cta_ev_prod_lane.setdefault((cta, event), min(prod_lanes.keys()))
         else:
             starts = []
         max_ends = 0
+        consumer_sorted = []
         for lane, ends in consumers[key].items():
             ends = sorted(ends)
+            consumer_sorted.append(ends)
             max_ends = max(max_ends, len(ends))
             errs["extra_end"] += max(0, len(ends) - len(starts))
             for start, end in zip(starts, ends):
@@ -354,7 +399,21 @@ def _match_handoffs(d, cross, lane_roles, errs):
                     errs["negative_dur"] += 1
                 else:
                     by_lane[lane].append((event, start, end, aux, aux))
+        # Deduplicated 1-to-N earliest-consumer completion bound per (CTA, event, slot, generation)
+        for gen_idx, t_issue in enumerate(starts):
+            arrivals = [ends[gen_idx] for ends in consumer_sorted if gen_idx < len(ends)]
+            if not arrivals:
+                continue
+            t_done = min(arrivals)
+            if t_done >= t_issue:
+                cta_ev_intervals[(cta, event)].append((t_issue, t_done, aux))
         errs["unpaired_begin"] += max(0, len(starts) - max_ends)
+    return by_lane, cta_ev_intervals, cta_ev_prod_lane
+
+
+def _match_handoffs(d, cross, lane_roles, errs):
+    """Backward-compatible wrapper returning only per-consumer-lane handoff spans."""
+    by_lane, _, _ = _match_handoffs_with_depth(d, cross, lane_roles, errs)
     return by_lane
 
 
@@ -560,7 +619,10 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
     inst_of = lambda i, aux: (aux % insts[i]) if i in insts and insts[i] > 0 else None
     cross = {int(i): desc for i, desc in names.get("cross_warp", {}).items()}
     slotted_ids = {int(i) for i in (names.get("slotted_events") or {}) if int(i) not in cross}
-    handoffs = _match_handoffs(d, cross, slot_role, errs) if cross else {}
+    if cross:
+        handoffs, cross_cta_intervals, cross_cta_prod_lane = _match_handoffs_with_depth(d, cross, slot_role, errs)
+    else:
+        handoffs, cross_cta_intervals, cross_cta_prod_lane = {}, {}, {}
     probe_ids = {int(i): name for i, name in names.get("probe_ids", {}).items()}
     probe_ids.update({i: desc["id"] for i, desc in cross.items()})
     fires = dict.fromkeys(probe_ids.values(), 0)
@@ -710,6 +772,61 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
     summary["cta_sm"] = {str(k): int(v) for k, v in sorted(cta_sm.items())}
     summary["cta_hw"] = {str(k): list(v) for k, v in sorted(cta_hw.items())}
     summary["cross_warp_spans"] = sum(len(v) for v in handoffs.values())
+    # Deduplicated CTA-level cross-warp producer->consumer in-flight depth (using min_w t_wait_exit per generation)
+    cross_inflight_summary = {}
+    cross_inflight_cta_segs = {}
+    if cross_cta_intervals:
+        by_ev_ctas = defaultdict(list)
+        all_durs_ns = []
+        all_max_d = []
+        all_avg_d = []
+        for (cta_id, ev_id), ivs in sorted(cross_cta_intervals.items()):
+            segs_ns, avg_d, max_d = _sweep_depth_ns([(a, b) for a, b, _ in ivs])
+            durs = [int(b - a) for a, b, _ in ivs]
+            all_durs_ns.extend(durs)
+            all_max_d.append(max_d)
+            if avg_d > 0.0:
+                all_avg_d.append(avg_d)
+            by_ev_ctas[ev_id].append((cta_id, max_d, avg_d, durs))
+            prod_lane = cross_cta_prod_lane.get((cta_id, ev_id))
+            # Store compact relative-us depth segments per CTA for optional CTA-level async rail rendering
+            cross_inflight_cta_segs[f"{cta_id}:{ev_id}"] = {
+                "cta": cta_id, "event_id": ev_id, "sm": cta_sm.get(cta_id),
+                "producer_warp": (prod_lane % wpc) if prod_lane is not None else None,
+                "max_depth": max_d, "avg_depth": round(avg_d, 3), "n_transfers": len(ivs),
+                "segments_us": [[round(us(s0), 3), round(us(s1), 3), dp] for s0, s1, dp in segs_ns],
+            }
+        per_event = {}
+        for ev_id, rows in sorted(by_ev_ctas.items()):
+            ev_durs = sorted(x for _, _, _, dl in rows for x in dl)
+            ev_maxs = sorted(r[1] for r in rows)
+            ev_avgs = [r[2] for r in rows if r[2] > 0.0]
+            per_event[str(ev_id)] = {
+                "event_id": ev_id,
+                "label": ev_label.get(ev_id) or ev_name.get(ev_id, f"event_{ev_id}"),
+                "ctas_measured": len(rows),
+                "n_transfers": len(ev_durs),
+                "max_depth": ev_maxs[-1] if ev_maxs else 0,
+                "p50_max_depth": ev_maxs[len(ev_maxs) // 2] if ev_maxs else 0,
+                "avg_depth": round(sum(ev_avgs) / len(ev_avgs), 3) if ev_avgs else 0.0,
+                "residence_p50_ns": ev_durs[len(ev_durs) // 2] if ev_durs else 0,
+                "residence_mean_ns": round(sum(ev_durs) / len(ev_durs), 1) if ev_durs else 0.0,
+                "residence_p90_ns": ev_durs[min(len(ev_durs) - 1, int(len(ev_durs) * 0.9))] if ev_durs else 0,
+            }
+        all_durs_ns.sort()
+        all_max_d.sort()
+        cross_inflight_summary = {
+            "ctas_measured": len({c for (c, _) in cross_cta_intervals}),
+            "n_transfers": len(all_durs_ns),
+            "max_d_tma": all_max_d[-1] if all_max_d else 0,
+            "p50_max_d_tma": all_max_d[len(all_max_d) // 2] if all_max_d else 0,
+            "avg_d_tma": round(sum(all_avg_d) / len(all_avg_d), 3) if all_avg_d else 0.0,
+            "residence_p50_ns": all_durs_ns[len(all_durs_ns) // 2] if all_durs_ns else 0,
+            "residence_mean_ns": round(sum(all_durs_ns) / len(all_durs_ns), 1) if all_durs_ns else 0.0,
+            "residence_p90_ns": all_durs_ns[min(len(all_durs_ns) - 1, int(len(all_durs_ns) * 0.9))] if all_durs_ns else 0,
+            "per_event": per_event,
+        }
+    summary["cross_warp_inflight"] = cross_inflight_summary
     summary["lane_bounds_ns"] = {
         str(s): [int(rs[0][0]), int(rs[-1][0]), int(slot_role.get(s, 0))]
         for s, rs in sorted(d["slots"].items()) if rs
@@ -940,7 +1057,9 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
                                 cta_to_cu=({str(k): int(v) for k, v in sorted(cta_sm.items())}
                                            if cta_cu_map is not None else None),
                                 cta_cu_source=(("FILITE02 OPEN aux via --cta-cu-map")
-                                               if cta_cu_map is not None else None)))
+                                               if cta_cu_map is not None else None),
+                                cross_warp_inflight=cross_inflight_summary or None,
+                                cross_warp_inflight_ctas=cross_inflight_cta_segs or None))
     return trace, summary
 
 

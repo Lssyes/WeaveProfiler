@@ -689,6 +689,44 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         for sp in sw_spans:
             stages_seen[sp["sem"]] += sp["dur"]
 
+    # Optional CTA-level cross-warp producer->consumer TMA in-flight depth strip:
+    # When fi_lite_decode computed deduplicated [t_issue, min_w t_wait_exit] segments per CTA,
+    # surface them on the producer warp's async MEM rail (only when the producer has no native
+    # async MEM spans of its own) so 1-to-N TMA depth renders cleanly without fanout double-counting.
+    cw_ctas = other.get("cross_warp_inflight_ctas")
+    if isinstance(cw_ctas, Mapping) and cw_ctas:
+        existing_prod_mem = {(sp["sm"], sp["warp"], sp["cta"]) for sp in sw_spans if sp.get("async_engine") == "mem"}
+        cw_shift_us = 0.0
+        al_info = other.get("alignment") or {}
+        if al_info.get("offset_ns") is not None and other.get("observation_start_ns") is not None:
+            # Put segments onto the exact same absolute clock frame as aligned traceEvents before t_origin shift
+            cw_shift_us = (int(other["observation_start_ns"]) + int(al_info["offset_ns"])) / 1000.0
+        for _key, entry in cw_ctas.items():
+            if not isinstance(entry, Mapping):
+                continue
+            sm_c = entry.get("sm")
+            pw = entry.get("producer_warp")
+            cta_c = entry.get("cta")
+            segs_us = entry.get("segments_us") or []
+            if sm_c is None or pw is None or cta_c is None or not segs_us:
+                continue
+            sm_i, pw_i, cta_i = int(sm_c), int(pw), int(cta_c)
+            if (sm_i, pw_i, cta_i) in existing_prod_mem:
+                continue
+            role_p = str(meta_warps_by_sm.get(sm_i, {}).get(pw_i) or "tma_producer")
+            sm_set.add(sm_i)
+            for s0, s1, dp in segs_us:
+                ts_a = max(0.0, float(s0) + cw_shift_us)
+                en_a = max(ts_a, float(s1) + cw_shift_us)
+                if en_a <= ts_a:
+                    continue
+                for _k_dp in range(max(1, int(dp))):
+                    sw_spans.append({
+                        "ts": ts_a, "dur": en_a - ts_a, "end": en_a, "sem": "load",
+                        "label": "Cross-Warp TMA In-Flight", "raw_name": "load", "fabric": "",
+                        "async_engine": "mem", "sm": sm_i, "warp": pw_i, "cta": cta_i, "role": role_p,
+                    })
+
     # Normalize all timestamps relative to kernel start (t_origin) so aligned traces with
     # absolute nsys/rocprof timestamps (e.g. 3.4e6 us) plot cleanly on [0, kernel_dur_us].
     t_candidates: List[float] = []

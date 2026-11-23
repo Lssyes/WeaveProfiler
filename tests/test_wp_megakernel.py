@@ -1175,6 +1175,61 @@ class HygieneTest(unittest.TestCase):
         self.assertIn("_fi_inst___call__(self, a, b, c, _fi_rec=None, _fi_ovf=None)", res["instrumented_source"])
         self.assertIn("self._fi_inst_kernel(a, b, c, _fi_rec=_fi_rec, _fi_ovf=_fi_ovf)", res["instrumented_source"])
 
+    def test_cross_warp_tma_inflight_depth_earliest_consumer_dedup(self):
+        # 1-to-4 Producer (W00, role=0) -> Consumers (W01..W04, role=1) with 3-stage overlapping TMA pipeline:
+        #   slot 0 issued @ 1000 ns -> consumers arrive @ 4000, 4500, 5000, 5500 ns => min = 4000 ns (dur = 3000 ns)
+        #   slot 1 issued @ 2000 ns -> consumers arrive @ 5000, 5800, 6000, 6200 ns => min = 5000 ns (dur = 3000 ns)
+        #   slot 2 issued @ 3000 ns -> consumers arrive @ 6000, 6500, 7000, 7200 ns => min = 6000 ns (dur = 3000 ns)
+        # Overlap over [1000..6000] (5000 ns):
+        #   [1000,2000): depth 1 (1000 ns)
+        #   [2000,3000): depth 2 (1000 ns)
+        #   [3000,4000): depth 3 (1000 ns)  <-- peak depth = 3 (NOT 12 from 1-to-4 fanout!)
+        #   [4000,5000): depth 2 (1000 ns)
+        #   [5000,6000): depth 1 (1000 ns)
+        # Exact time-weighted avg depth = (1+2+3+2+1)/5 = 1.800; residence_p50_ns = 3000 (unaffected by slow W04!).
+        E_TMA = 11
+        wpc = 5
+        t0 = 1_000_000
+        slots = {
+            0: [(t0, OPEN | 0, 0), (t0 + 1000, E_TMA, 0), (t0 + 2000, E_TMA, 1), (t0 + 3000, E_TMA, 2), (t0 + 8000, CLOSE, 0)],
+            1: [(t0, OPEN | 1, 0), (t0 + 4000, END | E_TMA, 0), (t0 + 5000, END | E_TMA, 1), (t0 + 6000, END | E_TMA, 2), (t0 + 8000, CLOSE, 0)],
+            2: [(t0, OPEN | 1, 0), (t0 + 4500, END | E_TMA, 0), (t0 + 5800, END | E_TMA, 1), (t0 + 6500, END | E_TMA, 2), (t0 + 8000, CLOSE, 0)],
+            3: [(t0, OPEN | 1, 0), (t0 + 5000, END | E_TMA, 0), (t0 + 6000, END | E_TMA, 1), (t0 + 7000, END | E_TMA, 2), (t0 + 8000, CLOSE, 0)],
+            4: [(t0, OPEN | 1, 0), (t0 + 5500, END | E_TMA, 0), (t0 + 6200, END | E_TMA, 1), (t0 + 7200, END | E_TMA, 2), (t0 + 8000, CLOSE, 0)],
+        }
+        blob = WPD.build_dump_bytes(slots, n_slots=5, cap=16, wpc=wpc, meta={"arch": "sm_90a", "gran": 0, "kernel": "fa3_tma_test"})
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "tma_cw.wp02.bin"
+            p.write_bytes(blob)
+            d = WPD.read_dump(str(p))
+        names = {
+            "events": {str(E_TMA): "tma_kv_load"},
+            "semantics": {str(E_TMA): "load"},
+            "roles": {"0": "tma_producer", "1": "math_consumer"},
+            "cross_warp": {str(E_TMA): {"id": "tma_kv_load", "begin_role": 0, "end_role": 1}},
+            "group": "sm", "pair": "stack",
+        }
+        tr, summ = WPD.decode(d, names)
+        self.assertEqual(summ["errors"], {})
+        self.assertEqual(summ["cross_warp_spans"], 12)  # 3 transfers * 4 consumer warps
+        cwi = summ["cross_warp_inflight"]
+        self.assertEqual(cwi["ctas_measured"], 1)
+        self.assertEqual(cwi["n_transfers"], 3)  # deduplicated from 12 consumer spans -> 3 true TMA transfers
+        self.assertEqual(cwi["max_d_tma"], 3)
+        self.assertAlmostEqual(cwi["avg_d_tma"], 1.8, places=3)
+        self.assertEqual(cwi["residence_p50_ns"], 3000)
+        self.assertEqual(cwi["residence_mean_ns"], 3000.0)
+        self.assertIn("0:11", tr["otherData"]["cross_warp_inflight_ctas"])
+        segs = tr["otherData"]["cross_warp_inflight_ctas"]["0:11"]["segments_us"]
+        self.assertEqual([dp for _, _, dp in segs], [1, 2, 3, 2, 1])
+        # Verify viz._parse_trace surfaces deduplicated CTA-level depth onto producer warp W00 (peak depth=3)
+        from weaveprof import viz
+        parsed_cw = viz._parse_trace(tr)
+        prod_ivs = [(sp["ts"], sp["end"]) for sp in parsed_cw["sw_spans"] if sp["warp"] == 0 and sp["async_engine"] == "mem"]
+        _, p_avg, p_max = viz._compute_depth_segments(prod_ivs)
+        self.assertEqual(p_max, 3)
+        self.assertAlmostEqual(p_avg, 1.8, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()
