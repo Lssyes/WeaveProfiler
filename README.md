@@ -2,7 +2,7 @@
 
 简体中文 | [English](README_EN.md)
 
-> **让 AI 真正“看见” GPU 核内每一微秒——为 RSI（Recursive Self-Improvement）与下一代 Megakernel 打造的核内软硬对齐诊断引擎。**
+> **让 AI 真正“看见” GPU 核内每一微秒——为 RSI（Recursive Self-Improvement）与下一代 Megakernel 打造的核内软硬对齐性能剖析工具（Profiler）。**
 
 WeaveProfiler 将**全自动低开销核内插桩**与**同次硬件利用率曲线**融为一体，以 **`Skill + MCP + Hook`** 原生形态无缝接入 AI 编程代理（Claude Code、Qwen Code、OpenAI Codex CLI、Antigravity 等）。无论 CUDA C++、HIP C++、CuTeDSL 还是 Triton，它都能在不改动生产源码与函数签名的前提下，自动把全卡 200 kHz 硬件曲线、全卡 SM/CU 执行瀑布、单 SM 物理 Warp 异步流水线（含异步访存 / 异步 MMA 在途深度、发射针 `▼` 与暴露等待）以及单 CTA 微距展开对齐到一张**四联 PNG 诊断图**里，成为构建自主演化 Megakernel 的核心利器。
 

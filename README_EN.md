@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-> **Give AI microsecond X-ray vision inside GPU kernels — the automated SW+HW intra-kernel diagnostic engine built for RSI (Recursive Self-Improvement) and next-generation Megakernels.**
+> **Give AI microsecond X-ray vision inside GPU kernels — the automated SW+HW intra-kernel profiler built for RSI (Recursive Self-Improvement) and next-generation Megakernels.**
 
 WeaveProfiler fuses **automated low-overhead in-kernel instrumentation** with **same-run hardware utilization curves**, packaged natively as **`Skill + MCP + Hook`** for AI coding agents (Claude Code, Qwen Code, OpenAI Codex CLI, Antigravity, etc.). Across CUDA C++, HIP C++, CuTeDSL, and Triton—without touching protected source files or function signatures—it aligns 200 kHz chip-wide hardware curves, all-SM/CU waterfalls, per-warp async pipelines (in-flight memory/MMA depth strips, fixed-pixel issue pins `▼`, and exposed waits), and deterministic single-CTA micro-zooms into a single **four-panel PNG diagnostic view**.
 
@@ -10,7 +10,7 @@ WeaveProfiler fuses **automated low-overhead in-kernel instrumentation** with **
 
 ## 1. Why RSI Needs WeaveProfiler
 
-**Recursive Self-Improvement (RSI)** is shifting GPU kernel engineering toward autonomous loops where AI agents write, diagnose, and evolve complex fused **Megakernels** (MegaMoE, FlashAttention, persistent GEMM). End-to-end latency alone is blind: to autonomously break through microarchitectural ceilings, **every RSI loop needs a deep, semantically grounded diagnostic engine**.
+**Recursive Self-Improvement (RSI)** is shifting GPU kernel engineering toward autonomous loops where AI agents write, diagnose, and evolve complex fused **Megakernels** (MegaMoE, FlashAttention, persistent GEMM). End-to-end latency alone is blind: to autonomously break through microarchitectural ceilings, **every RSI loop needs a deep, semantically grounded profiler**.
 
 Existing GPU profiling approaches force an impossible trade-off:
 
@@ -21,7 +21,7 @@ Existing GPU profiling approaches force an impossible trade-off:
 
 1. **Hand-crafted semantic fidelity × fully automated SW+HW alignment.** Automatically identifies stages and injects atomic-free, signature-preserving probes in an isolated temporary copy (including a PTX-level async pass for Triton that peels out compiler-hidden `cp.async`/`wgmma` waits), rigidly aligned with same-run 200 kHz hardware utilization curves in a **four-panel PNG diagnostic view**.
 2. **Four deterministic blocking gates.** Disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead are enforced automatically—auto-coarsening hot probes on failure so corrupted measurements never mislead the next RSI round.
-3. **Native `Skill + MCP + Hook` integration for RSI frameworks.** `Skill` teaches agents how to diagnose hardware–software bottlenecks from four-panel views; `MCP` exposes clean isolated profiling and cross-round comparison tools; `Hook` enforces clean source files, profile-before-edit discipline, and PNG-only delivery across every tool call—making WeaveProfiler the go-to diagnostic engine for autonomous Megakernel development.
+3. **Native `Skill + MCP + Hook` integration for RSI frameworks.** `Skill` teaches agents how to diagnose hardware–software bottlenecks from four-panel views; `MCP` exposes clean isolated profiling and cross-round comparison tools; `Hook` enforces clean source files, profile-before-edit discipline, and PNG-only delivery across every tool call—making WeaveProfiler the go-to profiler for autonomous Megakernel development.
 
 ---
 
