@@ -1,8 +1,8 @@
 {
   "file_count": 329,
   "files": {
-    "README.md": "e981ce96771fe5c682f8824306638e0d6e4d47ebfdb2e461d504d41f6a0b1da2",
-    "README_EN.md": "ef195d0174c0a3f236a9ffa375ff9d27afb1f330afcb6511be0a09880182db52",
+    "README.md": "70e7e57207ceb685bc24b5acf94286c4c3fc264b4d24344da9ac77a98c98e45c",
+    "README_EN.md": "1d0052f0d580f169f26cafe38cfe87b6538b7d6bdcf2020c8195703a24f9112e",
     "SKILL.md": "fe2a169470ebcbc0d947bc31b5074916b43cb956d60a8c2f2f1aeb15ec6ddd2e",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
@@ -57,7 +57,7 @@
     "configs/validation/schemas/recipe.schema.json": "69db4940d49f075c55b2fd1a4267f830f99ee71fa82f16b6fff5cb738c291624",
     "configs/validation/schemas/scan-selection.schema.json": "dfaf613828cb550f836e886efb5352412edae63a2389f8955215442099b416b8",
     "docs/amd_mi308x.md": "7ce461866e3db539004ee2199292e826d7915d8306aed312f02a64128177322d",
-    "docs/case_studies/h20_megamoe_optimization.md": "98263e1c4621addc2f8d4cb8a1b726cffa32a97a7dcf8a83381324e3b9b9e221",
+    "docs/case_studies/h20_megamoe_optimization.md": "f8abe98befbfe3ce99c626227483458b76d99f2cd9c8e3584bf1345552bd944f",
     "docs/design.md": "e94c0b602e40a22435ca8442f00d0198afc848012c55535bb515c64d2fb03004",
     "docs/images/case_h20_flashinfer_fa3.png": "3222d5e789365e4f0781d76cb676cd129e8f8177232d49a7d913e3733b4bedab",
     "docs/images/case_h20_flashkda.png": "491b4724fbd9f63ee942c4289fc7ea6e8bfac2df21a5ea8b6bd29917d6f24bf9",

@@ -1,6 +1,6 @@
 # 案例研究：8×H20 生产级 DeepGEMM MegaMoE 诊断与优化（1.47× 加速）
 
-本案例演示 **WeaveProfiler** 如何在 8 卡 NVIDIA H20 节点上，对生产级 **Qwen3.5-397B DeepGEMM MegaMoE** 算子执行零签名修改的核内细粒度插桩、同次 `nsys` 硬件时间线对齐、瓶颈定位及重构后复测验证。关于四联对齐图的读法与指标定义，请先参阅 [README.md](../../README.md#33-四联对齐图读法)。
+本案例演示 **WeaveProfiler** 如何在 8 卡 NVIDIA H20 节点上，对生产级 **Qwen3.5-397B DeepGEMM MegaMoE** 算子执行零签名修改的核内细粒度插桩、同次 `nsys` 硬件时间线对齐、瓶颈定位及重构后复测验证。关于四联对齐图的读法与指标定义，请先参阅 [README.md](../../README.md#2-四联对齐图读法)。
 
 ---
 
@@ -53,4 +53,4 @@
 | HBM 显存读+写带宽利用率（均值 / 峰值） | `36.4%` / `47.6%` | `55.7%` / `81.5%` | 均值 `+19.3 pp` / 峰值 `+33.9 pp`（均值×耗时近似守恒，`+3.9%`） |
 | 活跃 SM 占比 | `t ≈ 280–345 µs` 存在约 `65 µs` 跨核空等 | 全程均值 `94.0%` | 跨核屏障空泡消除 |
 
-关于其他三个开源算子库（FlashInfer FA3、FlashInfer FlashMLA、vLLM FLA FlashKDA）在 H20 上的零签名修改剖析结果与直出软硬对齐图，请参阅 [README.md 第 5.2 节](../../README.md#52-开源算子库零签名修改剖析)。
+关于其他三个开源算子库（FlashInfer FA3、FlashInfer FlashMLA、vLLM FLA FlashKDA）在 H20 上的零签名修改剖析结果与直出软硬对齐图，请参阅 [README.md 第 4.2 节](../../README.md#42-开源算子库零签名修改剖析)。
