@@ -21,7 +21,7 @@ Previous options force a trade-off:
 
 1. **Automated in-kernel instrumentation aligned with same-run hardware curves**: injects atomic-free, signature-preserving probes in an isolated copy (plus a PTX-level automatic async pass for NVIDIA Triton that extracts compiler-hidden `cp.async`/`wgmma` in-flight depth and exposed waits with zero Python K-loop edits), rigidly aligned with same-run 200 kHz hardware utilization curves in one **four-panel PNG**.
 2. **Four deterministic blocking checks**: disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead—auto-coarsening hot probes on failure so distorted timings never mislead optimization.
-3. **`Skill + MCP + Hook` native to RSI frameworks**: reuses your active coding agent to read source, plan probes, and read the four-panel view; local MCP handles isolated verification and cross-round comparison; hooks enforce profile-before-edit, clean production source, and PNG-only delivery.
+3. **`Skill + MCP + Hook` native to RSI frameworks**: uses your active AI coding agent directly to read source, plan probes, and read the four-panel view; local MCP handles isolated verification and cross-round comparison; hooks enforce profile-before-edit, clean production source, and PNG-only delivery.
 
 ---
 
@@ -29,17 +29,21 @@ Previous options force a trade-off:
 
 WeaveProfiler defaults to PNG-only delivery (`overview.png`) instead of heavy `.perfetto.json.gz` dumps. Panels (A)–(C) share one locked microsecond (`µs`) axis, and Panel (D) automatically appends when full-kernel event spacing is denser than `12 px`:
 
-- **(A) Hardware Utilization Curves**: Same-run chip-wide metrics (0–100%, 200 kHz `nsys` on NVIDIA, `rocprof-sys` on AMD): Compute (Tensor / MFMA), summed HBM Read+Write bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` are never summed or merged; `xGMI` on AMD), optional inter-node RDMA, and active SM/CU %.
+- **(A) Hardware Utilization Curves**: Same-run chip-wide metrics (0–100%, 200 kHz `nsys` on NVIDIA, `rocprof-sys` on AMD): Compute (Tensor / MFMA), summed HBM Read+Write bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` are never summed or merged; `xGMI` on AMD), optional inter-node RDMA, and active SM/CU %. **Fails closed if real same-run hardware curves are missing.**
 - **(B) All-SM / All-CU Waterfall**: Every physical core on the vertical axis, exposing wave steps, tail stragglers, and load skew.
-- **(C) Single-SM / Single-CU Per-Warp / Per-Wave Timeline**: Each warp combines an **upper main execution track (`MMA` / amber hatched `Exposed Wait` / `Store`) + 0/1/2 on-demand thin async engine depth sub-tracks (`MEM` emerald depth strip + magenta issue pins `▼`; `MMA` azure depth strip + violet issue pins `▼`)**, compressing arbitrary `num_stages` concurrency into a 3-shade depth band.
+- **(C) Single-SM / Single-CU Per-Warp / Per-Wave Timeline**: Each warp combines an **upper main execution track (`MMA` / amber hatched `Exposed Wait` / `Store`) + 0/1/2 on-demand thin async engine depth sub-tracks (`MEM` emerald depth strip + magenta issue pins `▼`; `MMA` azure depth strip + violet issue pins `▼`)**, compressing arbitrary `num_stages` concurrency into a **5-shade depth band** (`1/2/3/4/5+`, with dynamic bucketing for deeper pipelines).
 - **(D) Deterministic Single-CTA Micro-Zoom**: Auto-triggered on dense timelines; isolates the complete CTA with highest `Exposed Wait` ratio (or steady-state p50 CTA when wait-free; caps >48 iterations to a 32-iteration window around the worst bubble; supports `--zoom-cta` / `--zoom-window`), highlighting the exact window in dashed magenta across Panels (A)–(C).
+
+![NVIDIA H20 Triton num_stages=5 PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_triton_s5_4panel.png)
+
+> Captured on **NVIDIA H20 (`sm_90a`) `4096×4096×2048` Triton `num_stages=5` GEMM** (zero Python K-loop edits; automatic PTX extraction of both `cp.async` and `wgmma` async tracks; **`+5.46%`** steady-state overhead, `122.42 TFLOPS` = `93.7%` cuBLAS, `max_diff=0.0`, same-run 200 kHz `nsys`): Panels (A)–(B) lock 13 HBM wave pulses and the 10-SM tail drop to exact wave boundaries; Panels (C)–(D) expose both `MEM` (`max d=8` with `8→6→4→2→0` drain) and `WGMMA` (`max d=2`) pipelines alongside per-iteration `Exposed Wait`.
 
 ---
 
 ## 3. Architecture & Core Design
 
 ```text
-Protected source (read-only) ──► Host Coding Agent (reads source via Skill, plans probes / isolated edits)
+Protected source (read-only) ──► AI Coding Agent (reads source via Skill, plans probes / isolated edits)
                                         │
                                         ▼  (calls local MCP verifier tools)
                              Local Verifier (isolated copy -> compile base & inst -> GPU run -> 4 checks)
@@ -47,7 +51,7 @@ Protected source (read-only) ──► Host Coding Agent (reads source via Skill
                                └── All 4 pass ───────► align HW curves -> render 4-panel PNG -> sign seal
 ```
 
-- **Reuses your host coding agent**: Under the default `Skill + MCP + Hook` workflow, your active coding agent reads the source, decides probe placement, and interprets the four-panel PNG—no separate LLM API key needed. (Optional headless batch mode `wp.identify` / `weaveprof_profile` accepts an OpenAI-compatible endpoint or an offline local `probe.json`.)
+- **Uses your AI coding agent directly**: Under the default `Skill + MCP + Hook` workflow, WeaveProfiler uses your active coding agent directly to read source, decide probe placement, and interpret the four-panel PNG—no separate LLM API key needed. (Optional headless batch mode `wp.identify` / `weaveprof_profile` accepts an OpenAI-compatible endpoint or an offline local `probe.json`.)
 - **Low-perturbation in-kernel recorders**:
   - Pre-partitioned per-`(CTA, physical warp/wave)` slices with `lane 0` sequential 16-byte streaming stores (`st.global.cs.v4.u32` on NVIDIA; `global_store_dwordx4 ... nt` on AMD)—**zero atomics on the hot path**.
   - CUDA C++ defaults to a single 32-bit register context (`0 B` SMEM, up to `32,767` records/lane) with automatic fallback to static SMEM or `__noinline__` on register pressure; HIP C++ caches each wave's cursor in a per-wave slot so `__device__` helpers append seamlessly without signature edits.
@@ -71,9 +75,15 @@ On an 8×H20 NVLink node running **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8, S=102
 | Original split-kernel (a) | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` |
 | Fused persistent + async Scatter (b) | **`416.4 µs` (`1.47×`)** | `41.8%` / `62.6%` | `55.7%` / `81.5%` |
 
-### 4.2 Zero-Signature Profiling of Open-Source Kernels
+### 4.2 Deep-Stage Async Pipeline Four-Panel View (RTX 3050 `sm_86` CUDA C++ 6-Stage `cp.async`)
 
-Closed-loop H20 profiling without changing function signatures or callers (archived aligned views below had sparse event spacing and did not trigger Panel D):
+Captured with same-run 200 kHz `nsys` GPU metrics on a `2048×2048×1280` 6-stage circular-buffer `cp.async` + WMMA GEMM on NVIDIA Ampere (`sm_86`): 32 HBM bandwidth pulses (peaking at `93.0%`) in Panel (A) align exactly with the 32 CTA wave boundaries across all 16 physical SMs in Panel (B), while Panel (D) isolates one CTA to reveal the full `0→1→2→3→4→5` prefetch ramp-up and `5→4→3→2→1→0` drain staircase across 5 depth shades (fine-grained 5-probe/iter showcase):
+
+![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async Four-Panel Aligned View](docs/images/case_sm86_cuda_s6_4panel.png)
+
+### 4.3 Zero-Signature Profiling of Open-Source Kernels
+
+Closed-loop H20 profiling without changing function signatures or callers (earlier sparse-event runs below did not exceed the `< 12 px` density threshold for Panel D):
 
 | Open-Source Kernel | Frontend & Shape (H20) | Warp Coverage | Steady-State Overhead & Outcome |
 | --- | --- | :---: | --- |
@@ -94,7 +104,7 @@ Closed-loop H20 profiling without changing function signatures or callers (archi
 | GPUs | NVIDIA H20 (`sm_90`/`sm_90a`), B300 (`sm_100a`/`sm_103a`), Ampere (`sm_86`), AMD MI308X (`gfx942`) |
 | Languages | CUDA C++, HIP C++, CuTeDSL (NVIDIA), Triton (NVIDIA PTX & AMD CDNA3) |
 | Coding Agents | Native Claude Code, Qwen Code (`qwen`), OpenAI Codex CLI, Antigravity (`agy`) |
-| Prerequisites | Python 3.10+, `nvcc`/`nsys` or `hipcc`/`rocprof-sys`, `matplotlib`; reuses host agent (no extra API key) |
+| Prerequisites | Python 3.10+, `nvcc`/`nsys` or `hipcc`/`rocprof-sys`, `matplotlib`; uses your active coding agent directly (no extra API key) |
 
 Wire into your kernel repo in two commands (`--protect` locks files until the first passing baseline seal unlocks optimization):
 

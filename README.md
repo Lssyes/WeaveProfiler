@@ -21,7 +21,7 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 
 1. **自动核内插桩 + 同次硬件曲线对齐**：在隔离副本里注入低开销探针（热路径零原子、不改签名；对 NVIDIA Triton 还支持 PTX 级自动插桩，零源码改动剥离 `cp.async` / `wgmma` 在途深度与暴露等待），与同一次运行的 200 kHz 硬件利用率曲线刚性对齐，直出一张**四联 PNG 图**。
 2. **四项确定性检查保真**：反汇编零 spill、输出逐字节一致、事件完整、稳态开销 `≤ 10%`；任一项不过自动外提粗化重测，避免拿测歪的数据误导优化。
-3. **`Skill + MCP + Hook` 融入 RSI 框架**：直接复用当前宿主 AI 代理读代码、定探针、看图定位瓶颈，本地 MCP 负责隔离实测与跨轮对比，Hook 守住“先测后改、不污染原码、必交 PNG”——方便接入主流 RSI 框架，是开发复杂 Megakernel 的利器。
+3. **`Skill + MCP + Hook` 融入 RSI 框架**：直接使用当前 AI 编程代理读代码、定探针、看图定位瓶颈，本地 MCP 负责隔离实测与跨轮对比，Hook 守住“先测后改、不污染原码、必交 PNG”——方便接入主流 RSI 框架，是开发复杂 Megakernel 的利器。
 
 ---
 
@@ -29,17 +29,21 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 
 默认直接输出静态 PNG（`overview.png`），不落盘大体积 `.perfetto.json.gz`。前 3 栏共享同一微秒（`µs`）横轴，当全核事件过密（相邻间距 `< 12 px`）时自动追加第 4 栏：
 
-- **(A) 硬件利用率曲线**：同次采集的整卡指标（0–100%，NVIDIA 为 200 kHz `nsys`，AMD 为 `rocprof-sys`），含计算流水线（Tensor / MFMA）、HBM 读+写总带宽、独立绘制的全双工互联（`NVLink TX` 与 `NVLink RX` 绝不合并；AMD 为 `xGMI`）、可选跨机 RDMA 以及活跃 SM/CU 占比。
+- **(A) 硬件利用率曲线**：同次采集的整卡指标（0–100%，NVIDIA 为 200 kHz `nsys`，AMD 为 `rocprof-sys`），含计算流水线（Tensor / MFMA）、HBM 读+写总带宽、独立绘制的全双工互联（`NVLink TX` 与 `NVLink RX` 绝不合并；AMD 为 `xGMI`）、可选跨机 RDMA 以及活跃 SM/CU 占比；**缺少同次真实硬件曲线时默认失败退出（fail-closed）**。
 - **(B) 全卡物理 SM / CU 瀑布**：纵轴列出全部物理核心，直观暴露波次台阶、尾波拖尾与负载倾斜。
-- **(C) 单个 SM / CU 的全物理 Warp / Wave 时间线**：每个 Warp 分为「**上层主执行轨（MMA / 亮黄斜纹 `Exposed Wait` / Store）+ 下层按需 0/1/2 条极薄异步引擎副轨（Mem 绿带 + 洋红发射针 `▼`；MMA 蓝带 + 深紫发射针 `▼`）**」，用浅/中/深三档热力带压缩不同 `num_stages` 并发深度。
+- **(C) 单个 SM / CU 的全物理 Warp / Wave 时间线**：每个 Warp 分为「**上层主执行轨（MMA / 亮黄斜纹 `Exposed Wait` / Store）+ 下层按需 0/1/2 条极薄异步引擎副轨（Mem 绿带 + 洋红发射针 `▼`；MMA 蓝带 + 深紫发射针 `▼`）**」，用 **5 档渐变热力带**（`1/2/3/4/5+`，更深流水自动动态分桶）压缩任意 `num_stages` 并发深度。
 - **(D) 单 CTA 微距放大（Zoom-In）**：全核过密时自动触发，确定性选取 `Exposed Wait` 占比最高的完整 CTA（无等待时取稳态中位数 CTA；超 48 拍截最重气泡周围 32 拍，支持 `--zoom-cta` / `--zoom-window` 手动指定），逐拍展示发射针、在途深度爬坡/排空与等待气泡；(A)–(C) 栏同步用洋红虚线框标出放大区间。
+
+![NVIDIA H20 Triton num_stages=5 PTX 自动双异步四联对齐图](docs/images/case_h20_triton_s5_4panel.png)
+
+> 上图实测自 **NVIDIA H20（`sm_90a`）`4096×4096×2048` Triton `num_stages=5` GEMM**（零 Python K-loop 修改，PTX 自动提取 `cp.async` + `wgmma` 双异步轨，稳态开销 **`+5.46%`**，`122.42 TFLOPS` = `93.7%` cuBLAS，`max_diff=0.0`，同次 200 kHz `nsys`）：(A)/(B) 栏对齐显示 13 个完整波次的 HBM 脉动与末尾 10 个 SM 的尾波掉谷；(C)/(D) 栏同时呈现 `MEM`（5 档深度，峰值 `d=8` 及结尾 `8→6→4→2→0` 排空）与 `WGMMA`（`max d=2`）双异步轨及逐拍 `Exposed Wait`。
 
 ---
 
 ## 3. 工作原理与核心设计
 
 ```text
-受保护源码 (只读) ──► 宿主 AI 代理 (按 Skill 读源码，决策各阶段探针 / 隔离副本改动)
+受保护源码 (只读) ──► AI 编程代理 (按 Skill 读源码，决策各阶段探针 / 隔离副本改动)
                             │
                             ▼  (调用本地 MCP 验证工具)
                  本地验证器 (隔离副本插桩 → 编译基线/插桩 → 实卡运行 → 四项检查)
@@ -47,7 +51,7 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
                    └── 四项全通过 ──► 对齐同次硬件曲线 → 渲染四联 PNG → 签发封签并解锁优化
 ```
 
-- **直接复用宿主 AI 代理**：默认 `Skill + MCP + Hook` 模式下，由当前运行的 AI 代理读源码、决策插桩位置并解读四联图，无需单独再配一套 LLM API Key。（若脱离宿主代理走无头脚本 `wp.identify` / `weaveprof_profile`，可配置兼容 OpenAI 的模型端点，或直接手写 `probe.json` 离线调用本地验证器。）
+- **直接使用 AI 编程代理**：默认 `Skill + MCP + Hook` 模式下，直接使用当前运行的 AI 代理读源码、决策插桩位置并解读四联图，无需单独再配一套 LLM API Key。（若走无头脚本 `wp.identify` / `weaveprof_profile`，可配置兼容 OpenAI 的模型端点，或直接手写 `probe.json` 离线调用本地验证器。）
 - **低扰动核内记录器**：
   - 按 `CTA × 物理 Warp/Wave` 预切私有缓冲，每 Warp/Wave 仅 `lane 0` 顺序写 16 字节流式记录（NVIDIA `st.global.cs.v4.u32`、AMD `global_store_dwordx4 ... nt`），**热路径零原子**。
   - CUDA C++ 默认单 32-bit 寄存器上下文（`0 B` 共享内存，上限 `32,767` 条/泳道），若触发 spill 自动回退静态共享内存或非内联函数；HIP C++ 把游标缓存在每条 Wave 的固定槽位中，`__device__` 辅助函数无需改参数即可续写。
@@ -71,9 +75,15 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 | 原始分核版本（图 a） | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` |
 | 优化后持久化融合版本（图 b） | **`416.4 µs`（`1.47×`）** | `41.8%` / `62.6%` | `55.7%` / `81.5%` |
 
-### 4.2 开源算子库零签名修改剖析
+### 4.2 多阶段异步流水四联图（RTX 3050 `sm_86` CUDA C++ 6-Stage `cp.async`）
 
-不改动原始开源库函数签名与调用链，在 H20 上完成全自动闭环剖析（以下三张为历史实测软硬对齐图，单核事件较稀疏未触发 (D) 栏）：
+在 NVIDIA Ampere（`sm_86`）`2048×2048×1280` 6 阶段环形缓冲 `cp.async` + WMMA GEMM 上实测采集同次 200 kHz `nsys` 指标并渲染四联图：Panel (A) 32 次 HBM 带宽峰值（`93.0%`）与 Panel (B) 16 个物理 SM 的 32 个 CTA 波次边界一一对齐；Panel (D) 单 CTA 微距放大完整展示 `5` 根连续预取发射针 `▼` 将在途深度从 `0→1→2→3→4→5` 爬坡并在末尾 `5→4→3→2→1→0` 排空（全展开演示每拍含 5 次精细采样）：
+
+![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async 四联对齐图](docs/images/case_sm86_cuda_s6_4panel.png)
+
+### 4.3 开源算子库零签名修改剖析
+
+不改动原始开源库函数签名与调用链，在 H20 上完成全自动闭环剖析（以下三张为较早实测软硬对齐图，因单核事件较稀疏未触发 Panel D 微距栏）：
 
 | 开源算子 | 语言与规模（H20） | 物理 Warp 覆盖 | 稳态相对开销与结果 |
 | --- | --- | :---: | --- |
@@ -94,7 +104,7 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 | GPU 硬件 | NVIDIA H20（`sm_90` / `sm_90a`）、B300（`sm_100a` / `sm_103a`）、Ampere（`sm_86`）、AMD MI308X（`gfx942`） |
 | 算子语言 | CUDA C++、HIP C++、CuTeDSL（NVIDIA）、Triton（NVIDIA PTX 与 AMD CDNA3） |
 | AI 代理 | 原生集成 Claude Code、Qwen Code（`qwen`）、OpenAI Codex CLI、Antigravity（`agy`） |
-| 依赖 | Python 3.10+、`nvcc`/`nsys` 或 `hipcc`/`rocprof-sys`、`matplotlib`；默认复用宿主代理，无需额外 API Key |
+| 依赖 | Python 3.10+、`nvcc`/`nsys` 或 `hipcc`/`rocprof-sys`、`matplotlib`；直接使用当前 AI 代理，无需额外 API Key |
 
 两步接入你的算子仓库（安装后 `--protect` 文件进入锁定，首次基线剖析通过后自动解锁优化）：
 
