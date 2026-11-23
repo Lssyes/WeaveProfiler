@@ -25,7 +25,7 @@
     "sampling_model": "periodic_pm",
     "preferred_sample_hz": 200000,
     "evidence": "measured_local_sm86",
-    "note": "On bare-metal Linux sm_86, request 200 kHz nsys GPU metrics; on WSL2 /dev/dxg or unprivileged containers where GPU PMU counters are blocked, software timelines remain verified with automatic WP_TIMER=1 (%clock64 + %globaltimer anchors, ~27 ns step) to avoid consumer sm_86 1024 ns %globaltimer quantization."
+    "note": "On bare-metal Linux or native Windows sm_86, auto-discover nsys (including C:/Program Files/NVIDIA Corporation/Nsight Systems*/target-windows-x64/nsys.exe) and capture 200 kHz GPU metrics (enable NVIDIA Control Panel -> Developer -> Allow GPU performance counters to all users on Windows, or NVreg_RestrictProfilingToAdminUsers=0 on Linux). Automatic WP_TIMER=1 (%clock64 + %globaltimer anchors, ~27 ns step) avoids consumer sm_86 1024 ns %globaltimer quantization."
   },
   "languages": [
     "cuda_cpp",

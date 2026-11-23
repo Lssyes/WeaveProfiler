@@ -70,25 +70,50 @@ _STAGE_DRAW_PRIORITY = {
 _ASYNC_ENGINE_STYLE: Dict[str, Dict[str, Any]] = {
     "mem": {
         "short": "mem",
-        "depth_colors": ("#C6F1E2", "#5ED0A8", "#0E8561"),  # depth 1, 2, 3+
+        # 5 perceptually distinct shades for shallow (1-3) and deep (4-8+) async pipelines
+        "depth_colors": ("#D8F7EC", "#96E6CA", "#46C89B", "#149C72", "#075E45"),
         "rail_bg": "#EFF5F3",
         "rail_ec": "#D2E0DC",
         "pin_color": "#D81B60",                              # vivid magenta ▼
         "pin_label": "Mem Async Issue (v)",
-        "depth_label": "Mem In-Flight Depth (1 / 2 / 3+)",
+        "depth_label": "Mem In-Flight Depth (1/2/3/4/5+)",
         "panel_b_color": "#0E8561",
     },
     "mma": {
         "short": "mma",
-        "depth_colors": ("#CFE3FF", "#68A4F1", "#1B4DB1"),  # depth 1, 2, 3+
+        "depth_colors": ("#DCEBFF", "#96C2FA", "#4A90E8", "#1D5FD1", "#0D3482"),
         "rail_bg": "#EEF3FA",
         "rail_ec": "#CFDCEB",
         "pin_color": "#7B1FA2",                              # vivid violet ▼
         "pin_label": "MMA Async Issue (v)",
-        "depth_label": "MMA In-Flight Depth (1 / 2 / 3+)",
+        "depth_label": "MMA In-Flight Depth (1/2/3/4/5+)",
         "panel_b_color": "#1B4DB1",
     },
 }
+
+
+def _depth_to_bucket(depth: int, scale_max: int) -> int:
+    """Map integer in-flight depth >= 1 into 5 monotonic color buckets (0..4)."""
+    if scale_max >= 7:
+        # Deep pipelines (e.g. Triton num_stages=5..6 -> 6..10 cp.async groups): 1, 2, 3-4, 5-6, 7+
+        if depth <= 1:
+            return 0
+        if depth == 2:
+            return 1
+        if depth <= 4:
+            return 2
+        if depth <= 6:
+            return 3
+        return 4
+    return min(4, max(0, int(depth) - 1))
+
+
+def _depth_scale_label(scale_max: int) -> str:
+    if scale_max >= 7:
+        return f"1/2/3-4/5-6/7+ (max {scale_max})"
+    if scale_max >= 4:
+        return f"1/2/3/4/5+ (max {scale_max})"
+    return "1/2/3+"
 
 # Dual-color Inter-Node vs Intra-Node Fabric Palette (NVIDIA IB/RDMA vs NVLink, AMD RDMA vs xGMI).
 # Warm crimson / amber is strictly reserved for Inter-Node RDMA / IB; cool teal / royal blue for
@@ -1186,6 +1211,21 @@ def _render_warp_panel(
         min_pin_gap_us = x_span * (11.0 / 2200.0)
         min_tick_gap_us = x_span * (4.5 / 2200.0)
 
+        # Pre-pass max per-CTA depth per engine so all rows share one consistent 5-shade scale
+        eng_scale_max: Dict[str, int] = {}
+        for eng in ("mem", "mma"):
+            gmax = 0
+            for r in range(n_rep_rows):
+                ivs_cta = async_by_re.get((r, eng), [])
+                by_c: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
+                for ts_a, en_a, cta_a in ivs_cta:
+                    by_c[cta_a].append((ts_a, en_a))
+                for c_ivs in by_c.values():
+                    _, _, cm = _compute_depth_segments(c_ivs)
+                    if cm > gmax:
+                        gmax = cm
+            eng_scale_max[eng] = gmax
+
         for r in range(n_rep_rows):
             sub_map = row_geom[r][1]
             if not sub_map:
@@ -1223,10 +1263,11 @@ def _render_warp_panel(
                     d_segs = all_d_segs
                     avg_d = (sum(cta_avgs) / len(cta_avgs)) if cta_avgs else 0.0
 
+                smax = eng_scale_max.get(eng, max_d)
                 for s0, s1, d in d_segs:
                     cx0, cx1 = max(x_lo, s0), min(x_hi, s1)
                     if cx1 > cx0:
-                        bucket = 0 if d == 1 else (1 if d == 2 else 2)
+                        bucket = _depth_to_bucket(d, smax)
                         depth_polys[(eng, bucket)].append([(cx0, y_top), (cx1, y_top), (cx1, y_bot), (cx0, y_bot)])
 
                 # Prominent Fixed-Pixel ▼ Async Issue Pins (with clean Adaptive LOD so emerald depth strip stays crisp!)
@@ -1256,7 +1297,12 @@ def _render_warp_panel(
                 compact = len(sub_map) >= 2
                 eng_short = "M" if eng == "mem" else "W"
                 if max_d >= 1:
-                    stat_parts.append(f"{n_iss}{eng_short} d={avg_d:.1f}" if compact else f"{n_iss} {eng} · d={avg_d:.1f}")
+                    if compact:
+                        d_txt = f"d={avg_d:.1f}/m{max_d}" if max_d >= 4 else f"d={avg_d:.1f}"
+                        stat_parts.append(f"{n_iss}{eng_short} {d_txt}")
+                    else:
+                        d_txt = f"d={avg_d:.1f} (max {max_d})" if max_d >= 3 else f"d={avg_d:.1f}"
+                        stat_parts.append(f"{n_iss} {eng} · {d_txt}")
                 elif n_iss > 0:
                     stat_parts.append(f"{n_iss}{eng_short}" if compact else f"{n_iss} {eng} issues")
 
@@ -1634,7 +1680,15 @@ def render_swhw_overview_png(
                         label=desc,
                     ))
 
-        # Add clean async engine legend handles (Issue ▼ pin + In-Flight Depth strip) on demand!
+        # Add clean async engine legend handles (Issue ▼ pin + dynamic 5-shade In-Flight Depth strip) on demand!
+        rep_eng_max: Dict[str, int] = {}
+        for eng in active_async_engines:
+            by_wc: Dict[Tuple[int, int], List[Tuple[float, float]]] = defaultdict(list)
+            for sp in rep_async_raw:
+                if sp["async_engine"] == eng:
+                    by_wc[(int(sp["warp"]), int(sp["cta"]))].append((float(sp["ts"]), float(sp["end"])))
+            rep_eng_max[eng] = max((_compute_depth_segments(ivs)[2] for ivs in by_wc.values()), default=0)
+
         for eng in active_async_engines:
             st = _ASYNC_ENGINE_STYLE[eng]
             top_legend_handles.append(Line2D(
@@ -1643,9 +1697,10 @@ def render_swhw_overview_png(
                 label=f"{eng.upper()} Async Issue",
             ))
             if has_async_depth.get(eng):
+                smax = rep_eng_max.get(eng, 3)
                 top_legend_handles.append(Patch(
-                    facecolor=st["depth_colors"][2], edgecolor=st["depth_colors"][1], linewidth=1.2,
-                    label=f"{eng.upper()} In-Flight Depth (1/2/3+)",
+                    facecolor=st["depth_colors"][3], edgecolor=st["depth_colors"][1], linewidth=1.2,
+                    label=f"{eng.upper()} In-Flight Depth ({_depth_scale_label(smax)})",
                 ))
 
         def _span_color(sp: Mapping[str, Any]) -> str:
@@ -1947,7 +2002,7 @@ def render_swhw_overview_png(
     yt_labels = [t.get_text() for t in ax_wp.get_yticklabels()]
     max_lbl = max((len(s) for s in yt_labels), default=10)
     left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
-    right_m = (0.815 if len(active_async_engines) >= 2 else 0.845) if has_async_rep else 0.985
+    right_m = (0.795 if len(active_async_engines) >= 2 else 0.825) if has_async_rep else 0.985
     if has_zoom:
         top_m = 0.862 if has_hw else 0.870
     else:

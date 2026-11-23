@@ -1268,6 +1268,34 @@ def _merge_hw_trace(
     return trace_doc
 
 
+def find_nsys_binary() -> Optional[str]:
+    """Locate `nsys` across PATH, standard Linux paths, and Windows Program Files installations."""
+    found = shutil.which("nsys")
+    if found:
+        return found
+    if os.name == "nt":
+        nv_root = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "NVIDIA Corporation"
+        if nv_root.is_dir():
+            cands = sorted(
+                list(nv_root.glob("Nsight Systems*/target-windows-x64/nsys.exe"))
+                + list(nv_root.glob("Nsight Compute*/host/target-windows-x64/nsys.exe")),
+                reverse=True,
+            )
+            for c in cands:
+                if c.is_file():
+                    return str(c)
+    else:
+        for p in ("/usr/local/bin/nsys", "/usr/local/cuda/bin/nsys"):
+            if Path(p).is_file():
+                return p
+        opt_nv = Path("/opt/nvidia")
+        if opt_nv.is_dir():
+            for c in sorted(opt_nv.glob("nsight-systems*/*/bin/nsys"), reverse=True):
+                if c.is_file():
+                    return str(c)
+    return None
+
+
 def _capture_nsys_sqlite(
     *,
     l0: Path,
@@ -1283,9 +1311,9 @@ def _capture_nsys_sqlite(
     timeout_s: float,
 ) -> Dict[str, Any]:
     """Run nsys profile + export to SQLite in a clean post-ABBA capture pass."""
-    nsys_bin = shutil.which("nsys") or ("/usr/local/bin/nsys" if Path("/usr/local/bin/nsys").is_file() else None)
+    nsys_bin = find_nsys_binary()
     if not nsys_bin:
-        raise RuntimeError("nsys binary not found on PATH or /usr/local/bin/nsys")
+        raise RuntimeError("nsys binary not found on PATH, /usr/local/bin/nsys, or Windows NVIDIA Program Files")
     nsys_out = out / "nsys_run"
     nsys_out.mkdir(parents=True, exist_ok=True)
     rep_base = out / "nsys_cap"
@@ -1328,11 +1356,15 @@ def _capture_nsys_sqlite(
     rep_file = Path(str(rep_base) + ".nsys-rep")
     if rc != 0 or not rep_file.is_file():
         log_txt = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
-        if "ERR_NVGPUCTRPERM" in log_txt or "Insufficient Privilege" in log_txt:
+        if "ERR_NVGPUCTRPERM" in log_txt or "Insufficient Privilege" in log_txt or "Insufficient privilege" in log_txt:
+            hint = (
+                "Windows: open NVIDIA Control Panel -> Developer -> Allow access to the GPU performance counters to all users (or run elevated)"
+                if os.name == "nt"
+                else "Linux: configure NVreg_RestrictProfilingToAdminUsers=0 or CAP_SYS_ADMIN (or run under sudo -n -E /usr/local/bin/nsys)"
+            )
             raise RuntimeError(
-                f"nsys profile exited {rc} due to GPU performance counter permissions "
-                f"(configure NVreg_RestrictProfilingToAdminUsers=0 or CAP_SYS_ADMIN on the host; "
-                f"automatic sudo escalation is disabled; see {log_path})"
+                f"nsys profile exited {rc} due to GPU performance counter permissions ({hint}; "
+                f"automatic privilege escalation is disabled; see {log_path})"
             )
         raise RuntimeError(f"nsys profile exited {rc} (see {log_path})")
     exp_log = out / "nsys_export.log"

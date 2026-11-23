@@ -107,23 +107,32 @@ def measure(workspace, prepared):
     run_cmd([*worker, "measure", str(base), str(inst), str(directory)], directory, env, directory / "replay.log")
     # One dispatched instrumented kernel supplies both the hardware interval and FILITE02.
     env.pop("TRITON_ALWAYS_COMPILE")
-    nsys_exe = shutil.which("nsys")
+    from .megakernel import find_nsys_binary
+    nsys_exe = find_nsys_binary()
     if nsys_exe:
         import platform as _plat
         is_wsl = "microsoft" in _plat.release().lower() or Path("/dev/dxg").exists()
-        # Prefer 200 kHz GPU metrics capture on H20/B300/bare-metal NVIDIA; on WSL2 /dev/dxg
-        # GPU PMU counters are blocked by the Windows host driver, so go straight to --trace=cuda.
+        nsys_log = directory / "nsys.log"
+        # Always require real 200 kHz GPU metrics on bare-metal NVIDIA (Linux & native Windows);
+        # never silently drop GPU metrics on ERR_NVGPUCTRPERM.
         rep_ok = False
         if not is_wsl:
             nsys_pmu_cmd = [
-                nsys_exe, "profile", "--sample=none", "--cpuctxsw=none", "--trace=cuda",
-                "--gpu-metrics-device=all", "--gpu-metrics-frequency=200000",
+                nsys_exe, "profile", "--force-overwrite=true", "--sample=none", "--cpuctxsw=none", "--trace=cuda",
+                "--gpu-metrics-devices=cuda-visible", "--gpu-metrics-frequency=200000",
                 "-o", str(directory / "capture"), *worker, "record", str(base), str(inst), str(directory),
             ]
             try:
-                run_cmd(nsys_pmu_cmd, directory, env, directory / "nsys.log")
+                run_cmd(nsys_pmu_cmd, directory, env, nsys_log)
                 rep_ok = (directory / "capture.nsys-rep").is_file() and (directory / "capture.fi02.bin").is_file()
             except Exception:
+                log_txt = nsys_log.read_text(encoding="utf-8", errors="replace") if nsys_log.is_file() else ""
+                if "ERR_NVGPUCTRPERM" in log_txt or "Insufficient privilege" in log_txt or "Insufficient Privilege" in log_txt:
+                    raise RuntimeError(
+                        "MISSING_HARDWARE_UTILIZATION_CURVES: nsys GPU metrics blocked by ERR_NVGPUCTRPERM. "
+                        "Windows: enable NVIDIA Control Panel -> Developer -> Allow GPU performance counters to all users; "
+                        f"Linux: configure NVreg_RestrictProfilingToAdminUsers=0 or sudo nsys (see {nsys_log})."
+                    )
                 rep_ok = False
         if not rep_ok:
             for stale in ("capture.nsys-rep", "capture.sqlite"):

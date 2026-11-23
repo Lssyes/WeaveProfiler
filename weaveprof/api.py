@@ -677,12 +677,13 @@ def doctor(*, check_gpu=True):
         except subprocess.TimeoutExpired:
             return {"ok": False, "rc": -2, "out": "timeout"}
 
+    from .megakernel import find_nsys_binary
     tools = {
         "nvcc": _which_any("nvcc"),
         "hipcc": _which_any("hipcc"),
         "cuobjdump": _which_any("cuobjdump"),
         "llvm_objdump": _which_any("llvm-objdump", "amd-llvm-objdump"),
-        "nsys": _which_any("nsys") or ("/usr/local/bin/nsys" if Path("/usr/local/bin/nsys").is_file() else None),
+        "nsys": find_nsys_binary(),
         "rocprof_sys": _which_any("rocprof-sys-run", "rocprof-sys"),
         "rocprofv3": _which_any("rocprofv3"),
         "trace_processor_shell": _which_any("trace_processor_shell", "trace_processor"),
