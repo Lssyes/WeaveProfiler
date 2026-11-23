@@ -31,7 +31,7 @@ WeaveProfiler defaults to PNG-only delivery (`overview.png`) instead of heavy `.
 
 - **(A) Hardware Utilization Curves**: Same-run chip-wide metrics (0–100%, 200 kHz `nsys` on NVIDIA, `rocprof-sys` on AMD): Compute (Tensor / MFMA), summed HBM Read+Write bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` are never summed or merged; `xGMI` on AMD), optional inter-node RDMA, and active SM/CU %. **Fails closed if real same-run hardware curves are missing.**
 - **(B) All-SM / All-CU Waterfall**: Every physical core on the vertical axis, exposing wave steps, tail stragglers, and load skew.
-- **(C) Single-SM / Single-CU Per-Warp / Per-Wave Timeline**: Each warp separates cleanly into stacked rows—an **upper main execution row (`Softmax` / scalar ALU / amber hatched `Exposed Wait` / `Store`, or synchronous MMA) + 0/1/2 on-demand async engine depth rows below (`MEM` emerald strip + magenta issue pins `▼`; async `GEMM/WGMMA/tcgen05` azure strip + violet issue pins `▼`)**—so async GEMM in-flight depth (`1/2/3/4/5+` 5-shade band) and its overlap with following `Softmax` / epilogue stages appear on separate aligned rows.
+- **(C) Single-SM / Single-CU Per-Warp / Per-Wave Timeline**: Each warp separates cleanly into stacked rows—an **upper main execution row (`Softmax` / scalar ALU / amber hatched `Exposed Wait` / `Store`, or synchronous MMA) + 0/1/2 on-demand async engine depth rows below (`MEM` green depth strip + dark-green issue pins `▼`; async `GEMM/WGMMA/tcgen05` blue depth strip + dark-blue issue pins `▼`)**—so async GEMM in-flight depth (`1/2/3/4/5+` 5-shade band) and its overlap with following `Softmax` / epilogue stages appear on separate aligned rows.
 - **(D) Deterministic Single-CTA Micro-Zoom**: Auto-triggered on dense timelines; isolates the complete CTA with highest `Exposed Wait` ratio (or steady-state p50 CTA when wait-free; caps >48 iterations to a 32-iteration window around the worst bubble; supports `--zoom-cta` / `--zoom-window`), highlighting the exact window in dashed magenta across Panels (A)–(C).
 
 ![NVIDIA H20 Triton num_stages=5 PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_triton_s5_4panel.png)
@@ -88,12 +88,12 @@ Closed-loop profiling on unmodified open-source libraries at production long-seq
 | Open-Source Kernel | Frontend & Shape (H20 `sm_90a`) | Warp Coverage | Steady-State Overhead & Highlights |
 | --- | --- | :---: | --- |
 | **FlashInfer 0.6.8 Hopper FA3** (3 headers) | CUDA C++, `B=5, H=16, S=4096, D=128` | 12 / 12 | **`+0.15%`** (`2,618 → 2,622 µs`), SW–HW delta `0.08%`; Panel (D) splits every math warp into two aligned rows—`Online Softmax / Wait` on top and async `WGMMA QK+PV` in-flight depth (`d=1/2`) overlapping Softmax below |
-| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`) | CUDA C++, `B=64, H=128, KV=2048` | 8 / 8 | **`+7.45%`** (`356 → 383 µs`), **`0 B` spill**, SW–HW delta `0.50%`; auto-selects full 2-wave `SM 2`, and Panel (D) locks `WG0`'s `47.3%` `kOScaleReady` wait directly onto `WG1`'s `QK + Softmax` |
-| **vLLM FLA FlashKDA** (`chunk_delta_h.py`) | Triton 3.6 PTX Auto-Async, `B=1, T=8192, H=64, D=128` | 4 / 4 | Round 1 dual-async `+18.77%` rejected → closed-loop coarsened to **`+4.08%`** (`544 → 566 µs`), **`0` spill**, SW–HW delta `0.21%`; Panel (D) exposes 5-stage `cp.async` ramps and `Exposed Wait` |
+| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`) | CUDA C++, `B=64, H=128, KV=2048` | 8 / 8 | **`+9.96%`** (`356 → 392 µs`), **`0 B` spill**, SW–HW delta `0.49%`; auto-selects full 2-wave `SM 2`, showing `WG0`'s green `cp.async` in-flight count (`d=1/2`) + `kOScaleReady` wait + blue `PV1` WGMMA alongside `WG1`'s 2-row `Softmax / WGMMA` split |
+| **vLLM FLA FlashKDA** (`chunk_delta_h.py`) | Triton 3.6 PTX Auto-Async, `B=1, T=4096, H=64, D=128` | 4 / 4 | **`+8.14%`** (`306 → 331 µs`, zero Python K-loop edits), **`0 B` spill**, SW–HW delta `0.39%`; Panel (D) exposes both 5-shade green `cp.async` ramps, blue `WGMMA` sub-track, and `~65%` per-chunk `Exposed Wait` |
 
 ![FlashInfer 0.6.8 Hopper FA3 H20 S=4096 Four-Panel Aligned View](docs/images/case_h20_flashinfer_fa3.png)
 ![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=2048 Four-Panel Aligned View](docs/images/case_h20_flashmla.png)
-![vLLM FLA FlashKDA H20 T=8192 Triton PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_flashkda.png)
+![vLLM FLA FlashKDA H20 T=4096 Triton PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_flashkda.png)
 
 ---
 

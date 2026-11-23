@@ -31,7 +31,7 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 
 - **(A) 硬件利用率曲线**：同次采集的整卡指标（0–100%，NVIDIA 为 200 kHz `nsys`，AMD 为 `rocprof-sys`），含计算流水线（Tensor / MFMA）、HBM 读+写总带宽、独立绘制的全双工互联（`NVLink TX` 与 `NVLink RX` 绝不合并；AMD 为 `xGMI`）、可选跨机 RDMA 以及活跃 SM/CU 占比；**缺少同次真实硬件曲线时默认失败退出（fail-closed）**。
 - **(B) 全卡物理 SM / CU 瀑布**：纵轴列出全部物理核心，直观暴露波次台阶、尾波拖尾与负载倾斜。
-- **(C) 单个 SM / CU 的全物理 Warp / Wave 时间线**：每个 Warp 自动分为独立多行——「**上行主执行轨（Softmax / 标量计算 / 亮黄斜纹 `Exposed Wait` / Store，以及同步 MMA）+ 下行按需 0/1/2 条异步引擎副轨（Mem 绿带 + 洋红发射针 `▼`；异步 GEMM/WGMMA/`tcgen05` 蓝带 + 深紫发射针 `▼`）**」，异步 MMA 与后续 Softmax 天然分行并排重叠，用 **5 档渐变热力带**（`1/2/3/4/5+`，更深流水自动动态分桶）直显在途并发深度。
+- **(C) 单个 SM / CU 的全物理 Warp / Wave 时间线**：每个 Warp 自动分为独立多行——「**上行主执行轨（Softmax / 标量计算 / 亮黄斜纹 `Exposed Wait` / Store，以及同步 MMA）+ 下行按需 0/1/2 条异步引擎副轨（Mem 绿带 + 深绿发射针 `▼`；异步 GEMM/WGMMA/`tcgen05` 蓝带 + 深蓝发射针 `▼`）**」，异步 MMA 与后续 Softmax 天然分行并排重叠，用同色系 **5 档渐变热力带**（`1/2/3/4/5+`，更深流水自动动态分桶）直显在途并发深度。
 - **(D) 单 CTA 微距放大（Zoom-In）**：全核过密时自动触发，确定性选取 `Exposed Wait` 占比最高的完整 CTA（无等待时取稳态中位数 CTA；超 48 拍截最重气泡周围 32 拍，支持 `--zoom-cta` / `--zoom-window` 手动指定），逐拍展示发射针、在途深度爬坡/排空与等待气泡；(A)–(C) 栏同步用洋红虚线框标出放大区间。
 
 ![NVIDIA H20 Triton num_stages=5 PTX 自动双异步四联对齐图](docs/images/case_h20_triton_s5_4panel.png)
@@ -88,12 +88,12 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 | 开源算子 | 前端与规模（H20 `sm_90a`） | 物理 Warp 覆盖 | 稳态相对开销与实测结果 |
 | --- | --- | :---: | --- |
 | **FlashInfer 0.6.8 Hopper FA3**（跨 3 头文件） | CUDA C++，`B=5, H=16, S=4096, D=128` | 12 / 12 | **`+0.15%`**（`2,618 → 2,622 µs`），软硬边界差 `0.08%`；Panel (D) 每条计算 Warp 上下两行分轨——上行 `Online Softmax / Wait`，下行异步 `WGMMA QK+PV` 在途深度（`d=1/2`）与 `Softmax` 真重叠 |
-| **FlashInfer 0.6.8 Hopper FlashMLA**（`mla_hopper.cuh`） | CUDA C++，`B=64, H=128, KV=2048` | 8 / 8 | **`+7.45%`**（`356 → 383 µs`），**`0 B` spill**，软硬边界差 `0.50%`；自动选取满载双波次 `SM 2`，Panel (D) 直接定位 `WG0` 在 `kOScaleReady` 上 `47.3%` 的等待对齐 `WG1` 的 `QK + Softmax` |
-| **vLLM FLA FlashKDA**（`chunk_delta_h.py`） | Triton 3.6 PTX 自动异步，`B=1, T=8192, H=64, D=128` | 4 / 4 | 第 1 轮双异步 `+18.77%` 被拦截 → 闭环粗化后 **`+4.08%`**（`544 → 566 µs`），**`0` spill**，软硬边界差 `0.21%`，Panel (D) 完整展开每轮 5 级 `cp.async` 深度与 `Exposed Wait` |
+| **FlashInfer 0.6.8 Hopper FlashMLA**（`mla_hopper.cuh`） | CUDA C++，`B=64, H=128, KV=2048` | 8 / 8 | **`+9.96%`**（`356 → 392 µs`），**`0 B` spill**，软硬边界差 `0.49%`；自动选取满载双波次 `SM 2`，Panel (D) 同步呈现 `WG0` 的 `cp.async` 绿色在途数（`d=1/2`）+ `kOScaleReady` 等待 + `PV1` 蓝色 WGMMA，以及 `WG1` 的 `Softmax / WGMMA` 双行分轨 |
+| **vLLM FLA FlashKDA**（`chunk_delta_h.py`） | Triton 3.6 PTX 自动双异步，`B=1, T=4096, H=64, D=128` | 4 / 4 | **`+8.14%`**（`306 → 331 µs`，零 Python K-loop 修改），**`0 B` spill**，软硬边界差 `0.39%`；Panel (D) 同图展示每轮 5 级 `cp.async` 绿带、蓝色 `WGMMA` 副轨与约 `65%` 的 `Exposed Wait` |
 
 ![FlashInfer 0.6.8 Hopper FA3 H20 S=4096 四联对齐图](docs/images/case_h20_flashinfer_fa3.png)
 ![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=2048 四联对齐图](docs/images/case_h20_flashmla.png)
-![vLLM FLA FlashKDA H20 T=8192 Triton PTX 自动异步四联对齐图](docs/images/case_h20_flashkda.png)
+![vLLM FLA FlashKDA H20 T=4096 Triton PTX 自动双异步四联对齐图](docs/images/case_h20_flashkda.png)
 
 ---
 

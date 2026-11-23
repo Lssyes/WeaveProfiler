@@ -70,21 +70,22 @@ _STAGE_DRAW_PRIORITY = {
 _ASYNC_ENGINE_STYLE: Dict[str, Dict[str, Any]] = {
     "mem": {
         "short": "mem",
-        # 5 perceptually distinct shades for shallow (1-3) and deep (4-8+) async pipelines
-        "depth_colors": ("#A7ECD4", "#63D9B0", "#22B585", "#0E8760", "#055039"),
+        # Unified emerald/green family: 5-shade depth strip + vivid emerald-green ▼ issue pin
+        "depth_colors": ("#B2F2D8", "#6CE0B5", "#28BF8C", "#108E65", "#075C40"),
         "rail_bg": "#F2F7F5",
         "rail_ec": "#D2E0DC",
-        "pin_color": "#D81B60",                              # vivid magenta ▼
+        "pin_color": "#008556",                              # vivid emerald green ▼ (distinct from blue, never near-black)
         "pin_label": "Mem Async Issue (v)",
         "depth_label": "Mem In-Flight Depth (1/2/3/4/5+)",
         "panel_b_color": "#0E8561",
     },
     "mma": {
         "short": "mma",
-        "depth_colors": ("#A8CEFF", "#64A5FA", "#2D77E5", "#154EC2", "#092B75"),
+        # Unified azure/cobalt family: 5-shade depth strip + vivid cobalt-blue ▼ issue pin
+        "depth_colors": ("#B3D6FF", "#6EB0FF", "#2E80F0", "#1455C8", "#0B3282"),
         "rail_bg": "#F1F5FB",
         "rail_ec": "#CFDCEB",
-        "pin_color": "#7B1FA2",                              # vivid violet ▼
+        "pin_color": "#0047D4",                              # vivid cobalt blue ▼ (pure blue, never purple/near-black)
         "pin_label": "MMA Async Issue (v)",
         "depth_label": "MMA In-Flight Depth (1/2/3/4/5+)",
         "panel_b_color": "#1B4DB1",
