@@ -2,26 +2,26 @@
 
 [简体中文](README.md) | English
 
-> **Give AI microsecond X-ray vision inside GPU kernels — the automated SW+HW intra-kernel profiler built for RSI (Recursive Self-Improvement) and next-generation Megakernels.**
+> **See what every SM and warp is doing microsecond by microsecond — an automated intra-kernel GPU profiler built for RSI (Recursive Self-Improvement) and Megakernel development.**
 
-WeaveProfiler fuses **automated low-overhead in-kernel instrumentation** with **same-run hardware utilization curves**, packaged natively as **`Skill + MCP + Hook`** for AI coding agents (Claude Code, Qwen Code, OpenAI Codex CLI, Antigravity, etc.). Across CUDA C++, HIP C++, CuTeDSL, and Triton—without touching protected source files or function signatures—it aligns 200 kHz chip-wide hardware curves, all-SM/CU waterfalls, per-warp async pipelines (in-flight memory/MMA depth strips, fixed-pixel issue pins `▼`, and exposed waits), and deterministic single-CTA micro-zooms into a single **four-panel PNG diagnostic view**.
+WeaveProfiler combines **automated low-overhead in-kernel instrumentation** with **same-run 200 kHz hardware utilization curves** into a single **four-panel PNG view**, packaged natively as **`Skill + MCP + Hook`** for Claude Code, Qwen Code, OpenAI Codex CLI, and Antigravity. Across CUDA C++, HIP C++, CuTeDSL, and Triton, it profiles in an isolated temporary copy without altering production source files or function signatures.
 
 ---
 
 ## 1. Why RSI Needs WeaveProfiler
 
-**Recursive Self-Improvement (RSI)** is shifting GPU kernel engineering toward autonomous loops where AI agents write, diagnose, and evolve complex fused **Megakernels** (MegaMoE, FlashAttention, persistent GEMM). End-to-end latency alone is blind: to autonomously break through microarchitectural ceilings, **every RSI loop needs a deep, semantically grounded profiler**.
+In **RSI (Recursive Self-Improvement)** workflows, AI agents iteratively write kernels, diagnose bottlenecks, rewrite microarchitecture, and re-verify to evolve high-performance **Megakernels** (MegaMoE, FlashAttention, persistent GEMM). End-to-end latency alone forces agents to guess blindly—effective RSI requires a profiler that exposes both code semantics and microsecond timing automatically.
 
-Existing GPU profiling approaches force an impossible trade-off:
+Previous approaches leave a clear gap:
 
-- **Automatic vendor profilers (`nsys`, `rocprof-sys`, etc.) → automated, but semantically blind.** They capture chip-wide aggregate hardware utilization (Compute / HBM / NVLink / xGMI), yet treat every kernel launch as an opaque box—showing a utilization trough without revealing which SM, warp role, async copy, or barrier caused it. (`ncu` peers inside kernels via multi-pass replay, discarding the microsecond time axis and breaking on persistent or multi-GPU collective megakernels.)
-- **Manual in-kernel instrumentation → semantically rich, but complex, fragile, and impossible to automate.** Hand-writing timing code inside register- and SMEM-saturated inner loops easily triggers spills or scheduler distortions; pairing asynchronous hardware pipelines (`cp.async`, TMA, `wgmma`, `tcgen05`) by hand is error-prone and cannot scale inside an autonomous RSI loop.
+- **Automatic vendor profilers (`nsys`, `rocprof-sys`, etc.)**: automated, but report only chip-wide aggregate hardware utilization (Compute / HBM / NVLink / xGMI) with no awareness of kernel code semantics—you see a dip without knowing which SM, warp role, async copy, or barrier stalled. (`ncu` peers inside kernels via multi-pass replay, producing whole-kernel averages without a time axis and breaking on persistent or multi-GPU megakernels.)
+- **Manual in-kernel instrumentation**: captures code-level stages, but is tedious, error-prone, easily triggers register spills or scheduler distortion, struggles with asynchronous pipelines (`cp.async`, TMA, `wgmma`, `tcgen05`), and cannot run inside an automated RSI loop.
 
-**WeaveProfiler unifies both worlds into a native RSI building block:**
+**WeaveProfiler brings both together:**
 
-1. **Hand-crafted semantic fidelity × fully automated SW+HW alignment.** Automatically identifies stages and injects atomic-free, signature-preserving probes in an isolated temporary copy (including a PTX-level async pass for Triton that peels out compiler-hidden `cp.async`/`wgmma` waits), rigidly aligned with same-run 200 kHz hardware utilization curves in a **four-panel PNG diagnostic view**.
-2. **Four deterministic blocking gates.** Disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead are enforced automatically—auto-coarsening hot probes on failure so corrupted measurements never mislead the next RSI round.
-3. **Native `Skill + MCP + Hook` integration for RSI frameworks.** `Skill` teaches agents how to diagnose hardware–software bottlenecks from four-panel views; `MCP` exposes clean isolated profiling and cross-round comparison tools; `Hook` enforces clean source files, profile-before-edit discipline, and PNG-only delivery across every tool call—making WeaveProfiler the go-to profiler for autonomous Megakernel development.
+1. **Automated in-kernel instrumentation aligned with same-run hardware curves**: automatically identifies stages and injects atomic-free, signature-preserving probes into an isolated copy (including a PTX-level async pass for Triton that extracts compiler-hidden `cp.async`/`wgmma` waits and in-flight depth), aligned with same-run 200 kHz hardware curves in one **four-panel PNG** (hardware curves + all-SM/CU waterfall + single-SM per-warp timeline with thin async depth strips & issue pins `▼` + automatic single-CTA micro-zoom).
+2. **Four deterministic blocking checks**: every run must pass disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead (auto-coarsening hot probes on failure) so distorted timings never mislead the next iteration.
+3. **Native `Skill + MCP + Hook` packaging for RSI frameworks**: `Skill` guides bottleneck diagnosis, `MCP` exposes standardized isolated profiling and cross-round comparison tools, and `Hook` enforces clean production code, profile-before-edit discipline, and PNG-only delivery—plugging cleanly into RSI workflows for next-generation Megakernel development.
 
 ---
 

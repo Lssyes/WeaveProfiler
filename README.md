@@ -2,26 +2,26 @@
 
 简体中文 | [English](README_EN.md)
 
-> **让 AI 真正“看见” GPU 核内每一微秒——为 RSI（Recursive Self-Improvement）与下一代 Megakernel 打造的核内软硬对齐性能剖析工具（Profiler）。**
+> **让 AI 看清 GPU 核内每一微秒在跑什么——面向 RSI（Recursive Self-Improvement）与 Megakernel 开发的自动核内 Profiler。**
 
-WeaveProfiler 将**全自动低开销核内插桩**与**同次硬件利用率曲线**融为一体，以 **`Skill + MCP + Hook`** 原生形态无缝接入 AI 编程代理（Claude Code、Qwen Code、OpenAI Codex CLI、Antigravity 等）。无论 CUDA C++、HIP C++、CuTeDSL 还是 Triton，它都能在不改动生产源码与函数签名的前提下，自动把全卡 200 kHz 硬件曲线、全卡 SM/CU 执行瀑布、单 SM 物理 Warp 异步流水线（含异步访存 / 异步 MMA 在途深度、发射针 `▼` 与暴露等待）以及单 CTA 微距展开对齐到一张**四联 PNG 诊断图**里，成为构建自主演化 Megakernel 的核心利器。
+WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用率曲线**对齐到同一张**四联 PNG 图**里，以 **`Skill + MCP + Hook`** 原生形态接入 Claude Code、Qwen Code、OpenAI Codex CLI、Antigravity 等 AI 编程代理。支持 CUDA C++、HIP C++、CuTeDSL 和 Triton，不改生产源码、不改函数签名，全自动完成插桩、验证与出图。
 
 ---
 
-## 1. 为什么 RSI 时代需要 WeaveProfiler
+## 1. 为什么 RSI 需要 WeaveProfiler
 
-**递归自我改进（RSI, Recursive Self-Improvement）** 正在把 GPU 算子开发推向“AI 自主写核 → 诊断瓶颈 → 改写微架构 → 迭代超越人类手写”的新阶段。但要让 RSI 真正跑通复杂的融合 **Megakernel**（MegaMoE、FlashAttention、Persistent GEMM 等），仅靠端到端总耗时去盲目试错远远不够——**自主优化闭环必须拥有一双精确到微秒与代码语义的“诊断之眼”**。
+在 **RSI（Recursive Self-Improvement，递归自我改进）** 流程里，AI 代理需要持续“写 kernel → 定位瓶颈 → 改写微架构 → 复测验证”，自主演化高性能 **Megakernel**（MegaMoE、FlashAttention、Persistent GEMM 等）。光看一个端到端耗时数字，AI 只能盲猜；要让 RSI 真正有效，必须配一套既细到核内代码语义、又能全自动运行的 profiler。
 
-然而，以往的 GPU 性能剖析方案陷入了两难死局：
+以往的方案总在两边二选一：
 
-- **只靠厂商自动工具（`nsys` / `rocprof-sys` 等）→ 自动，但看不懂代码语义**：它们只能采集全卡累加的宏观硬件利用率曲线（Compute / HBM / NVLink / xGMI），把整个 kernel 当成黑盒；看到利用率掉谷，却不知道那一微秒究竟是哪个 SM、哪个 Warp 角色、哪一段异步搬运或同步卡住了流水线。（`ncu` 虽能进核内，但靠多次重放算整核平均，丢掉时间轴，持久化与多卡通信核基本跑不动。）
-- **传统手动核内插桩 → 看得懂语义，但复杂、易错、没法自动化**：在寄存器与共享内存贴着上限的热循环里手写计时，极易触发 register spill 或打乱编译器调度把耗时测歪；现代 GPU 核心路径遍布异步操作（`cp.async` / TMA / `wgmma` / `tcgen05`），手工配对极难写对，更无法纳入全自动的 RSI 迭代循环。
+- **全自动厂商工具（`nsys` / `rocprof-sys` 等）**：自动好用，但只能看到全卡累加的硬件利用率曲线（Compute / HBM / NVLink / xGMI），不理解 kernel 内部代码语义，不知道掉谷那一微秒到底卡在哪个 SM、哪个 Warp、哪一段异步搬运或同步。（`ncu` 虽能进核内，但靠多次重放算整核平均，没有时间轴，持久核与多卡通信核基本跑不动。）
+- **传统手动核内插桩**：能对应到具体代码阶段，但写起来极其复杂，寄存器/SMEM 稍微吃紧就触发 spill 或打乱调度把耗时测歪，异步流水线（`cp.async` / TMA / `wgmma` / `tcgen05`）更难配对，无法放进全自动 RSI 循环。
 
-**WeaveProfiler 打通了这两条原本割裂的路线**：
+**WeaveProfiler 把两者的优点合二为一：**
 
-1. **手动级核内语义 × 全自动软硬对齐**：自动识别算法阶段并在隔离临时副本中注入低扰动探针（零热路径原子、免改签名、支持 Triton PTX 级自动剥离编译器隐藏的 `cp.async`/`wgmma` 等待），与同一次运行的 200 kHz 硬件利用率曲线刚性对齐，直出一张**四联 PNG 诊断图**（硬件曲线 + 全卡 SM/CU 瀑布 + Warp 主轨/异步在途深度副轨 + 自动单 CTA 微距放大）。
-2. **四项确定性硬检查护航闭环**：反汇编/零溢出、输出逐字节一致、事件完整、稳态开销 `≤ 10%` 全由确定性验证器自动拦截；开销超标自动外提粗化重试，绝不拿失真数据误导下一轮优化。
-3. **`Skill + MCP + Hook` 原生融入 RSI 框架**：`Skill` 教会 Agent 像资深 GPU 架构师一样读图归因，`MCP` 提供标准化隔离剖析/跨轮对比工具，`Hook` 在工具调用全生命周期自动守住“隔离试错、不污染原码、先诊断后改核、必交 PNG”的铁律——天然嵌入任何 RSI 自主优化管线，成为未来开发高性能 Megakernel 的标配利器。
+1. **自动核内插桩 + 同次硬件利用率对齐**：自动识别算法阶段并在隔离临时副本里注入低开销探针（热路径零原子、免改函数签名；对 Triton 额外提供 PTX 级自动插桩，把编译器藏起来的 `cp.async` / `wgmma` 等待与在途深度直接剥出来），与同一次运行的 200 kHz 硬件利用率曲线刚性对齐，直出一张**四联 PNG 图**（全卡硬件曲线 + 全卡 SM/CU 瀑布 + 单个 SM 的全 Warp 时间线［含异步在途深度副轨与发射针 `▼`］+ 自动单 CTA 微距放大）。
+2. **四道确定性硬检查保证数据真实**：每次插桩必须过反汇编/零 spill、输出逐字节一致、事件完整、稳态开销 `≤ 10%` 四项检查；超标自动外提粗化重测，避免拿测歪的数据误导下一轮优化。
+3. **`Skill + MCP + Hook` 天然融入 RSI 框架**：`Skill` 告诉 Agent 怎么读四联图定位瓶颈，`MCP` 提供标准化的隔离剖析与跨轮对比工具，`Hook` 自动守住“不污染原码、先测后改、必交 PNG”的规则——方便接入主流 RSI 框架，是未来开发复杂 Megakernel 的利器。
 
 ---
 
