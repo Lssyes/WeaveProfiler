@@ -49,7 +49,7 @@ def main(argv=None):
     causal_sub.add_argument("--arch", default=None, help="Override GPU arch (sm_90a, sm_103a, gfx942)")
     causal_sub.add_argument("--sms", type=int, default=None, help="Override total physical SM/CU count")
 
-    render_sub = subs.add_parser("render", help="Render a 3-panel SW+HW overview PNG from trace.perfetto.json[.gz]")
+    render_sub = subs.add_parser("render", help="Render a 4-panel SW+HW overview PNG from trace.perfetto.json[.gz]")
     render_sub.add_argument("trace", help="Path to trace.perfetto.json[.gz]")
     render_sub.add_argument("-o", "--out", required=True, help="Output PNG path")
     render_sub.add_argument("--title", default=None, help="Optional figure title")

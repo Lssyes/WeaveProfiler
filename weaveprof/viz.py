@@ -1,13 +1,15 @@
-"""Publication-style single-run 3-panel SW+HW overview renderer for WeaveProfiler traces.
+"""Publication-style single-run 4-panel SW+HW overview renderer for WeaveProfiler traces.
 
 Renders any WeaveProfiler ``trace.perfetto.json[.gz]`` (or in-memory trace dict) across
-NVIDIA (H20 / B300, SM + warp, nsys) and AMD (MI308X, CU + wave, rocprofiler-sdk / rocprof)
-into a single high-DPI PNG with one locked microsecond time axis across all three panels:
+NVIDIA (H20 / B300 / sm_86, SM + warp, nsys) and AMD (MI308X, CU + wave, rocprofiler-sdk / rocprof)
+into a single high-DPI PNG with one locked microsecond time axis across Panels (A)-(C) plus an
+automatic deterministic Panel (D) single-CTA micro-zoom on dense timelines:
   (A) Same-run real hardware utilization curves (Compute / HBM / Intra-Node NVLink or xGMI /
       optional 5th Inter-Node RDMA NIC curve or explicit unavailable HCA footnote / Active SM or CU)
   (B) All physical SMs or CUs dense multi-stage / dual-fabric waterfall
-  (C) Representative SM 0 / CU 0 per-warp / per-wave role timeline (preserving rich domain stage
-      labels and crisp >= 2 px visibility for short streaming Combine / Reduce / RDMA slices)
+  (C) Single SM / CU per-warp / per-wave timeline (upper main execution track + 0/1/2 on-demand
+      thin async engine depth strips for MEM/MMA with fixed-pixel issue pins)
+  (D) Automatic deterministic single-CTA micro-zoom (triggered when full-kernel spacing < 12 px)
 """
 from __future__ import annotations
 
@@ -1910,7 +1912,7 @@ def render_swhw_overview_png(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Render a WeaveProfiler Perfetto trace into a 3-panel SW+HW overview PNG.")
+    ap = argparse.ArgumentParser(description="Render a WeaveProfiler Perfetto trace into a 4-panel SW+HW overview PNG.")
     ap.add_argument("trace", help="Path to trace.perfetto.json[.gz]")
     ap.add_argument("-o", "--out", required=True, help="Output PNG path")
     ap.add_argument("--title", default=None)

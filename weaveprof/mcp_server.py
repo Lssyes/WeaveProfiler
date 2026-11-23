@@ -125,7 +125,7 @@ TOOL_DEFS: List[Dict[str, Any]] = [
         "name": "weaveprof_megakernel_audit",
         "description": ("Fast (~3-12s) isolated-copy megakernel profiler (with cached baseline builds) + 4-gate verifier "
                         "for single- or multi-file CUDA C++ / CuTeDSL / Triton megakernels (FlashAttention, FlashMLA, "
-                        "FlashKDA, GDN, MoE). Never mutates the real workspace. Auto-renders a 3-panel SW+HW "
+                        "FlashKDA, GDN, MoE). Never mutates the real workspace. Auto-renders a 4-panel SW+HW "
                         "overview.png locally (no .perfetto.json.gz needed by default) alongside a compact <2 KB "
                         "causal JSON report and an HMAC seal.json registered in the session (unlocks edits / Stop gate)."),
         "inputSchema": {
@@ -142,7 +142,7 @@ TOOL_DEFS: List[Dict[str, Any]] = [
                 "nsys_freq_hz": {"type": "integer", "minimum": 1000, "maximum": 500000, "description": "nsys --gpu-metrics-frequency in Hz (default: 200000 = 200 kHz high-frequency sampling)."},
                 "nsys_gpu_device": _S,
                 "nsys_capture_range": _S,
-                "render_overview_png": {"type": "boolean", "description": "Auto-render 3-panel SW+HW overview.png locally (default: true)."},
+                "render_overview_png": {"type": "boolean", "description": "Auto-render 4-panel SW+HW overview.png locally (default: true)."},
                 "write_perfetto_gz": {"type": "boolean", "description": "Opt-in: also write trace.perfetto.json.gz (default: false)."},
                 "overview_title": _S,
                 "overview_subtitle": _S,

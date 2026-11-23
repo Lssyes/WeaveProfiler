@@ -1667,7 +1667,7 @@ def _handle_global_guard(event: str, payload: Dict[str, Any], args: argparse.Nam
         if not valid_pngs:
             blockers.append(
                 "MISSING_OVERVIEW_PNG: you ran WeaveProfiler profiling in this session without producing a valid "
-                "PNG deliverable (`overview.png`). Render the 3-panel PNG via `wp_decode.py ... -o overview.png`, "
+                "PNG deliverable (`overview.png`). Render the 4-panel PNG via `wp_decode.py ... -o overview.png`, "
                 "`weaveprof/viz.py`, or `wp.profile(..., out='overview.png')` and inspect it before finishing."
             )
         if not blockers:

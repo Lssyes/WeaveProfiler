@@ -1134,7 +1134,7 @@ def main():
     ap.add_argument("dump", nargs="?")
     ap.add_argument("--names")
     ap.add_argument("-o", "--out", help="输出路径：推荐直接传 overview.png（仅出 PNG，不写 .gz）；写 .gz 需显式加 --write-gz")
-    ap.add_argument("--png", help="直接渲染 3-panel SW+HW 概览 PNG（默认不写 .perfetto.json.gz）")
+    ap.add_argument("--png", help="直接渲染 4-panel SW+HW 概览 PNG（默认不写 .perfetto.json.gz）")
     ap.add_argument("--title", default=None, help="PNG 标题（可选）")
     ap.add_argument("--sm", type=int, default=None, help="Panel (C) 展示的物理 SM/CU 编号")
     ap.add_argument("--dpi", type=int, default=220, help="PNG DPI（默认 220）")

@@ -42,17 +42,16 @@ Table 1 establishes the hardware and execution terminology used throughout this 
 
 ### 2.2 Core System Terminology
 
-The prose below uses consistent conceptual terms rather than raw source identifiers (Appendix F maps each concept to its implementation identifier):
+The prose below uses consistent conceptual terms rather than raw source identifiers (Appendix E maps each concept to its implementation identifier):
 
 - **Stage**: A semantically meaningful execution interval inside a kernel, such as tiled memory loading, matrix multiply-accumulate, online softmax rescaling, or epilogue writeback.
 - **Probe**: A matched begin/end pair of in-kernel timing calls bracketing one stage.
-- **Probe plan**: A read-only structured JSON specification produced by the stage identifier, declaring intra-CTA warp role predicates, descriptive stage labels, and begin/end source line numbers.
+- **Probe plan**: A structured JSON specification declaring intra-CTA warp role predicates, descriptive stage labels, and begin/end source line numbers, typically authored by the host coding agent following the Skill (or written manually).
 - **In-kernel recorder**: Lightweight device-side timing and buffer-append code injected into the temporary kernel copy, emitting fixed 16-byte event records (timestamp, tag/flags, auxiliary word).
 - **Isolated temporary copy**: A temporary workspace copy of the kernel source created by the verifier; all probe injection, compilation, and measurement run on this copy without touching protected source files.
 - **Software timeline**: Microsecond-resolution per-SM/CU, per-warp/wave stage intervals reconstructed from in-kernel recorder dumps.
 - **Hardware timeline**: Chip-wide utilization curves (compute pipes, HBM bandwidth, intra-node/inter-node interconnect bandwidth, and active core fraction) collected by the vendor hardware profiler during the same run.
-- **Three-panel aligned view**: A single PNG figure vertically aligning the hardware timeline, all-SM/CU waterfall, and representative-SM/CU per-warp/wave timeline on one shared microsecond axis.
-- **Stage identifier**: Component that reads kernel source and emits a probe plan.
+- **Four-panel aligned view**: A single PNG figure vertically aligning the hardware timeline, all-SM/CU waterfall, single-SM/CU per-warp/wave timeline (with thin async engine depth strips and issue pins), and an automatic single-CTA micro-zoom on one shared microsecond axis.
 - **Verifier**: Separate deterministic component that injects probes, compiles baseline and instrumented binaries, benchmarks on GPU, executes the four checks, aligns timelines, renders the view, and signs seals.
 - **Four checks**: The four blocking criteria enforced before delivery—assembly & resource preservation, output equality, event completeness & semantic coverage, and steady-state overhead.
 - **Seal**: An HMAC-SHA256 signature computed by the verifier using an out-of-workspace session key over the protected source hash, artifact hashes, and passing check outcomes.
@@ -61,34 +60,31 @@ The prose below uses consistent conceptual terms rather than raw source identifi
 
 ### 2.3 System Components and Data Flow
 
-WeaveProfiler coordinates five components: the **stage identifier**, **deterministic injection engine**, **verifier**, **timeline aligner & renderer**, and **supervisor**:
+WeaveProfiler runs natively as **`Skill + MCP + Hook`**, backed by a local deterministic **injection engine**, **verifier**, **timeline aligner & renderer**, and **supervisor**:
 
 ```text
-Protected source (read-only) ──► Stage Identifier (external LLM API -> probe plan JSON)
+Protected source (read-only) ──► Host Coding Agent (reads source via Skill, plans probes / isolated edits)
                                         │
-                                        ▼
-                             Deterministic Injection (injects probes into isolated temp copy)
-                                        │
-                                        ▼
-                             Verifier (compile baseline & instrumented -> GPU run -> 4 checks)
-                               ├── Any check fails ──► return structured failure & hotspots -> refine
-                               └── All 4 pass ───────► align HW curves -> render view -> sign seal
+                                        ▼  (calls local MCP verifier tools)
+                             Local Verifier (isolated copy -> compile base & inst -> GPU run -> 4 checks)
+                               ├── Any check fails ──► return structured diagnostics & hotspots -> refine
+                               └── All 4 pass ───────► align HW curves -> render 4-panel PNG -> sign seal
 ```
 
-- **External LLM invocation disclosure**: Automated stage identification sends target kernel source excerpts and route patterns over HTTPS to an OpenAI-compatible LLM endpoint (default model `qwen4-max`; both endpoint and model are configurable via environment variables) and receives only a structured JSON probe plan. An API key is required for automated identification (Section 6). When a user supplies an existing probe plan, the verifier runs entirely locally with no network calls.
-- **Deterministic injection and gating**: Code injection, compilation, disassembly comparison, output verification, event decoding, overhead gating, and seal signing are fixed Python code that an LLM cannot rewrite or bypass.
+- **Reuses your host coding agent — zero extra API keys**: In the default `Skill + MCP + Hook` workflow, the agent you already run (Claude Code, Qwen Code, Codex CLI, Antigravity) reads the source, plans instrumentation, and interprets the four-panel PNG; WeaveProfiler itself runs entirely locally with **no extra LLM API calls or separate API keys**. (Only the optional headless batch interface `wp.identify` / `weaveprof_profile` calls an OpenAI-compatible endpoint when running without a coding agent.)
+- **Deterministic injection and gating**: Code injection, compilation, disassembly comparison, output verification, event decoding, overhead gating, and seal signing are fixed Python code that an agent cannot rewrite or bypass.
 
 ### 2.4 In-Kernel Recorder Design
 
 The recorder targets register-bound Tensor Core and Matrix Core kernels with minimal measurement perturbation:
 
 1. **Per-warp private buffers and streaming stores**: Device memory is pre-partitioned into disjoint per-`(CTA, physical warp/wave)` slices. Only `lane 0` of each warp/wave sequentially appends 16-byte records, eliminating **all atomic operations on the hot path** (an atomic flag is set only on the cold overflow path). On NVIDIA GPUs, records are written with 128-bit streaming-hint global stores (`st.global.cs.v4.u32`, hinting evict-first cache treatment to minimize data-cache interference); on AMD CDNA3, records use non-temporal 128-bit stores (`global_store_dwordx4 ... nt`).
-2. **Recorder state placement and spill avoidance**: Each recording lane tracks its slot index, write cursor, and overflow state ("recorder context").
-   - **CUDA C++ single-register mode (default)**: Buffer base address and capacity reside in read-only constant memory while the hot loop packs slot, 15-bit cursor, and overflow bit into **one 32-bit register** (`0 B` shared memory). Because the cursor is 15 bits wide, each warp lane holds at most **32,767 records** in this mode.
-   - **CUDA C++ shared-memory and no-inline fallbacks**: When a kernel is at its hardware register limit and a single extra register triggers stack spilling, compiler-feedback selection falls back to static shared-memory context storage (`32 × 16 = 512 B` per CTA at default warp granularity, or `16 B` at per-CTA granularity) or a non-inlined helper function to keep zero extra live registers in the hot loop.
-   - **HIP C++**: Uses a multi-field register struct context backed by per-lane cursor slots to continue recording across device helper calls.
+2. **Recorder state placement and spill avoidance**: Each recording lane tracks its slot index, write cursor, and overflow flag:
+   - **CUDA C++ single-register mode (default)**: Buffer base address and capacity reside in read-only constant memory while the hot loop packs slot, 15-bit cursor, and overflow bit into **one 32-bit register** (`0 B` shared memory, up to **32,767 records** per lane).
+   - **CUDA C++ shared-memory and no-inline fallbacks**: When a kernel is at its hardware register limit and a single extra register triggers stack spilling, compiler-feedback selection falls back to static shared-memory storage (`32 × 16 = 512 B` per CTA at warp granularity, or `16 B` at CTA granularity) or a non-inlined helper function to keep zero extra live registers in the hot loop.
+   - **HIP C++**: Each wave keeps its write cursor in a lightweight context backed by a per-wave cursor slot, so `__device__` helper functions called inside the kernel can keep appending to the same timeline without changing helper signatures.
 3. **Dual clock modes and adjacent boundary fusion**: Supports chip-wide synchronized wall clocks (`%globaltimer` on NVIDIA, `s_memrealtime` on AMD) as well as dual-anchor mode—capturing paired wall-clock and local cycle counters (`%clock64` / `s_memtime`) at warp entry/exit while reading only the lighter local cycle counter inside loops for offline linear conversion. On NVIDIA CUDA C++ and single-role Triton, an end immediately followed by a begin merges into one clock read plus two contiguous 16-byte writes.
-4. **Unchanged function signatures**: CUDA C++ and HIP C++ bind the buffer descriptor via a translation-unit-internal device symbol (`cudaMemcpyToSymbol` / `hipMemcpyToSymbol` or dynamic `.cubin` lookup), leaving `__global__` parameter lists and host callers untouched. Triton and CuTeDSL inject buffer arguments only inside a same-name transparent launcher proxy (stripping `@triton.autotune` from the instrumented copy to reuse the baseline winning configuration while preserving `@triton.heuristics`), requiring zero caller modifications.
+4. **Unchanged function signatures & Triton PTX auto-async pass**: CUDA C++ and HIP C++ bind the buffer descriptor via a translation-unit-internal device symbol (`cudaMemcpyToSymbol` / `hipMemcpyToSymbol` or dynamic `.cubin` lookup), leaving `__global__` parameter lists and host callers untouched. Triton and CuTeDSL inject buffer arguments only inside a same-name transparent launcher proxy (stripping `@triton.autotune` from the instrumented copy to reuse the baseline winning configuration while preserving `@triton.heuristics`). For NVIDIA Triton, an optional PTX-level automatic async pass (`triton_ptx_async.py`) instruments compiled `cp.async` and `wgmma` commit/wait instructions directly, exposing in-flight depth and exposed waits without editing the Python K-loop.
 
 ### 2.5 Hardware Utilization and Bus-Physics Rules
 
@@ -106,7 +102,7 @@ Hardware and software timelines come from the **same physical run**, rigidly ali
 ### 3.1 Closed-Loop Workflow
 
 1. **Create a protected session**: Run the installer specifying the workspace, target GPU card, and protected kernel files. The installer configures agent tools, lifecycle hooks, and skill docs, and stores clean backups plus a session key outside the workspace. Protected files start **locked**.
-2. **Baseline profiling and initial seal**: The agent invokes profiling. The stage identifier reads the source and emits a probe plan; the verifier injects probes into an isolated temporary copy, compiles baseline and instrumented variants, runs on GPU, and evaluates the four checks. If any check fails (e.g., inner-loop overhead exceeds the limit), structured diagnostics and timeline hotspots return to the stage identifier for automatic hoisting or merging. Once all four checks pass, the verifier aligns hardware curves, renders the three-panel aligned view, and signs a baseline seal.
+2. **Baseline profiling and initial seal**: The host coding agent reads the source under the Skill, plans probes or isolated-copy edits, and calls the local MCP verifier to compile baseline and instrumented variants, run on GPU, and evaluate the four checks. If any check fails (e.g., inner-loop overhead exceeds the limit), structured diagnostics and timeline hotspots return to the agent for hoisting or merging. Once all four checks pass, the verifier aligns hardware curves, renders the four-panel aligned view, and signs a baseline seal.
 3. **Unlock and optimize**: After a valid baseline seal exists, protected files unlock so the agent can refactor the kernel guided by the timeline and bottleneck attribution.
 4. **Re-profile and compare rounds**: Each optimization round is re-verified and sealed, then compared against the previous round to confirm speedup and bottleneck removal or trigger rollback.
 5. **Pre-stop check**: Before the agent finishes, the supervisor checks that live protected source bytes match a validly signed passing seal and contain zero leftover probe statements.
@@ -207,7 +203,7 @@ On supported coding agents, the supervisor enforces rules at key tool lifecycle 
 
 ### 5.2 Zero-Signature Profiling of Open-Source Kernels
 
-Without changing function signatures, template parameters, or caller code in unmodified open-source libraries, WeaveProfiler completed closed-loop profiling on three kernels (Table 4). Figures 1–3 are raw three-panel aligned views rendered directly on H20 (see Section 3.3 for reading guide).
+Without changing function signatures, template parameters, or caller code in unmodified open-source libraries, WeaveProfiler completed closed-loop profiling on three kernels (Table 4). Figures 1–3 are aligned SW+HW views rendered directly on H20 (sparse event spacing did not trigger Panel D micro-zoom; see Section 3.3 for the reading guide).
 
 | Open-Source Library & Kernel | Frontend & Shape (H20) | Physical Warp Coverage | Closed-Loop Result & Steady-State Overhead |
 | --- | --- | :---: | --- |
@@ -219,21 +215,21 @@ Without changing function signatures, template parameters, or caller code in unm
 
 - **Figure 1 — FlashInfer 0.6.8 Hopper FA3 Prefill** (CUDA C++ across 3 headers, `B=5, H=16, S=512, D=128`, all 12 physical warps: `W00` TMA prefetch, `W01..W03` early-exit idle, `W04..W11` two compute warpgroups running WGMMA and online softmax):
 
-![FlashInfer 0.6.8 Hopper FA3 H20 Three-Panel View](docs/images/case_h20_flashinfer_fa3.png)
+![FlashInfer 0.6.8 Hopper FA3 H20 Aligned SW+HW View](docs/images/case_h20_flashinfer_fa3.png)
 
 - **Figure 2 — FlashInfer 0.6.8 Hopper FlashMLA** (CUDA C++ `mla_hopper.cuh`, `B=64, H=128, KV=512`, all 8 physical warps; 128 thread blocks on 78 SMs produce the `128 = 78 + 50` two-wave step visible in both Panel B and Panel A Tensor utilization):
 
-![FlashInfer 0.6.8 Hopper FlashMLA H20 Three-Panel View](docs/images/case_h20_flashmla.png)
+![FlashInfer 0.6.8 Hopper FlashMLA H20 Aligned SW+HW View](docs/images/case_h20_flashmla.png)
 
 - **Figure 3 — vLLM FLA FlashKDA** (Triton 3.6 `chunk_delta_h.py`, `B=1, T=512, H=64, D=128`, all 4 physical warps, separating initial state load, 8 chunked matrix-multiply/decay iterations, and final state store):
 
-![vLLM FLA FlashKDA H20 Three-Panel View](docs/images/case_h20_flashkda.png)
+![vLLM FLA FlashKDA H20 Aligned SW+HW View](docs/images/case_h20_flashkda.png)
 
 ### 5.3 Case Study: 8×H20 Production DeepGEMM MegaMoE Optimization (`1.47×` Speedup)
 
-On an 8×NVIDIA H20 NVLink full-mesh node running production **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8, S=1024, E=512`; consisting of first-stage gate/up projection `GEMM1`, second-stage down projection `GEMM2`, and cross-GPU `Scatter` with specialized `Disp`, `TMA`, `WG0–1`, and `WG2–3` warp roles), the three-panel aligned view exposed two root bottlenecks (full walkthrough in [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)):
+On an 8×NVIDIA H20 NVLink full-mesh node running production **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8, S=1024, E=512`; consisting of first-stage gate/up projection `GEMM1`, second-stage down projection `GEMM2`, and cross-GPU `Scatter` with specialized `Disp`, `TMA`, `WG0–1`, and `WG2–3` warp roles), the aligned SW+HW view exposed two root bottlenecks (full walkthrough in [docs/case_studies/h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)):
 
-![8×H20 DeepGEMM MegaMoE Before/After Three-Panel View](docs/images/case_h20_megamoe_1p47x.png)
+![8×H20 DeepGEMM MegaMoE Before/After Aligned SW+HW View](docs/images/case_h20_megamoe_1p47x.png)
 
 | Variant | End-to-End Latency | FP8 Tensor Core (Avg / Peak) | HBM BW (Avg / Peak) | Diagnosed Bottlenecks & Changes |
 | --- | ---: | ---: | ---: | --- |
@@ -244,7 +240,7 @@ On an 8×NVIDIA H20 NVLink full-mesh node running production **Qwen3.5-397B Deep
 
 ### 5.4 Limitations
 
-1. **External LLM endpoint & source confidentiality**: Automated stage identification (`weaveprof_profile` / `wp.identify`) sends kernel source excerpts to the configured HTTP LLM endpoint. Environments with strict source-egress policies should point `OPENAI_BASE_URL` to a private endpoint or supply a local probe plan directly to the verifier.
+1. **External LLM endpoint in optional headless mode**: The default `Skill + MCP + Hook` workflow reuses your host coding agent and runs WeaveProfiler completely locally with zero source egress. Only the optional headless batch interface (`wp.identify` / `weaveprof_profile`) sends kernel excerpts to a configured OpenAI-compatible endpoint (point `OPENAI_BASE_URL` to a private server, or supply a local probe plan for fully offline runs).
 2. **In-place edit subcommand vs. default isolation**: The default profiling loop edits only isolated temporary copies; however, the low-level CLI subcommand `run.py instrument --apply` edits target files in place by design, and optimization rounds intentionally edit protected files after baseline sealing unlocks them.
 3. **Hook enforcement limits**: To avoid infinite agent retry loops, the stop hook allows exit with a warning after 3 consecutive blocks. Pre-tool read blocking protects session keys, the hook script, and the MCP server script; read-only protection of deeper verifier modules (`backend.py`, `harness.py`) relies on Linux `guard-exec` (`bubblewrap`). Windows lacks `bubblewrap` and full POSIX `0600` key enforcement.
 4. **Single-register record cap**: CUDA C++ single-register context mode uses a 15-bit cursor, capping each physical warp lane at `32,767` records; longer loops require probe hoisting or shared-memory/standard context modes.
@@ -258,10 +254,10 @@ On an 8×NVIDIA H20 NVLink full-mesh node running production **Qwen3.5-397B Deep
 
 | Dimension | Support |
 | --- | --- |
-| Hardware & targets | NVIDIA H20 (`sm_90` / `sm_90a`), NVIDIA B300 (`sm_100a` / `sm_103a`), AMD Instinct MI308X (`gfx942`) |
+| Hardware & targets | NVIDIA H20 (`sm_90` / `sm_90a`), NVIDIA B300 (`sm_100a` / `sm_103a`), NVIDIA Ampere (`sm_86`), AMD Instinct MI308X (`gfx942`) |
 | Languages | CUDA C++, HIP C++, CuTeDSL (NVIDIA only), Triton (NVIDIA PTX & AMD CDNA3) |
 | Coding agents | Native Claude Code, OpenAI Codex CLI, Qwen Code (`qwen`), Antigravity (`agy`); any CLI agent via `guard-exec` |
-| Prerequisites | Python 3.10+, vendor GPU toolchain (`nvcc`/`nsys` or `hipcc`/`rocprof-sys`), `matplotlib` for local PNG rendering; `OPENAI_API_KEY`, `DASHSCOPE_API_KEY`, or `BAILIAN_API_KEY` (optional `OPENAI_BASE_URL`) for automated stage identification |
+| Prerequisites | Python 3.10+, vendor GPU toolchain (`nvcc`/`nsys` or `hipcc`/`rocprof-sys`), `matplotlib` for local PNG rendering. The default `Skill + MCP + Hook` workflow reuses your host coding agent with no extra API key needed (only optional headless `wp.identify` takes an OpenAI-compatible endpoint). |
 
 ### 6.2 Installation & Entry Points
 
@@ -283,7 +279,7 @@ python3 -B WeaveProfiler/run.py install-agent \
 Options:
 - `--workspace`: Root directory of your kernel repository.
 - `--protect`: Register a protected kernel source file (repeatable). **Note**: Registered files are immediately locked until the first passing baseline seal is issued.
-- `--card`: Target GPU profile (`h20`, `b300`, or `mi308x`).
+- `--card`: Target GPU profile (`h20`, `b300`, `mi308x`, or `sm86`).
 - `--agent` (optional): Wires all 4 agents by default, or pass `claude|codex|qwen|agy`; see Appendix A for exact files written.
 
 For non-interactive CLI runs with Linux `bubblewrap` read-only mounts:
@@ -338,8 +334,8 @@ bash tests/run_all.sh
 | Tool | Primary Inputs | Uses LLM | When to Use |
 | --- | --- | :---: | --- |
 | `weaveprof_status` | Workspace path | No | Inspect protected files, baseline/live SHA-256 hashes, valid seals, and best latency. |
-| `weaveprof_profile` | Source path, benchmark command, card | Yes | End-to-end automated profiling from scratch (stage identification -> isolated inject & 4 checks -> auto-coarsen -> aligned PNG -> seal). |
-| `weaveprof_megakernel_audit` | Source & benchmark config (rejects self-reported inputs) | No | Isolated-copy build, GPU run, 4 checks, cross-SM skew analysis, PNG render, and seal signing for instrumented megakernels. |
+| `weaveprof_megakernel_audit` | Source & isolated-copy edits (rejects self-reported inputs) | No | **Primary entry**: isolated-copy build, GPU run, 4 checks, cross-SM skew analysis, 4-panel PNG render, and seal signing. |
+| `weaveprof_profile` | Source path, benchmark command, card | Yes (optional) | Headless batch entry calling an external LLM endpoint to auto-generate a probe plan when running without a host coding agent. |
 | `weaveprof_plan_context` | Source path & register/SMEM headroom | No | Recommend recorder context storage mode and compiler flags. |
 | `weaveprof_analyze` | Aligned SW+HW trace | No | Compute/bandwidth summary, cross-SM skew attribution, and ranked optimization ideas. |
 | `weaveprof_compare_rounds` | Previous & current round summaries | No | Compare rounds to confirm bottleneck removal or advise rollback on regression. |
@@ -362,7 +358,7 @@ bash tests/run_all.sh
 | --- | --- | --- |
 | CUDA C++ | `recorders/cuda_cpp/wp_lite.cuh` | `-DWP_LEVEL=0\|1\|2`, `-DWP_GRAN=0\|1`, `-DWP_TIMER=0\|1`; context switches: `-DWP_CTX_REG` (1×32-bit reg, 0 B SMEM, 32,767 records/lane cap), `-DWP_CTX_SMEM` (512 B SMEM at warp granularity / 16 B at CTA granularity), `-DWP_CTX_REG_NOINLINE`; host symbol binding via `cudaMemcpyToSymbol` / `cudaLibraryGetGlobal` (`wp_fi_c`, alias `wp_g`). |
 | HIP C++ | `recorders/hip_cpp/wp_lite_hip.h` | `-DWP_LEVEL=0\|1\|2`, `-DWP_GRAN=0\|1`, `-DWP_TIMER=0\|1` (default 1: cycle counter + `s_memrealtime` anchors); `global_store_dwordx4 ... nt`; `hipMemcpyToSymbol`. |
-| Triton (NVIDIA) | `recorders/triton/wp_triton.py` | Transparent launcher proxy strips `@triton.autotune` from the instrumented copy and pins the baseline winning config; PTX `st.global.cs.v4.u32`; fused transitions via `WP_TRANS`. |
+| Triton (NVIDIA) | `recorders/triton/wp_triton.py` | Transparent launcher proxy strips `@triton.autotune` from the instrumented copy and pins the baseline winning config; PTX `st.global.cs.v4.u32`; fused transitions via `WP_TRANS` and PTX-level automatic async pass (`triton_ptx_async.py`) extracting `cp.async`/`wgmma` in-flight depth and exposed waits with zero source edits. |
 | Triton (AMD) | `recorders/triton/wp_triton_amd.py` | Targets `gfx942` wave64 with 16-byte packed stores (`fi_open_16b` etc.) and `HW_ID`/`XCC_ID` physical CU decoding. |
 | CuTeDSL (NVIDIA) | `recorders/cutedsl/wp_cute.py` | Value-style SSA context with transparent function/descriptor proxies threading buffer tensors through `@cute.jit` launchers into `@cute.kernel`. |
 
@@ -375,5 +371,5 @@ bash tests/run_all.sh
 | Failure diagnostics | `feedback.json` | Failed-check diagnostics and hotspots returned for refinement |
 | Verification & seal records | `verify.json`, `seal.json` | Check metrics and HMAC-SHA256 signature bound to artifact hashes |
 | Session state & policy | `session.json` (`policy_hmac`) | Protected file hashes, valid seals, and signed immutable policy fields |
-| Three-panel aligned view | `overview.png` | Local PNG rendered by `weaveprof/viz.py` |
+| Four-panel aligned view | `overview.png` | Local four-panel SW+HW PNG rendered by `weaveprof/viz.py` |
 | Perfetto trace (optional) | `*.perfetto-trace` / `*.perfetto.json.gz` | Optional interactive Perfetto export |
