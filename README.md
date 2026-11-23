@@ -81,6 +81,8 @@ WeaveProfiler 把**自动低开销核内插桩**和**同次 200 kHz 硬件利用
 
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async 四联对齐图](docs/images/case_sm86_cuda_s6_4panel.png)
 
+> 桌面显卡长核排障案例：在 Windows RTX 3050（WDDM）上跑 `92 ms` 的 `8192³` Triton GEMM 时，WeaveProfiler 通过软硬对齐把 Panel (A) 4 次 `Active SMs → 0%` 垂直断崖与 Panel (B) 中被拉长至 ~`1 ms` 的异常蓝/红块微秒级锁定为桌面合成器抢占（详见 [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md)）。
+
 ### 4.3 开源算子库零签名修改四联图实测（NVIDIA H20，200.3 kHz `nsys`）
 
 不改动原始开源库函数签名与调用链，在 H20 上以真实生产长序列规模完成端到端闭环剖析并直出四联对齐图（全部 `max_diff=0.0`、零缓冲区溢出、全物理 Warp 100% 覆盖）：

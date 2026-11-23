@@ -1,9 +1,9 @@
 {
-  "file_count": 331,
+  "file_count": 333,
   "files": {
-    "README.md": "b8f58f29e49fd2b1f3b3b915a8efaad30572dc4c9e8f0af84db8cb429fed07a1",
-    "README_EN.md": "171bddbacea534a17f359b9c09a07f4a3e8e7503b351161a8e93817bb5d01905",
-    "SKILL.md": "2e88476d6a0860c21ed82057a64eb57f9fed294d2e526da5b91faed82b6380db",
+    "README.md": "51b29fa1d3fc1cc67d179e38e27e670430f38341d514630fd23c6bd6b02d8b80",
+    "README_EN.md": "5952dbd060b3827265dff29a1c3c95a67d8aa54d8e9d3f8acaae57056d87bcc5",
+    "SKILL.md": "072f29ecf0c1a2598654a193bd6deb72ada44b027b1da5571497dfc88d6db68f",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
     "configs/cards/b300_sm_100a.json": "e26f9dfa658c1c340549b9d41266be217b5a16475df1ab4649ef3d63335c8621",
@@ -58,6 +58,7 @@
     "configs/validation/schemas/scan-selection.schema.json": "dfaf613828cb550f836e886efb5352412edae63a2389f8955215442099b416b8",
     "docs/amd_mi308x.md": "7ce461866e3db539004ee2199292e826d7915d8306aed312f02a64128177322d",
     "docs/case_studies/h20_megamoe_optimization.md": "f8abe98befbfe3ce99c626227483458b76d99f2cd9c8e3584bf1345552bd944f",
+    "docs/case_studies/sm86_wddm_preemption.md": "fcc1ddcff9c401be2f33fd6a66455b197bf6bf034cebae0e42e76b306e27636a",
     "docs/design.md": "e94c0b602e40a22435ca8442f00d0198afc848012c55535bb515c64d2fb03004",
     "docs/images/case_h20_flashinfer_fa3.png": "6c781cb6ea17644d80797013130ea9656a2898b1f0a249931f70cb6c0406b31e",
     "docs/images/case_h20_flashkda.png": "1a3cb3c7321ff35535c4acd41bdd129142ae398d57ec827d83cd9df8e5897ca2",
@@ -65,6 +66,7 @@
     "docs/images/case_h20_megamoe_1p47x.png": "c3ee9f84f7bedc2db314af7079c4f09a18dfd692414fff0979da1038de5f347a",
     "docs/images/case_h20_triton_s5_4panel.png": "ace93e83c1bbf1111e413bb411b349d814955d3f1daf3c59075abf8b372261e6",
     "docs/images/case_sm86_cuda_s6_4panel.png": "07f3eacb552d4f9468986ab0ebc3f9e14565410e2b082e5e289d16b97a333e2d",
+    "docs/images/case_sm86_wddm_preemption.png": "99c42ed96e2566a50a98d5470eb1f1fd433124618bda87015909c0737a47d491",
     "docs/l20d_achievable_peak_rebase.md": "473520bd45ce533a5db2c6f9450754a71c06f0c3ba38a4805e51a0ac273bcf5f",
     "docs/nsys_pm_sampling.md": "86f27ebf3c31f142d33866bc5a7c65b272fc2eaa311cb0f647a3eb88a013774a",
     "docs/slow-path.md": "5347aa8f2c58195a8e026ce2d1c949e2f0286b08bf5438b2c59e3ee24be28f40",
@@ -330,11 +332,11 @@
     "weaveprof/pipeline/validate/validate_run.py": "2b785579616c820a5444f77484630fb0e11e8ee1ba9be4f591f7d2d2a1f0d9cd",
     "weaveprof/preview.py": "dfd402f6be05d5c990a7b0a1404f0c8273db7763eb9704f4599160261e6b38bf",
     "weaveprof/replay.py": "3d6c39de92302bc222bfa69f6b7bd4b7b4dcd94aaa12a20042d4edd39d4d35df",
-    "weaveprof/viz.py": "8be74d34157e8bbf69c97a89cb7a11a3677003744ca20cf5f7fcbba4234c10fc",
+    "weaveprof/viz.py": "bb19a60b207067ef8f7d9c5ff4f23de83cf821fd020787e6d20503e86e622cf1",
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
-  "generated_at_utc": "2026-11-23T12:56:49.995993Z",
-  "root_sha256": "061ce62cc923bbbb52e70879d9c158e6efd928e37d41519ebb0272423aa2fa63",
+  "generated_at_utc": "2026-11-23T13:07:05.479084Z",
+  "root_sha256": "328a47a4fa246cc5f6a1e1824f492c14f2b5cf2b8ac3576b52cc93a48be295cf",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }

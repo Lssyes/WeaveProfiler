@@ -81,6 +81,8 @@ Captured with same-run 200 kHz `nsys` GPU metrics on a `2048×2048×1280` 6-stag
 
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async Four-Panel Aligned View](docs/images/case_sm86_cuda_s6_4panel.png)
 
+> Desktop GPU forensic case study: on a `92 ms` `8192³` Triton GEMM under Windows WDDM (RTX 3050), locked SW+HW alignment tied four `Active SMs → 0%` cliffs in Panel (A) directly to `~1 ms` stretched blue/red stage blocks in Panel (B), pinpointing OS display context preemption to the microsecond (see [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md)).
+
 ### 4.3 Zero-Signature Four-Panel Profiling of Open-Source Kernels (NVIDIA H20, 200.3 kHz `nsys`)
 
 Closed-loop profiling on unmodified open-source libraries at production long-sequence shapes with zero signature edits, `max_diff=0.0`, zero buffer overflows, and 100% physical warp coverage:

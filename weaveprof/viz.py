@@ -1011,14 +1011,22 @@ def _pick_micro_zoom_window(
         return _cap_to_32_iters(zoom_cta, t0, t1, f"CTA {zoom_cta}")
 
     # Step 2: Multi-wave CTA selection vs single-wave persistent kernel
+    # Require >= 6 per-warp events inside a CTA for single-CTA micro-zoom so sparse/outer-only
+    # traces (e.g. K0-only peeling with 1-2 events per CTA) never zoom into an empty white canvas.
+    MIN_SINGLE_CTA_EVENTS = 6
     cands = []
+    sparse_cands = []
     for c, (t0, t1) in cta_bounds.items():
         dur = t1 - t0
         n_it = len(cta_iter_ts.get(c, ()))
         n_w = max(1, len(cta_warps.get(c) or ()))
-        if dur >= 0.4 and n_it >= 2:
+        if dur >= 0.4 and n_it >= 1:
             w_ratio = min(1.0, cta_wait.get(c, 0.0) / max(dur * n_w, 1e-6))
-            cands.append((c, t0, t1, dur, cta_wait.get(c, 0.0), w_ratio, n_it))
+            entry = (c, t0, t1, dur, cta_wait.get(c, 0.0), w_ratio, n_it)
+            if n_it >= MIN_SINGLE_CTA_EVENTS:
+                cands.append(entry)
+            else:
+                sparse_cands.append(entry)
 
     if len(cands) >= 2:
         cands.sort(key=lambda x: x[1])
@@ -1034,21 +1042,51 @@ def _pick_micro_zoom_window(
             chosen = by_dur[len(by_dur) // 2]
             reason = "steady-state p50 CTA"
         c_id, t0, t1, dur, _w, _wr, n_it = chosen
-        # If very short CTA (< 8 iters), extend to next adjacent CTA on the same SM
+        # If short CTA (< 8 iters), extend to next adjacent CTA and disable single-CTA filter so both CTAs render
+        keep_cta: Optional[int] = c_id
         if n_it < 8:
             pos = next(i for i, x in enumerate(cands) if x[0] == c_id)
             if pos + 1 < len(cands):
                 t1 = max(t1, cands[pos + 1][2])
                 reason += " + next CTA"
+                keep_cta = None
         if (t1 - t0) > 0.70 * t_max and n_it <= 48:
             return None
-        return _cap_to_32_iters(c_id, t0, t1, reason)
+        z0, z1, zc, zw, zr = _cap_to_32_iters(c_id, t0, t1, reason)
+        return z0, z1, (zc if keep_cta is not None else None), zw, zr
 
     if len(cands) == 1:
         # Single-wave persistent kernel / megakernel: cap to 32-iter sliding window if dense (> 48 iters)
         c_id, t0, t1, _dur, _w, _wr, n_it = cands[0]
         if n_it > 48:
             return _cap_to_32_iters(c_id, t0, t1, "persistent-kernel")
+
+    # Fallback for dense multi-CTA traces whose individual CTAs have < 6 events (e.g. outer-only probes):
+    # zoom into a consecutive multi-CTA wave block containing >= 12 events instead of an empty single CTA!
+    if len(sparse_cands) >= 6:
+        sparse_cands.sort(key=lambda x: x[1])
+        total_ev = sum(x[6] for x in sparse_cands)
+        if total_ev >= 12:
+            mid_idx = len(sparse_cands) // 2
+            lo_idx = mid_idx
+            hi_idx = mid_idx
+            acc_ev = sparse_cands[mid_idx][6]
+            while acc_ev < 16 and (lo_idx > 0 or hi_idx < len(sparse_cands) - 1) and (hi_idx - lo_idx + 1) < 16:
+                if hi_idx < len(sparse_cands) - 1:
+                    hi_idx += 1
+                    acc_ev += sparse_cands[hi_idx][6]
+                if acc_ev < 16 and lo_idx > 0:
+                    lo_idx -= 1
+                    acc_ev += sparse_cands[lo_idx][6]
+            z0 = sparse_cands[lo_idx][1]
+            z1 = sparse_cands[hi_idx][2]
+            if (z1 - z0) <= 0.65 * t_max and acc_ev >= 12:
+                pad = max(0.25, (z1 - z0) * 0.04)
+                n_ctas_win = hi_idx - lo_idx + 1
+                return (
+                    max(0.0, z0 - pad), min(t_max * 1.015, z1 + pad),
+                    None, 0.0, f"multi-CTA wave zoom ({n_ctas_win} CTAs, {acc_ev} events)",
+                )
     return None
 
 
