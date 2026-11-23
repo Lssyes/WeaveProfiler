@@ -86,10 +86,11 @@ Resolve the card, exact architecture, and language before reading mode-specific 
 
 | Card / architecture | `cuda_cpp` | `hip_cpp` | `triton` | `cutedsl` | Capture |
 |---|---|---|---|---|---|
-| [H20 / `sm_90`](configs/cards/h20.json) | yes | no | yes | yes | `nsys` |
-| [B300 / `sm_100a`](configs/cards/b300_sm_100a.json) | yes | no | yes | yes | `nsys` |
-| [B300 / `sm_103a`](configs/cards/b300_sm_103a.json) | yes | no | yes | yes | `nsys` |
+| [H20 / `sm_90`](configs/cards/h20.json) | yes | no | yes | yes | `nsys` (200 kHz) |
+| [B300 / `sm_100a`](configs/cards/b300_sm_100a.json) | yes | no | yes | yes | `nsys` (200 kHz) |
+| [B300 / `sm_103a`](configs/cards/b300_sm_103a.json) | yes | no | yes | yes | `nsys` (200 kHz) |
 | [MI308X / `gfx942`](configs/cards/mi308x.json) | `.cu` -> `hip_cpp` | yes | AMD Triton | no | same-run `rocprof-sys-run --rocm-events`, then `rocprofv3` fallback |
+| [Ampere / `sm_86`](configs/cards/sm86.json) | yes | no | yes | yes | `nsys` (200 kHz on Linux; software-anchored fallback on WSL2; auto `WP_TIMER=1` clock64 ~27 ns) |
 
 Language knowledge: [CUDA C++](configs/languages/cuda_cpp/patterns.json), [HIP C++](configs/languages/hip_cpp/patterns.json) and its [gfx942 recorder](configs/languages/hip_cpp/recorder_gfx942.json), [Triton on NVIDIA](configs/languages/triton/nvidia_patterns.json), [Triton on AMD](configs/languages/triton/amd_patterns.json), and [CuTeDSL](configs/languages/cutedsl/patterns.json).
 
@@ -188,9 +189,9 @@ On AMD Triton, generated interval calls use the MI308X wave64 recorder explicitl
 
 **capture.** Use `nsys` for NVIDIA. On MI308X use same-run `rocprof-sys-run --rocm-events` first and `rocprofv3` only when the preferred collector is unavailable or incompatible, recording the fallback reason. Capture must expose the four stable curve IDs exactly: `compute_util`, `memory_util`, `communication_util`, and `sm_active`. Missing evidence is `unavailable` with a reason, never zero and never a fabricated series. Keep software and hardware evidence distinct. Same-host interconnect evidence comes from NVLink or XGMI; cross-host communication requires NIC/RDMA/fabric evidence.
 
-The merged Chrome JSON `.perfetto.json.gz` is an intermediate debugging format. The final trace a user opens or receives must be the Perfetto native TrackEvent protobuf `.perfetto-trace` or `.perfetto-trace.gz`. `FI_LEVEL` selects recorder verbosity: `0=off`, `1=entry-only`, `2=full-events`. Probing enforces full deterministic event collection without ad-hoc loop sampling.
+**PNG-Only Visual Delivery Policy (Hook-Enforced by Default):** The primary deliverable a user opens and inspects is the 3-panel SW+HW overview PNG (`overview.png`, rendered directly via `wp.profile(..., out="overview.png")`, `weaveprof_megakernel_audit`, `weaveprof/viz.py`, or `wp_decode.py <dump> --names <names> -o overview.png`). Do **NOT** generate `.perfetto.json.gz`, `.trace.json.gz`, or `.perfetto-trace.gz` files by default — `weaveprof/guard_hook.py` actively blocks and cleans up stray `.gz` traces and refuses to let the agent stop until a valid non-empty `.png` deliverable exists (pass `--write-gz` / `write_perfetto_gz=True` / `WEAVEPROF_ALLOW_GZ=1` ONLY if the user explicitly asks for raw Perfetto debug export). `FI_LEVEL` selects recorder verbosity: `0=off`, `1=entry-only`, `2=full-events`. Probing enforces full deterministic event collection without ad-hoc loop sampling.
 
-For a full-audit capture, export with the exact command:
+For explicit opt-in native Perfetto protobuf export (only when explicitly requested by the user with `WEAVEPROF_ALLOW_GZ=1`), use:
 
 ```bash
 python3 -B weaveprof/pipeline/capture/export_perfetto_native.py --trace <merged_chrome_json.gz> --out <name__card-mi308x__...__fi-l2.perfetto-trace.gz>

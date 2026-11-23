@@ -407,6 +407,12 @@ class WeaveProfServer:
                     f"`{forbidden_key}` is not allowed on MCP weaveprof_megakernel_audit "
                     "(MCP audits always execute the isolated benchmark workflow)."
                 )
+        sess_pre = self._session() or {}
+        if sess_pre.get("png_only", True) and args.get("write_perfetto_gz"):
+            raise ValueError(
+                "`write_perfetto_gz=True` is blocked by the session PNG-only policy; "
+                "deliver `overview.png` instead (or re-install with `--allow-gz`)."
+            )
         args.setdefault("workspace", str(self.workspace))
         sess = self._session() or {}
         if "bench" in args and "bench_cmd" not in args:
@@ -468,8 +474,13 @@ class WeaveProfServer:
         self._limit(args)
         if sess.get("max_overhead") is not None:
             args["max_overhead_limit"] = float(sess["max_overhead"])
+        if sess.get("png_only", True) and args.get("write_perfetto_gz"):
+            raise ValueError(
+                "`write_perfetto_gz=True` is blocked by the session PNG-only policy; "
+                "deliver `overview.png` instead (or re-install with `--allow-gz`)."
+            )
         if not args.get("out"):
-            args["out"] = str(self._runs_dir() / "out.perfetto-trace")
+            args["out"] = str(self._runs_dir() / "overview.png")
         ctx = supervisor_env(self.session_dir) if (self.session_dir / KEY_FILE).is_file() else contextlib.nullcontext()
         with ctx, _chdir(self.workspace):
             res = _handle_profile(args)

@@ -55,9 +55,9 @@ TRACK_SOFTWARE_COUNTER_BASE = 0x400000
 TRACK_HARDWARE_BASE = 0x500000
 TRACK_COMMUNICATION_UUID = 0x600000
 TRACK_PROCESS_BASE = 0x700000
-KNOWN_CARDS = ("h20", "b300", "mi308x")
+KNOWN_CARDS = ("h20", "b300", "mi308x", "sm86")
 CARD_FILENAME_RE = re.compile(
-    r"(?<![A-Za-z0-9])card-(h20|b300|mi308x)(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])card-(h20|b300|mi308x|sm86)(?![A-Za-z0-9])"
 )
 
 

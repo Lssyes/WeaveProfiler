@@ -1097,7 +1097,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dump", nargs="?")
     ap.add_argument("--names")
-    ap.add_argument("-o", "--out")
+    ap.add_argument("-o", "--out", help="输出路径：推荐直接传 overview.png（仅出 PNG，不写 .gz）；写 .gz 需显式加 --write-gz")
+    ap.add_argument("--png", help="直接渲染 3-panel SW+HW 概览 PNG（默认不写 .perfetto.json.gz）")
+    ap.add_argument("--title", default=None, help="PNG 标题（可选）")
+    ap.add_argument("--sm", type=int, default=None, help="Panel (C) 展示的物理 SM/CU 编号")
+    ap.add_argument("--dpi", type=int, default=220, help="PNG DPI（默认 220）")
+    ap.add_argument("--write-gz", action="store_true",
+                    help="显式允许写出调试用 .perfetto.json.gz（默认 PNG-only 策略禁止写出 .gz）")
     ap.add_argument("--summary")
     ap.add_argument("--allow-errors", action="store_true")
     ap.add_argument("--gran", choices=["auto", "warp", "sm", "cu"], default="auto",
@@ -1118,11 +1124,26 @@ def main():
     a = ap.parse_args()
     if a.selftest:
         return selftest()
-    if not (a.dump and a.names and a.out):
-        ap.error("需要 dump、--names、-o")
-    if not a.out.endswith(".gz"):
-        print(f"提示：交付格式固定为 gzip，输出改为 {a.out}.gz")
-        a.out += ".gz"
+    if not (a.dump and a.names and (a.out or a.png)):
+        ap.error("需要 dump、--names，以及 -o overview.png 或 --png overview.png")
+    png_out = a.png
+    trace_out = a.out
+    if trace_out and trace_out.lower().endswith(".png"):
+        png_out = trace_out
+        trace_out = None
+    allow_gz = bool(a.write_gz or os.environ.get("WEAVEPROF_ALLOW_GZ") == "1")
+    if trace_out:
+        if trace_out.lower().endswith(".gz") or not trace_out.lower().endswith(".json"):
+            if not allow_gz:
+                raise SystemExit(
+                    f"WeaveProfiler 默认仅交付 PNG，禁止生成 {trace_out}；"
+                    "请改为 `-o overview.png` 或 `--png overview.png`（若确需调试用 gzip，请显式加 --write-gz）。"
+                )
+        elif not allow_gz and not png_out:
+            raise SystemExit(
+                f"WeaveProfiler 默认仅交付 PNG，不再自动改写为 {trace_out}.gz；"
+                "请改为 `-o overview.png` 或 `--png overview.png`（若确需调试用 JSON/gzip，请显式加 --write-gz）。"
+            )
     names = json.load(open(a.names, encoding="utf-8"))
     cta_cu_map = None
     cta_hw_map = None
@@ -1159,9 +1180,18 @@ def main():
     if sm["errors"] and not a.allow_errors:
         print("有结构错误，未写文件；确认后加 --allow-errors 强制输出", file=sys.stderr)
         sys.exit(2)
-    write_json(tr, a.out)
-    write_json(sm, a.summary or (a.out.replace(".gz", "").replace(".json", "") + ".summary.json"))
-    print("写出", a.out)
+    if png_out:
+        from weaveprof.viz import render_swhw_overview_png
+        rendered = render_swhw_overview_png(tr, png_out, title=a.title, focus_sm=a.sm, dpi=a.dpi)
+        print("写出 PNG", rendered)
+    if trace_out:
+        if allow_gz and not trace_out.endswith(".gz") and trace_out.endswith(".perfetto.json"):
+            trace_out += ".gz"
+        write_json(tr, trace_out)
+        print("写出", trace_out)
+    if a.summary or trace_out:
+        sum_path = a.summary or (trace_out.replace(".gz", "").replace(".json", "") + ".summary.json")
+        write_json(sm, sum_path)
     sys.exit(2 if sm["errors"] else 0)
 
 

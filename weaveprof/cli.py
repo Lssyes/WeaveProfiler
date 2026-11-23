@@ -19,7 +19,7 @@ def main(argv=None):
         sub = subs.add_parser(action)
         sub.add_argument("target_pos", nargs="?", help="Optional positional source (identify/profile) or probe.json (verify)")
         sub.add_argument("--source")
-        sub.add_argument("-o", "--out", required=is_id, default="out.perfetto-trace")
+        sub.add_argument("-o", "--out", required=is_id, default="overview.png")
         sub.add_argument("--feedback")
         if not is_ver:
             sub.add_argument("--model", default="qwen4-max")

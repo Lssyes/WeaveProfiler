@@ -50,7 +50,7 @@ def decode(dump: Path, names: dict, workdir: Path, extra=()) -> tuple[dict, dict
     names_path.write_text(json.dumps(names, ensure_ascii=False), encoding="utf-8")
     out = workdir / (dump.stem + ".perfetto.json")
     cmd = [sys.executable, "-I", str(DECODER), str(dump), "--names", str(names_path),
-           "-o", str(out), *extra]
+           "-o", str(out), "--write-gz", *extra]
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
     gz = Path(str(out) + ".gz")
     if not gz.exists():
@@ -189,7 +189,7 @@ def main() -> int:
     names_path = tmp / "broken.names.json"
     names_path.write_text(json.dumps(NAMES, ensure_ascii=False), encoding="utf-8")
     p = subprocess.run([sys.executable, "-I", str(DECODER), str(bad), "--names", str(names_path),
-                        "-o", str(tmp / "broken.perfetto.json")],
+                        "-o", str(tmp / "broken.perfetto.json"), "--write-gz"],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
     assert p.returncode == 2 and not (tmp / "broken.perfetto.json.gz").exists(), (p.returncode, p.stdout)
     assert "未配对" in p.stdout, p.stdout

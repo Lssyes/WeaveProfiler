@@ -1795,6 +1795,18 @@ def run_megakernel_audit(
             blockers.append("OVERVIEW_PNG_SKIPPED: matplotlib unavailable")
         except Exception as exc:
             blockers.append(f"OVERVIEW_PNG_FAILED: {type(exc).__name__}: {exc}"[:160])
+        if status == "PASS":
+            valid_png = False
+            if overview_png_path and overview_png_path.is_file():
+                try:
+                    raw_hdr = overview_png_path.read_bytes()[:8]
+                    valid_png = (raw_hdr == b"\x89PNG\r\n\x1a\n" and overview_png_path.stat().st_size > 1024)
+                except OSError:
+                    valid_png = False
+            if not valid_png:
+                status = "FAIL"
+                hard_fail = True
+                blockers.append("MISSING_OVERVIEW_PNG: render_overview_png=True requires a valid non-empty overview.png")
 
     result = {"status": status, "checks": checks, "failed": failed + (["structural"] if hard_fail else []),
               "metrics": {"overhead_ratio": g_overhead.get("overhead_ratio"), "region_lock": region_lock}}

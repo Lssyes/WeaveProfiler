@@ -97,9 +97,24 @@ FIVE_CLASS_MAP: Dict[str, str] = {
 }
 
 CARD_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    "h20": {"platform": "nv", "arch": "sm_90a", "warp_size": 32, "card_file": "h20.json"},
-    "b300": {"platform": "nv", "arch": "sm_103a", "warp_size": 32, "card_file": "b300_sm_103a.json"},
-    "mi308x": {"platform": "amd", "arch": "gfx942", "warp_size": 64, "card_file": "mi308x.json"},
+    "h20": {"platform": "nv", "arch": "sm_90a", "warp_size": 32, "card_file": "h20.json", "default_timer": 0},
+    "b300": {"platform": "nv", "arch": "sm_103a", "warp_size": 32, "card_file": "b300_sm_103a.json", "default_timer": 0},
+    "mi308x": {"platform": "amd", "arch": "gfx942", "warp_size": 64, "card_file": "mi308x.json", "default_timer": 1},
+    "sm86": {"platform": "nv", "arch": "sm_86", "warp_size": 32, "card_file": "sm86.json", "default_timer": 1},
+}
+
+_CARD_ALIASES: Dict[str, str] = {
+    "sm_86": "sm86",
+    "sm-86": "sm86",
+    "rtx3050": "sm86",
+    "rtx3060": "sm86",
+    "rtx3070": "sm86",
+    "rtx3080": "sm86",
+    "rtx3090": "sm86",
+    "ampere": "sm86",
+    "a10": "sm86",
+    "a40": "sm86",
+    "a6000": "sm86",
 }
 
 
@@ -154,12 +169,20 @@ def resolve_route(card: str, arch: Optional[str], language: str) -> Dict[str, An
             import torch
             if torch.cuda.is_available():
                 label = torch.cuda.get_device_name().lower()
+                cap = None
+                try:
+                    cap = tuple(torch.cuda.get_device_capability())
+                except Exception:
+                    cap = None
                 if getattr(torch.version, "hip", None):
                     c = "mi308x"
-                elif "b300" in label:
+                elif "b300" in label or cap in ((10, 0), (10, 3)):
                     c = "b300"
+                elif cap == (8, 6) or any(tok in label for tok in ("rtx 30", "a10", "a40", "a6000")):
+                    c = "sm86"
         except ImportError:
             pass
+    c = _CARD_ALIASES.get(c, c)
     if c not in CARD_DEFAULTS:
         raise ValueError(f"Unsupported card {card!r}; expected one of {sorted(CARD_DEFAULTS)}")
     info = dict(CARD_DEFAULTS[c])

@@ -1,0 +1,54 @@
+{
+  "schema": "weaveprofiler.card/v1",
+  "version": 1,
+  "kind": "card_wrapper",
+  "card": "sm86",
+  "display_name": "NVIDIA Ampere sm_86 (RTX 30xx / A10 / A40 / A6000)",
+  "vendor": "nvidia",
+  "platform": "nv",
+  "visibility": "public",
+  "warp_size": 32,
+  "architectures": [
+    "sm_86"
+  ],
+  "machine_profiles": [
+    {
+      "arch": "sm_86",
+      "profile": "sm86_sm_86.json",
+      "evidence_status": "measured",
+      "evidence_scope": "Local NVIDIA GeForce RTX 3050 Laptop GPU (16 SM, sm_86, WSL2 /dev/dxg, CUDA 13.1, Triton 3.9.0) timer resolution, cp.async/mma PTX/SASS, and closed-loop Triton GEMM verification."
+    }
+  ],
+  "profiler": {
+    "primary": "nsys",
+    "fallback": [],
+    "sampling_model": "periodic_pm",
+    "preferred_sample_hz": 200000,
+    "evidence": "measured_local_sm86",
+    "note": "On bare-metal Linux sm_86, request 200 kHz nsys GPU metrics; on WSL2 /dev/dxg or unprivileged containers where GPU PMU counters are blocked, software timelines remain verified with automatic WP_TIMER=1 (%clock64 + %globaltimer anchors, ~27 ns step) to avoid consumer sm_86 1024 ns %globaltimer quantization."
+  },
+  "languages": [
+    "cuda_cpp",
+    "triton",
+    "cutedsl"
+  ],
+  "summary": {
+    "machine": "Local NVIDIA GeForce RTX 3050 Laptop GPU sm_86 (16 SM, 4 GiB, WSL2 CUDA 13.1)",
+    "date": "2026-11-23",
+    "device": {
+      "sm_count": 16,
+      "note": "Local RTX 3050 Laptop GPU has 16 SMs (other sm_86 cards scale SM count automatically from device query)."
+    },
+    "toolchain": {
+      "cuda": "13.1",
+      "python_stack": "torch 2.14.1+cu130 / triton 3.9.0"
+    },
+    "timer_facts": {
+      "globaltimer_min_step_ns": 1024,
+      "clock64_min_step_ns": 27,
+      "default_timer": 1,
+      "note": "Consumer Ampere sm_86 %globaltimer steps at 1024 ns; WeaveProfiler automatically selects WP_TIMER=1 (%clock64 + %globaltimer OPEN/CLOSE anchors) on sm_86 for ~27 ns resolution."
+    },
+    "profile_metadata": "Full probes, limits, timer protocol, and evidence paths are preserved in sm86_sm_86.json."
+  }
+}

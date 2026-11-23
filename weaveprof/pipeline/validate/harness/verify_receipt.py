@@ -33,10 +33,11 @@ CARD_TARGETS = {
     "h20": {"platform": "nv", "arches": frozenset(("sm_90",))},
     "b300": {"platform": "nv", "arches": frozenset(("sm_100a", "sm_103a"))},
     "mi308x": {"platform": "amd", "arches": frozenset(("gfx942",))},
+    "sm86": {"platform": "nv", "arches": frozenset(("sm_86",))},
 }
 SPEC1 = re.compile(
     r"^trace__(?P<model>[a-z0-9]+)_(?P<stage>[a-z0-9]+)"
-    r"__card-(?P<card>h20|b300|mi308x)"
+    r"__card-(?P<card>h20|b300|mi308x|sm86)"
     r"__bs(?P<batch>\d+)_sq(?P<seqlen_q>\d+)(?:_kv(?P<seqlen_kv>\d+))?"
     r"__(?P<dtype>[a-z0-9]+)"
     r"__grid(?P<grid>\d+)_warp(?P<warp>\d+)_ph(?P<phases>\d+)"

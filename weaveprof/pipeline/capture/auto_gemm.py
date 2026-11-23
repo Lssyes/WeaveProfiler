@@ -468,6 +468,7 @@ def _decode_dump(dump_path: Path, names_path: Path, out_prefix: Path) -> Dict[st
             str(dump_path),
             "--names", str(names_path),
             "--require-semantics",
+            "--write-gz",
             "-o", str(trace_base),
             "--summary", str(summary_path),
         ],

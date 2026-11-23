@@ -103,6 +103,21 @@ ARCH_PROFILES: Dict[str, Dict[str, Any]] = {
         "empirical_tensor_ratio": 0.94,
         "empirical_hbm_ratio": 0.85,
     },
+    "sm_86": {
+        "card": "sm86",
+        "platform": "nv",
+        "default_sms": 16,
+        "max_smem_bytes": 101376,
+        "reg_file_per_sm": 65536,
+        "max_regs_per_thread": 255,
+        "tensor_active_scale": 1.0,
+        "tensor_raw_uncalibrated_ceiling": 101.0,
+        "tensor_saturated_pct": 80.0,
+        "dram_saturated_pct": 70.0,
+        "empirical_tensor_ratio": 0.92,
+        "empirical_hbm_ratio": 0.85,
+        "default_timer": 1,
+    },
     "gfx942": {
         "card": "mi308x",
         "platform": "amd",
@@ -150,6 +165,10 @@ def get_arch_profile(arch: Optional[str] = None, gpu_name: Optional[str] = None)
     if "mi308" in gpu or "gfx942" in key or "amd" in gpu:
         prof = dict(ARCH_PROFILES["gfx942"])
         prof["arch"] = "gfx942"
+        return prof
+    if "sm_86" in key or "sm86" in key or "sm86" in gpu or "rtx 30" in gpu or "rtx30" in gpu or "ampere" in gpu:
+        prof = dict(ARCH_PROFILES["sm_86"])
+        prof["arch"] = "sm_86"
         return prof
     return {
         "arch": key or "unknown",

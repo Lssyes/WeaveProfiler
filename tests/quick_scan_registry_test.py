@@ -138,7 +138,7 @@ class QuickScanRouteTests(unittest.TestCase):
         self.assertEqual(report["language"], "triton")
         self.assertEqual(report["recorder"], "recorders/triton/wp_triton.py")
         self.assertEqual(report["profiler"]["primary"], "nsys")
-        self.assertEqual(report["evidence_status"], "cross_compile_only")
+        self.assertEqual(report["evidence_status"], "measured_on_b300_200khz")
 
     def test_mi308x_hip_route_and_unresolved_is_slow_path(self):
         report = self._report(

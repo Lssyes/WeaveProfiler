@@ -759,13 +759,34 @@ else:
 # --------------------------------------------------------------------------
 # host 侧：等价 fi_alloc + fi_attach + fi_reset + fi_dump
 # --------------------------------------------------------------------------
+def default_timer_for_device(device: str = "cuda", explicit: Optional[int] = None) -> int:
+    """Select high-resolution timer automatically: sm_86/sm_89 consumer GPUs have 1024 ns
+    %globaltimer steps, so default to timer=1 (%clock64 + %globaltimer OPEN/CLOSE anchors,
+    ~27 ns step) unless WP_TIMER/FI_TIMER or explicit timer is specified."""
+    if explicit is not None:
+        return int(explicit)
+    for k in ("WP_TIMER", "FI_TIMER"):
+        v = os.environ.get(k)
+        if v not in (None, ""):
+            return int(v)
+    try:
+        if torch is not None and torch.cuda.is_available():
+            dev_idx = torch.device(device).index
+            cap = torch.cuda.get_device_capability(dev_idx) if dev_idx is not None else torch.cuda.get_device_capability()
+            if tuple(cap) in ((8, 6), (8, 9)):
+                return 1
+    except Exception:
+        pass
+    return 0
+
+
 class FiBuffer:
     """n_ctas: grid 里 CTA 总数；warps_per_cta: num_warps；cap: 每泳道最大记录条数。
     gran=1（SM/CU 粒度）时每 CTA 只有 1 条泳道，转储头里的 warps_per_cta 写 1。
     rec/overflow 两个张量直接当 kernel 实参传（Triton 取 data_ptr）。"""
 
     def __init__(self, n_ctas: int, warps_per_cta: int, cap: int, device: str = "cuda",
-                 gran: int = 0, timer: int = 0, level: int = 2, groups: int = 0xFFFFFFFF,
+                 gran: int = 0, timer: Optional[int] = None, level: int = 2, groups: int = 0xFFFFFFFF,
                  backend: str = "nvidia_ptx", fence: int = 0):
         self.n_ctas = int(n_ctas)
         self.gran = int(gran)
@@ -774,10 +795,11 @@ class FiBuffer:
         self.cap = int(cap)
         self.n_slots = self.n_ctas * self.warps_per_cta
         self.device = device
+        resolved_timer = default_timer_for_device(device, timer)
         self.rec = torch.zeros((self.n_slots, self.cap, 4), dtype=torch.int32, device=device)
         self.overflow = torch.zeros((1,), dtype=torch.int32, device=device)
         self.cfg = FiCfg(cap=self.cap, warps=self.warps_per_cta, n_slots=self.n_slots, gran=self.gran,
-                         timer=timer, level=level, groups=groups, threads=self.num_warps * 32,
+                         timer=resolved_timer, level=level, groups=groups, threads=self.num_warps * 32,
                          backend=backend, fence=fence)
 
     @property

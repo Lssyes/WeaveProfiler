@@ -949,7 +949,7 @@ def decode_software(dump: Path, names: Path, shape: Tuple[int, int, int],
     trace_base = out_dir / "gemm_sw.perfetto.json"
     summary_path = out_dir / "gemm_sw.summary.json"
     command = [sys.executable, "-B", str(DECODER), str(dump),
-               "--names", str(names), "--require-semantics",
+               "--names", str(names), "--require-semantics", "--write-gz",
                "-o", str(trace_base), "--summary", str(summary_path)]
     result = run_subprocess(command, cwd=out_dir, env={"PYTHONDONTWRITEBYTECODE": "1"},
                             timeout=bounded_timeout(deadline_mono, 600.0),

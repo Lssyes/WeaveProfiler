@@ -1004,6 +1004,68 @@ class HygieneTest(unittest.TestCase):
             if rel.endswith(".py"):
                 self.assertIn(b"sys.dont_write_bytecode = True", raw, rel)
 
+    def test_viz_origin_shift_hw_pid_filter_sm86_and_cutedsl_order(self):
+        # 1. viz.py normalizes absolute nsys timestamps (e.g. 3.4e6 us) to 0-based, drops pid=90000 & residency
+        from weaveprof import viz
+        aligned_trace = {
+            "traceEvents": [
+                {"ph": "M", "pid": 90000, "tid": 0, "name": "process_name", "args": {"name": "Hardware & Activity Curves"}},
+                {"ph": "X", "pid": 90000, "tid": 0, "ts": 3408170.5, "dur": 192.5, "name": "gemm_k", "cat": "hardware", "args": {"kind": "dispatch"}},
+                {"ph": "M", "pid": 100000, "tid": 0, "name": "process_name", "args": {"name": "SM 000"}},
+                {"ph": "M", "pid": 100000, "tid": 1, "name": "thread_name", "args": {"name": "warp 00 · slot 0"}},
+                {"ph": "X", "pid": 100000, "tid": 1, "ts": 3408171.0, "dur": 190.0, "name": "Warp residency", "cat": "residency", "args": {"sm": 0, "warp": 0, "role": "math", "kind": "residency"}},
+                {"ph": "X", "pid": 100000, "tid": 1, "ts": 3408171.5, "dur": 188.0, "name": "gemm", "cat": "gemm", "args": {"sm": 0, "warp": 0, "semantic_id": "gemm", "role": "math"}},
+                {"ph": "X", "pid": 100000, "tid": 1, "ts": 3408172.0, "dur": 12.0, "name": "load", "cat": "load", "args": {"sm": 0, "warp": 0, "semantic_id": "load", "display_label": "A/B Tile Load", "role": "math"}},
+                {"ph": "X", "pid": 100000, "tid": 1, "ts": 3408184.0, "dur": 160.0, "name": "mma", "cat": "mma", "args": {"sm": 0, "warp": 0, "semantic_id": "mma", "display_label": "HMMA K-Tile", "role": "math"}},
+                {"ph": "X", "pid": 100000, "tid": 1, "ts": 3408344.0, "dur": 14.0, "name": "store", "cat": "store", "args": {"sm": 0, "warp": 0, "semantic_id": "store", "display_label": "C Epilogue Store", "role": "math"}},
+            ],
+            "otherData": {"meta": {"arch": "sm_86", "card": "sm86"}},
+        }
+        parsed = viz._parse_trace(aligned_trace)
+        self.assertEqual(parsed["sms"], [0], f"ghost SM leaked: {parsed['sms']}")
+        self.assertLess(parsed["t_max"], 250.0, f"timestamps not shifted from 3.4e6: {parsed['t_max']}")
+        self.assertNotIn("gemm", parsed["stages_seen"], "outer gemm macro-envelope should be omitted when inner stages exist")
+        self.assertEqual(set(parsed["stages_seen"]), {"load", "mma", "store"})
+
+        # 2. sm86 card/arch routing & registry resolution
+        from weaveprof.pipeline.scan import llm_probe_placer as placer
+        from weaveprof.pipeline.core import registry
+        from weaveprof.causal import get_arch_profile
+        r1 = placer.resolve_route("sm86", None, "triton")
+        r2 = placer.resolve_route("rtx3050", None, "cuda_cpp")
+        self.assertEqual((r1["card"], r1["arch"], r1["default_timer"]), ("sm86", "sm_86", 1))
+        self.assertEqual((r2["card"], r2["arch"]), ("sm86", "sm_86"))
+        t = registry.resolve_target(card="sm86")
+        self.assertEqual((t["card"], t["arch"], t["platform"]), ("sm86", "sm_86", "nv"))
+        self.assertEqual(get_arch_profile("sm_86")["card"], "sm86")
+
+        # 3. CuTeDSL @cute.jit defined BEFORE @cute.kernel is lowered properly
+        from weaveprof.pipeline.instrument import rule_engine
+        cute_src = (
+            "import cutlass\nimport cutlass.cute as cute\n\n"
+            "class Demo:\n"
+            "    @cute.jit\n"
+            "    def __call__(self, a, b, c):\n"
+            "        self.kernel(a, b, c).launch(grid=[1,1,1], block=[128,1,1])\n\n"
+            "    @cute.kernel\n"
+            "    def kernel(self, a, b, c):\n"
+            "        x = a[0]\n"
+            "        y = x + b[0]\n"
+            "        c[0] = y\n"
+        )
+        spec = {
+            "language": "cutedsl", "card": "b300", "arch": "sm_103a", "operator_family": "gemm",
+            "warp_roles": [{"role_id": 0, "name": "math", "predicate": "True"}],
+            "probes": [
+                {"id": "tile_load", "semantic_id": "load", "begin_line": 11, "end_line": 11, "role_id": 0},
+                {"id": "tile_mma", "semantic_id": "mma", "begin_line": 12, "end_line": 12, "role_id": 0},
+            ],
+        }
+        res = rule_engine.inject_probes(cute_src, spec)
+        self.assertTrue(res["ok"], res.get("diagnostics"))
+        self.assertIn("_fi_inst___call__(self, a, b, c, _fi_rec=None, _fi_ovf=None)", res["instrumented_source"])
+        self.assertIn("self._fi_inst_kernel(a, b, c, _fi_rec=_fi_rec, _fi_ovf=_fi_ovf)", res["instrumented_source"])
+
 
 if __name__ == "__main__":
     unittest.main()

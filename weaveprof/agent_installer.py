@@ -219,7 +219,8 @@ def _bench_list(bench_cmd: Union[None, str, Sequence[str]]) -> Optional[List[str
 # ---------------------------------------------------------------------------
 
 def _provision_session(workspace: Path, files: List[Path], *, sd: Path, bench: Optional[List[str]], card: str,
-                       arch: Optional[str], max_overhead: float, require_final_seal: bool, reset: bool) -> Dict[str, Any]:
+                       arch: Optional[str], max_overhead: float, require_final_seal: bool,
+                       png_only: bool = True, reset: bool = False) -> Dict[str, Any]:
     sd.mkdir(parents=True, exist_ok=True)
     _chmod(sd.parent, 0o700)
     _chmod(sd, 0o700)
@@ -259,6 +260,7 @@ def _provision_session(workspace: Path, files: List[Path], *, sd: Path, bench: O
         "updated_at": now,
         "protected": protected,
         "require_final_seal": bool(require_final_seal),
+        "png_only": bool(png_only),
         "max_overhead": float(max_overhead),
         "bench_cmd": bench if bench is not None else session.get("bench_cmd"),
         "card": card,
@@ -482,6 +484,7 @@ def install_agent_workspace(
     arch: Optional[str] = None,
     max_overhead: float = 0.10,
     require_final_seal: bool = True,
+    png_only: bool = True,
     python_exe: Optional[str] = None,
     sessions_root: Optional[Union[str, Path]] = None,
     reset: bool = False,
@@ -503,7 +506,8 @@ def install_agent_workspace(
         raise ValueError(f"Session directory {sd} must be outside workspace {ws}")
     py = python_exe or sys.executable
     session = _provision_session(ws, files, sd=sd, bench=_bench_list(bench_cmd), card=card, arch=arch,
-                                 max_overhead=max_overhead, require_final_seal=require_final_seal, reset=reset)
+                                 max_overhead=max_overhead, require_final_seal=require_final_seal,
+                                 png_only=png_only, reset=reset)
     written: List[str] = []
     config_paths: List[Path] = []
     want_claude = agent in ("all", "both", "claude")
@@ -771,6 +775,99 @@ def guard_exec(
 # CLI
 # ---------------------------------------------------------------------------
 
+def _global_hook_command(py: str, event: str, *, protocol: Optional[str] = None,
+                         sessions_root: Optional[Union[str, Path]] = None,
+                         ps_safe: bool = False) -> str:
+    parts = [_posix(py), "-B", _posix(GUARD_HOOK), "--global-guard"]
+    if sessions_root:
+        parts.extend(["--sessions-root", _posix(Path(sessions_root).expanduser().resolve())])
+    if protocol:
+        parts.extend(["--protocol", protocol])
+    parts.extend(["--event", event])
+    if ps_safe and os.name == "nt":
+        quoted = [_ps_quote(x) for x in parts]
+        return "& " + " ".join(quoted)
+    quoted = [_shell_quote(x) for x in parts]
+    return " ".join(quoted)
+
+
+def _merge_global_hooks(doc: Dict[str, Any], py: str, matcher: str, *,
+                        events: Sequence[str] = HOOK_EVENTS, protocol: Optional[str] = None,
+                        named: bool = False, ps_safe: bool = False,
+                        sessions_root: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+    hooks = doc.get("hooks") if isinstance(doc.get("hooks"), dict) else {}
+    for event in events:
+        groups = hooks.get(event) if isinstance(hooks.get(event), list) else []
+        cleaned = []
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            inner = [h for h in (g.get("hooks") or [])
+                     if not (isinstance(h, dict) and "guard_hook.py" in str(h.get("command", "")))]
+            if inner:
+                g = dict(g)
+                g["hooks"] = inner
+                cleaned.append(g)
+        handler: Dict[str, Any] = {
+            "type": "command",
+            "command": _global_hook_command(py, event, protocol=protocol, sessions_root=sessions_root, ps_safe=ps_safe),
+            "timeout": 120,
+        }
+        if ps_safe and os.name == "nt":
+            handler["shell"] = "powershell"
+        if named:
+            handler["name"] = f"weaveprofiler-global-{event.lower()}"
+        entry: Dict[str, Any] = {"hooks": [handler]}
+        if event not in ("Stop", "SubagentStop"):
+            entry = {"matcher": matcher, **entry}
+        cleaned.append(entry)
+        hooks[event] = cleaned
+    doc["hooks"] = hooks
+    return doc
+
+
+def install_global_hooks(
+    *,
+    agent: str = "qwen",
+    home_dir: Optional[Union[str, Path]] = None,
+    python_exe: Optional[str] = None,
+    sessions_root: Optional[Union[str, Path]] = None,
+) -> Dict[str, Any]:
+    """Install user-global PNG-only + Stop-gate hooks into ~/.qwen/settings.json and/or ~/.claude/settings.json.
+
+    When launched inside a provisioned workspace, the global hook automatically delegates to the
+    workspace's full HMAC-sealed session guard; outside a provisioned workspace, it stays silent
+    for unrelated work and activates PNG-only + no-.gz + Stop-gate enforcement whenever a session
+    runs WeaveProfiler profiling.
+    """
+    home = Path(home_dir).expanduser().resolve() if home_dir else Path.home().resolve()
+    py = python_exe or sys.executable
+    agent_norm = (agent or "qwen").lower()
+    if agent_norm not in ("all", "qwen", "claude"):
+        raise ValueError("global install supports agent in: qwen, claude, all")
+    written: List[str] = []
+    if agent_norm in ("all", "qwen"):
+        qwen_settings = home / ".qwen" / "settings.json"
+        qdoc = _load_json(qwen_settings)
+        qdoc["disableAllHooks"] = False
+        qdoc = _merge_global_hooks(
+            qdoc, py, ".*", events=QWEN_HOOK_EVENTS, protocol="qwen",
+            named=True, ps_safe=True, sessions_root=sessions_root,
+        )
+        _dump_json(qwen_settings, qdoc)
+        written.append(str(qwen_settings))
+    if agent_norm in ("all", "claude"):
+        claude_settings = home / ".claude" / "settings.json"
+        cdoc = _load_json(claude_settings)
+        cdoc = _merge_global_hooks(
+            cdoc, py, "*", events=CLAUDE_HOOK_EVENTS, protocol="claude",
+            sessions_root=sessions_root,
+        )
+        _dump_json(claude_settings, cdoc)
+        written.append(str(claude_settings))
+    return {"ok": True, "mode": "global", "agent": agent_norm, "files_written": written}
+
+
 def _add_install_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--workspace", default=".")
     p.add_argument("--protect", action="append", default=None, help="Protected kernel file (repeatable)")
@@ -780,6 +877,7 @@ def _add_install_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--arch", default=None)
     p.add_argument("--max-overhead", type=float, default=0.10)
     p.add_argument("--no-require-final-seal", action="store_true")
+    p.add_argument("--allow-gz", action="store_true", help="Opt-out of PNG-only policy and allow .perfetto*.gz outputs")
     p.add_argument("--python", default=None)
     p.add_argument("--sessions-root", default=None)
 
@@ -790,6 +888,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_inst = sub.add_parser("install", help="Provision Claude Code / Codex CLI / Qwen Code / Antigravity wiring + session")
     _add_install_args(p_inst)
+    p_inst.add_argument("--global", dest="global_install", action="store_true",
+                        help="Install user-global PNG-only + Stop-gate hooks into ~/.qwen/settings.json and/or ~/.claude/settings.json")
+    p_inst.add_argument("--home", default=None, help="Override home directory for --global install")
     p_inst.add_argument("--reset", action="store_true", help="Regenerate key, baseline and seals")
     p_ge = sub.add_parser("guard-exec", help="Run an agent command under the wp supervisor")
     _add_install_args(p_ge)
@@ -801,10 +902,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(args_in)
     try:
         if args.cmd == "install":
-            res = install_agent_workspace(
-                args.workspace, args.protect, agent=args.agent, bench_cmd=args.bench, card=args.card,
-                arch=args.arch, max_overhead=args.max_overhead, require_final_seal=not args.no_require_final_seal,
-                python_exe=args.python, sessions_root=args.sessions_root, reset=args.reset)
+            if getattr(args, "global_install", False):
+                res = install_global_hooks(
+                    agent=args.agent, home_dir=args.home, python_exe=args.python,
+                    sessions_root=args.sessions_root,
+                )
+            else:
+                res = install_agent_workspace(
+                    args.workspace, args.protect, agent=args.agent, bench_cmd=args.bench, card=args.card,
+                    arch=args.arch, max_overhead=args.max_overhead, require_final_seal=not args.no_require_final_seal,
+                    png_only=not args.allow_gz, python_exe=args.python, sessions_root=args.sessions_root,
+                    reset=args.reset)
             print(json.dumps(res, indent=2, ensure_ascii=False))
             return 0
         if args.cmd == "guard-exec":
@@ -817,7 +925,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.workspace, cmd, protect_files=args.protect, use_bwrap=args.bwrap,
                 sessions_root=args.sessions_root, agent=args.agent, bench_cmd=args.bench, card=args.card,
                 arch=args.arch, max_overhead=args.max_overhead, require_final_seal=not args.no_require_final_seal,
-                python_exe=args.python)
+                png_only=not args.allow_gz, python_exe=args.python)
             print(json.dumps(res, indent=2, ensure_ascii=False, default=str))
             return 0 if res["ok"] else 1
         res = verify_session_completion(str(Path(args.workspace).resolve()), sessions_root_dir=args.sessions_root)

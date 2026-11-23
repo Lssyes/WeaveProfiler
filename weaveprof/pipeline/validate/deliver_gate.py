@@ -615,14 +615,15 @@ CARD_TARGETS = {
     'h20': {'platform': 'nv', 'arches': frozenset(('sm_90',))},
     'b300': {'platform': 'nv', 'arches': frozenset(('sm_100a', 'sm_103a'))},
     'mi308x': {'platform': 'amd', 'arches': frozenset(('gfx942',))},
+    'sm86': {'platform': 'nv', 'arches': frozenset(('sm_86',))},
 }
 SUPPORTED_CARDS = tuple(CARD_TARGETS)
 TRACE_FILENAME_SCHEMA = (
-    'trace__<model>_<stage>__card-<h20|b300|mi308x>__bs<B>_sq<S>[_kv<K>]__'
+    'trace__<model>_<stage>__card-<h20|b300|mi308x|sm86>__bs<B>_sq<S>[_kv<K>]__'
     '<dtype>__grid<G>_warp<W>_ph<P>__<bundle>.perfetto.json.gz')
 CANONICAL_TRACE_FILENAME_RE = re.compile(
     r'^trace__(?P<model>[a-z0-9]+)_(?P<stage>[a-z0-9]+)'
-    r'__card-(?P<card>h20|b300|mi308x)'
+    r'__card-(?P<card>h20|b300|mi308x|sm86)'
     r'__bs(?P<batch>\d+)_sq(?P<seqlen_q>\d+)'
     r'(?:_kv(?P<seqlen_kv>\d+))?'
     r'__(?P<dtype>[a-z0-9]+)'

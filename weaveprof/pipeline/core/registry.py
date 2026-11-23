@@ -83,6 +83,25 @@ CARD_SPECS: Dict[str, Dict[str, Any]] = {
             "cross-host communication counters belong to NIC/fabric evidence, not GPU PMC",
         ],
     },
+    "sm86": {
+        "card": "sm86",
+        "display_name": "NVIDIA Ampere sm_86",
+        "platform": "nv",
+        "architectures": ["sm_86"],
+        "device_clock": "%clock64+%globaltimer_anchors",
+        "cycle_clock": "clock64",
+        "physical_id": "%smid",
+        "physical_unit": "SM",
+        "profiler": {
+            "primary": "nsys",
+            "fallback": [],
+            "sampling_model": "periodic_pm",
+            "preferred_sample_hz": 200000,
+            "evidence": "measured_on_local_sm86",
+            "note": "Ampere sm_86 (RTX 30xx / A10 / A40 / A6000): defaults to WP_TIMER=1 (%clock64 + OPEN/CLOSE %globaltimer anchors, ~27 ns step) because consumer sm_86 %globaltimer steps at 1024 ns.",
+        },
+        "languages": ["cuda_cpp", "triton", "cutedsl"],
+    },
 }
 
 CARD_ALIASES = {
@@ -93,6 +112,11 @@ CARD_ALIASES = {
     "amd instinct mi308x": "mi308x",
     "b300": "b300",
     "nvidia b300": "b300",
+    "sm86": "sm86",
+    "sm-86": "sm86",
+    "nvidia sm86": "sm86",
+    "rtx3050": "sm86",
+    "ampere": "sm86",
 }
 
 LANGUAGE_SPECS: Dict[str, Dict[str, Any]] = {
@@ -153,6 +177,7 @@ LANGUAGE_PATTERN_PATHS = {
 }
 
 CARD_FROM_ARCH = {
+    "sm_86": "sm86",
     "sm_90": "h20",
     "sm_100a": "b300",
     "sm_103a": "b300",

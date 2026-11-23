@@ -40,9 +40,10 @@ import json
 import os
 from pathlib import Path
 import re
+import struct
 import time
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 _HERE = Path(__file__).resolve().parent
 SKILL_ROOT = _HERE.parent
@@ -59,11 +60,45 @@ SESSION_FILE = "session.json"
 KEY_FILE = ".supervisor.key"
 BACKUP_DIRNAME = "backups"
 CONFIG_BACKUP_DIRNAME = "config_backups"
+GLOBAL_GUARDS_DIRNAME = "_global_guards"
 STOP_BLOCK_LIMIT = 3
 EXIT_ALLOW = 0
 EXIT_BLOCK = 2
 TAG = "[WeaveProfiler wp guard]"
 SEALING_TOOLS_HINT = "`weaveprof_megakernel_audit` (fast isolated-copy megakernel audit) or `weaveprof_profile`"
+
+FORBIDDEN_GZ_SUFFIXES: Tuple[str, ...] = (
+    ".perfetto.json.gz",
+    ".trace.json.gz",
+    ".perfetto-trace.gz",
+)
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_SCAN_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv", "env",
+    ".pytest_cache", ".mypy_cache", "site-packages", "third_party", "3rdparty",
+})
+_GZ_CLEANUP_ONLY_RE = re.compile(
+    r"^\s*(?:rm|del|erase|unlink|Remove-Item)\b[^\n;|&]*(?:\.perfetto\.json\.gz|\.trace\.json\.gz|\.perfetto-trace\.gz)\s*$",
+    re.I,
+)
+_FORBIDDEN_GZ_CMD_RE = re.compile(
+    r"(?:(?:--write-gz\b|write_perfetto_gz\s*=\s*True\b|export_perfetto_native\.py\b)"
+    r"|(?:(?:-o|--out|output|out_path|gzip\.open|write_json|>{1,2}|tee|cp|mv)\s*[^;\n|&]{0,160}"
+    r"(?:\.perfetto\.json\.gz|\.trace\.json\.gz|\.perfetto-trace\.gz)\b)"
+    r"|(?:\b(?:wp_decode|fi_lite_decode)\.py\b[^\n;|&]*(?:\.perfetto\.json\.gz|\.trace\.json\.gz|\.perfetto-trace\.gz)\b))",
+    re.I,
+)
+_WP_PROFILING_ACTIVITY_RE = re.compile(
+    r"(?:\bwp_decode\.py\b|\bfi_lite_decode\.py\b|\bwp_triton(?:_amd)?\b|\bwp_cute\b|\bwp_lite(?:_hip)?\.(?:cuh|h)\b"
+    r"|\bprobe-inject\b|\bprobe-place\b|\bcapture\.(?:fi02|wp02)\.bin\b|\bfi_merge_perfetto\b"
+    r"|\bweaveprof_(?:megakernel_audit|profile)\b|\brun_megakernel_audit\b|\bwp\.(?:profile|verify)\b"
+    r"|\bweaveprof\s+(?:profile|verify|render)\b|\brender_swhw_overview_png\b"
+    r"|\.(?:perfetto\.json\.gz|trace\.json\.gz|perfetto-trace\.gz)\b)",
+    re.I,
+)
+_HELP_ONLY_CMD_RE = re.compile(r"^\s*[^;&|\n]*\s(?:--help|-h|--version)\s*$", re.I)
+_WSL_MNT_RE = re.compile(r"/mnt/([a-zA-Z])(/[^\s\"'`;|&)>]*)")
+_WIN_PATH_RE = re.compile(r"([A-Za-z]:[\\/][^\s\"'`;|&)>]+)")
 
 # Legacy `fi_*` tokens are intentionally retained alongside `wp_*` so agents cannot bypass
 # probe-pollution checks via older header/macro spellings.
@@ -298,8 +333,178 @@ def _read_key(session_dir: os.PathLike | str) -> Optional[bytes]:
 
 _POLICY_SIGNED_FIELDS: Tuple[str, ...] = (
     "schema", "workspace", "protected", "config_files",
-    "require_final_seal", "max_overhead", "bench_cmd", "card", "arch", "skill_root",
+    "require_final_seal", "png_only", "max_overhead", "bench_cmd", "card", "arch", "skill_root",
 )
+
+
+_MIN_PNG_WIDTH = 320
+_MIN_PNG_HEIGHT = 160
+
+
+def _is_valid_png(path: os.PathLike | str) -> bool:
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return False
+        st = p.stat()
+        if st.st_size < 67:
+            return False
+        with open(p, "rb") as fh:
+            hdr = fh.read(24)
+        if len(hdr) < 24 or hdr[:8] != _PNG_MAGIC or hdr[12:16] != b"IHDR":
+            return False
+        width, height = struct.unpack(">II", hdr[16:24])
+        return width >= _MIN_PNG_WIDTH and height >= _MIN_PNG_HEIGHT
+    except OSError:
+        return False
+
+
+def _is_forbidden_gz_path(path: os.PathLike | str) -> bool:
+    low = str(path).replace("\\", "/").lower()
+    return any(low.endswith(suf) for suf in FORBIDDEN_GZ_SUFFIXES)
+
+
+def _allow_gz_env() -> bool:
+    return os.environ.get("WEAVEPROF_ALLOW_GZ", "").strip() == "1"
+
+
+def _session_png_only(session: Optional[Dict[str, Any]]) -> bool:
+    if _allow_gz_env():
+        return False
+    if session is None:
+        return True
+    return bool(session.get("png_only", True))
+
+
+def _scan_dir_artifacts(
+    root: Path, *, since_ts: float = 0.0, max_depth: int = 3, max_files: int = 800,
+) -> Tuple[List[Path], List[Path]]:
+    """Fast bounded scan returning (forbidden_gz_files, valid_png_files) created/modified >= since_ts."""
+    bad_gz: List[Path] = []
+    good_png: List[Path] = []
+    try:
+        root = root.resolve()
+        if not root.is_dir():
+            return bad_gz, good_png
+        # Never scan or delete files inside the WeaveProfiler skill package itself.
+        if _under(root, SKILL_ROOT):
+            return bad_gz, good_png
+    except OSError:
+        return bad_gz, good_png
+    seen = 0
+    base_depth = len(root.parts)
+    for cur_root, dirs, files in os.walk(root):
+        cur_p = Path(cur_root)
+        depth = len(cur_p.parts) - base_depth
+        if depth >= max_depth:
+            dirs[:] = []
+        else:
+            dirs[:] = [
+                d for d in dirs
+                if d not in _SCAN_SKIP_DIRS and not d.startswith(".")
+                and not _under(cur_p / d, SKILL_ROOT)
+            ]
+        for fn in files:
+            seen += 1
+            if seen > max_files:
+                return bad_gz, good_png
+            low = fn.lower()
+            is_gz = any(low.endswith(suf) for suf in FORBIDDEN_GZ_SUFFIXES)
+            is_png = low.endswith(".png")
+            if not (is_gz or is_png):
+                continue
+            fp = cur_p / fn
+            try:
+                st = fp.stat()
+            except OSError:
+                continue
+            if since_ts > 0.0 and st.st_mtime < since_ts:
+                continue
+            if is_gz:
+                bad_gz.append(fp)
+            elif is_png and _is_valid_png(fp):
+                good_png.append(fp)
+    return bad_gz, good_png
+
+
+def _purge_forbidden_gz(paths: Sequence[Path]) -> List[str]:
+    removed: List[str] = []
+    for p in paths:
+        try:
+            if _under(p, SKILL_ROOT):
+                continue
+            if p.is_file():
+                p.unlink()
+                removed.append(str(p))
+        except OSError:
+            pass
+    return removed
+
+
+def _extract_candidate_dirs(text: str, cwd: Path) -> List[Path]:
+    """Extract existing local directories referenced in Windows or WSL (/mnt/<drive>/...) paths."""
+    dirs: List[Path] = []
+    seen: set[str] = set()
+    home = Path.home().resolve()
+    broad_skip = {
+        home,
+        (home / "work").resolve(),
+        (home / ".cache").resolve(),
+        (home / ".cache" / "weaveprof").resolve(),
+        (home / ".gemini").resolve(),
+        (home / ".qwen").resolve(),
+        (home / ".claude").resolve(),
+        (home / ".codex").resolve(),
+    }
+
+    def _add(p: Path) -> None:
+        try:
+            cand = p if p.is_dir() else p.parent
+            if cand.is_dir():
+                res = cand.resolve()
+                if len(res.parts) <= 2 or res in broad_skip or _under(res, SKILL_ROOT):
+                    return
+                # Skip top-level .gemini/.cache/.qwen directories
+                if any(_under(res, b) and res == b for b in broad_skip):
+                    return
+                k = os.path.normcase(str(res))
+                if k not in seen:
+                    seen.add(k)
+                    dirs.append(res)
+        except OSError:
+            pass
+
+    if os.name == "nt":
+        for drv, rest in _WSL_MNT_RE.findall(text):
+            win_str = f"{drv.upper()}:{rest.replace('/', os.sep)}"
+            _add(Path(win_str))
+        for raw_win in _WIN_PATH_RE.findall(text):
+            _add(Path(raw_win))
+    else:
+        for m in re.finditer(r"(/[^\s\"'`;|&)>]+)", text):
+            _add(Path(m.group(1)))
+    _add(cwd)
+    return dirs
+
+
+def _seal_has_valid_png(seal_entry: Mapping[str, Any]) -> Tuple[bool, Optional[str]]:
+    sp = Path(str(seal_entry.get("seal_path") or ""))
+    if sp.is_file():
+        try:
+            doc = json.loads(sp.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            doc = {}
+        arts = doc.get("artifacts") if isinstance(doc.get("artifacts"), dict) else {}
+        for k in ("overview_png", "preview_png", "trace"):
+            a = arts.get(k)
+            if isinstance(a, dict) and isinstance(a.get("path"), str):
+                cand = Path(a["path"])
+                if cand.suffix.lower() == ".png" and _is_valid_png(cand):
+                    return True, str(cand)
+        for png in sorted(sp.parent.glob("*.png")):
+            if _is_valid_png(png):
+                return True, str(png)
+    return False, None
 
 
 def compute_policy_hmac(session_dir: os.PathLike | str, session: Dict[str, Any]) -> Optional[str]:
@@ -629,6 +834,30 @@ def verify_session_completion(
                 "sealed incumbent) before stopping.")
     elif valid:
         matched = valid[-1]
+    png_only = _session_png_only(session)
+    if png_only:
+        ws_path = Path(str(session.get("workspace") or "")).resolve()
+        since_ts = float(session.get("created_at") or 0.0) - 1.0
+        bad_gz: List[Path] = []
+        gz_ws, _ = _scan_dir_artifacts(ws_path, since_ts=since_ts, max_depth=3)
+        bad_gz.extend(gz_ws)
+        if matched and matched.get("seal_path"):
+            gz_run, _ = _scan_dir_artifacts(Path(matched["seal_path"]).parent, since_ts=since_ts, max_depth=2)
+            bad_gz.extend(gz_run)
+        if bad_gz:
+            removed = _purge_forbidden_gz(bad_gz)
+            blockers.append(
+                f"FORBIDDEN_GZ_ARTIFACT: PNG-only delivery policy forbids `.perfetto*.gz` / `.trace.json.gz` "
+                f"files (removed {removed[:4]}); deliver `overview.png` instead."
+            )
+        if matched is not None:
+            has_png, _png_path = _seal_has_valid_png(matched)
+            if not has_png:
+                blockers.append(
+                    "MISSING_OVERVIEW_PNG: PNG-only Stop gate requires a verified, non-empty `.png` deliverable "
+                    "(e.g. `overview.png`) bound to the PASS seal; re-run profiling with `render_overview_png=True` "
+                    "or `out='overview.png'` before stopping."
+                )
     return {
         "ok": not blockers,
         "installed": True,
@@ -938,6 +1167,31 @@ def handle_pre(ctx: Context) -> None:
         raise HookBlock("SUPERVISOR_CONFIG_TAMPER",
                         "command modifies `.claude/`, `.codex/`, `.qwen/`, `.agents/`, or `.mcp.json` (hook/MCP wiring).")
 
+    # (a2) PNG-only deliverable enforcement: block generating `.perfetto*.gz` / `.trace.json.gz`
+    if _session_png_only(ctx.session):
+        for path in check_paths:
+            if _is_forbidden_gz_path(path):
+                raise HookBlock(
+                    "FORBIDDEN_GZ_ARTIFACT",
+                    f"PNG-only delivery is enforced: refusing to write `{path.name}`. "
+                    "Render `overview.png` directly via `wp.profile(..., out='overview.png')`, "
+                    "`weaveprof_megakernel_audit`, or `wp_decode.py ... -o overview.png`.",
+                )
+        if own and isinstance(tool_input, dict) and tool_input.get("write_perfetto_gz"):
+            raise HookBlock(
+                "FORBIDDEN_GZ_ARTIFACT",
+                "PNG-only delivery is enforced: `write_perfetto_gz=True` is forbidden. "
+                "Keep `render_overview_png=True` and `write_perfetto_gz=False`.",
+            )
+        if scan_text and not _GZ_CLEANUP_ONLY_RE.match(scan_text.strip()):
+            if _FORBIDDEN_GZ_CMD_RE.search(scan_text):
+                raise HookBlock(
+                    "FORBIDDEN_GZ_ARTIFACT",
+                    "PNG-only delivery is enforced: do NOT emit `.perfetto.json.gz` / `.trace.json.gz` / "
+                    "`.perfetto-trace.gz` or call `export_perfetto_native.py` / `--write-gz`. "
+                    "Render `overview.png` directly via `wp_decode.py ... -o overview.png` or `weaveprof/viz.py`.",
+                )
+
     if ctx.session is None:
         if short in READ_ONLY_TOOLS or own:
             return
@@ -1081,6 +1335,25 @@ def handle_post(ctx: Context, *, protocol: str = "claude") -> None:
         if protocol == "agy":
             _set_pending_post_alert(ctx.session_dir, str(blk))
         raise blk
+    if _session_png_only(ctx.session):
+        since_ts = float(ctx.session.get("created_at") or 0.0) - 1.0
+        bad_gz, _ = _scan_dir_artifacts(ctx.workspace, since_ts=since_ts, max_depth=3)
+        _tn, ti = _extract_tool(ctx.payload)
+        for cand_dir in _extract_candidate_dirs("\n".join(_strings(ti)), ctx.cwd):
+            if not _under(cand_dir, ctx.workspace):
+                extra_gz, _ = _scan_dir_artifacts(cand_dir, since_ts=since_ts, max_depth=2)
+                bad_gz.extend(extra_gz)
+        if bad_gz:
+            removed = _purge_forbidden_gz(bad_gz)
+            blk = HookBlock(
+                "FORBIDDEN_GZ_ARTIFACT",
+                f"PNG-only delivery policy forbids `.perfetto*.gz` / `.trace.json.gz` artifacts; "
+                f"automatically removed {removed[:4]}. Render `overview.png` directly via `wp_decode.py -o overview.png` "
+                "or `weaveprof/viz.py` instead.",
+            )
+            if protocol == "agy":
+                _set_pending_post_alert(ctx.session_dir, str(blk))
+            raise blk
 
 
 def handle_post_invocation(ctx: Context) -> Dict[str, Any]:
@@ -1253,6 +1526,166 @@ def _read_payload() -> Tuple[Dict[str, Any], Optional[str]]:
     return doc, None
 
 
+# ---------------------------------------------------------------------------
+# Global WeaveProfiler PNG-only & Stop-gate guard (user-level ~/.qwen / ~/.claude)
+# ---------------------------------------------------------------------------
+
+def _global_state_path(payload: Dict[str, Any], root: Optional[str] = None) -> Path:
+    sid = str(payload.get("session_id") or payload.get("sessionId") or os.environ.get("QWEN_SESSION_ID") or "default")
+    safe_sid = re.sub(r"[^A-Za-z0-9._-]", "_", sid)[:80] or "default"
+    return sessions_root(root) / GLOBAL_GUARDS_DIRNAME / f"{safe_sid}.json"
+
+
+def _read_global_state(path: Path) -> Dict[str, Any]:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8-sig"))
+        if isinstance(doc, dict):
+            return doc
+    except (OSError, ValueError):
+        pass
+    return {"active": False, "started_at": 0.0, "touched_dirs": [], "png_files": [], "stop_blocks": 0}
+
+
+def _save_global_state(path: Path, state: Dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(path, state)
+    except OSError:
+        pass
+
+
+def _handle_global_guard(event: str, payload: Dict[str, Any], args: argparse.Namespace, *, protocol: str) -> None:
+    """User-level PNG-only + no-.gz + Stop-gate guard when no workspace session is provisioned.
+
+    Transparent (zero interference) for non-WeaveProfiler sessions; activates automatically as
+    soon as any tool call in the session touches WeaveProfiler profiling tools or artifacts.
+    """
+    if _allow_gz_env():
+        return
+    cwd = Path(payload.get("cwd") or args.workspace or os.getcwd()).resolve()
+    state_path = _global_state_path(payload, getattr(args, "sessions_root", None))
+    state = _read_global_state(state_path)
+    tool_name, tool_input = _extract_tool(payload)
+    all_text = "\n".join(_strings(tool_input))
+    cmd_text = _shell_command(tool_input) or all_text
+    targets = edit_targets(tool_name, tool_input, cwd)
+
+    short, _own = _tool_kind(tool_name)
+    if event == "PreToolUse":
+        # Always block creating forbidden .perfetto*.gz / .trace.json.gz files!
+        for path, _a, _op in targets:
+            if _is_forbidden_gz_path(path):
+                raise HookBlock(
+                    "FORBIDDEN_GZ_ARTIFACT",
+                    f"PNG-only delivery is enforced: refusing to write `{path.name}`. "
+                    "Deliver `overview.png` instead (via `wp_decode.py ... -o overview.png`, "
+                    "`weaveprof/viz.py`, or `wp.profile(..., out='overview.png')`).",
+                )
+        if short not in READ_ONLY_TOOLS and cmd_text and not _GZ_CLEANUP_ONLY_RE.match(cmd_text.strip()) and _FORBIDDEN_GZ_CMD_RE.search(cmd_text):
+            raise HookBlock(
+                "FORBIDDEN_GZ_ARTIFACT",
+                "PNG-only delivery is enforced: do NOT generate `.perfetto.json.gz` / `.trace.json.gz` / "
+                "`.perfetto-trace.gz` or invoke `export_perfetto_native.py` / `--write-gz`. "
+                "Render `overview.png` directly via `wp_decode.py ... -o overview.png` or `weaveprof/viz.py`.",
+            )
+        if short not in READ_ONLY_TOOLS and _WP_PROFILING_ACTIVITY_RE.search(all_text) and not _HELP_ONLY_CMD_RE.match(cmd_text.strip()):
+            if not state.get("active"):
+                state["active"] = True
+                state["started_at"] = round(time.time(), 3)
+            touched = list(state.get("touched_dirs") or [])
+            for d in _extract_candidate_dirs(all_text, cwd):
+                ds = str(d)
+                if ds not in touched:
+                    touched.append(ds)
+            state["touched_dirs"] = touched[-24:]
+            _save_global_state(state_path, state)
+        return
+
+    if event in ("PostToolUse", "PostToolUseFailure"):
+        if short in READ_ONLY_TOOLS:
+            return
+        triggered = bool(state.get("active")) or (
+            bool(_WP_PROFILING_ACTIVITY_RE.search(all_text))
+            and not _HELP_ONLY_CMD_RE.match(cmd_text.strip())
+        )
+        if not triggered:
+            return
+        if not state.get("active"):
+            state["active"] = True
+            state["started_at"] = round(time.time() - 5.0, 3)
+        touched = list(state.get("touched_dirs") or [])
+        for d in _extract_candidate_dirs(all_text, cwd):
+            ds = str(d)
+            if ds not in touched:
+                touched.append(ds)
+        state["touched_dirs"] = touched[-24:]
+        since_ts = float(state.get("started_at") or 0.0) - 2.0
+        bad_gz: List[Path] = []
+        found_png: List[str] = list(state.get("png_files") or [])
+        for ds in state["touched_dirs"]:
+            gz_list, png_list = _scan_dir_artifacts(Path(ds), since_ts=since_ts, max_depth=3)
+            bad_gz.extend(gz_list)
+            for pp in png_list:
+                ps = str(pp)
+                if ps not in found_png:
+                    found_png.append(ps)
+        state["png_files"] = [p for p in found_png if _is_valid_png(p)][-32:]
+        _save_global_state(state_path, state)
+        if bad_gz:
+            removed = _purge_forbidden_gz(bad_gz)
+            raise HookBlock(
+                "FORBIDDEN_GZ_ARTIFACT",
+                f"PNG-only delivery policy forbids `.perfetto*.gz` / `.trace.json.gz` artifacts; "
+                f"automatically deleted {removed[:4]}. Render `overview.png` directly via `wp_decode.py -o overview.png` "
+                "or `weaveprof/viz.py` instead.",
+            )
+        return
+
+    if event == "Stop":
+        if protocol == "agy":
+            term = str(payload.get("terminationReason") or "").strip().upper()
+            if term not in _AGY_GATE_STOP_REASONS:
+                return
+        if not state.get("active"):
+            return
+        since_ts = float(state.get("started_at") or 0.0) - 2.0
+        bad_gz: List[Path] = []
+        valid_pngs: List[str] = [p for p in (state.get("png_files") or []) if _is_valid_png(p)]
+        for ds in list(state.get("touched_dirs") or []):
+            gz_list, png_list = _scan_dir_artifacts(Path(ds), since_ts=since_ts, max_depth=3)
+            bad_gz.extend(gz_list)
+            for pp in png_list:
+                ps = str(pp)
+                if ps not in valid_pngs:
+                    valid_pngs.append(ps)
+        blockers: List[str] = []
+        if bad_gz:
+            removed = _purge_forbidden_gz(bad_gz)
+            blockers.append(
+                f"FORBIDDEN_GZ_ARTIFACT: deleted disallowed `.perfetto*.gz` / `.trace.json.gz` files {removed[:4]}."
+            )
+        if not valid_pngs:
+            blockers.append(
+                "MISSING_OVERVIEW_PNG: you ran WeaveProfiler profiling in this session without producing a valid "
+                "PNG deliverable (`overview.png`). Render the 3-panel PNG via `wp_decode.py ... -o overview.png`, "
+                "`weaveprof/viz.py`, or `wp.profile(..., out='overview.png')` and inspect it before finishing."
+            )
+        if not blockers:
+            state["stop_blocks"] = 0
+            state["png_files"] = valid_pngs[-32:]
+            _save_global_state(state_path, state)
+            return
+        stop_active = _is_stop_active(payload)
+        base = int(state.get("stop_blocks") or 0) if stop_active else 0
+        n = base + 1
+        state["stop_blocks"] = 0 if n > STOP_BLOCK_LIMIT else n
+        _save_global_state(state_path, state)
+        if n > STOP_BLOCK_LIMIT:
+            sys.stderr.write(f"{TAG} WARNING: global PNG Stop gate unmet after {n - 1} blocks; allowing stop.\n")
+            return
+        raise HookBlock("STOP_GATE", f"cannot finish yet (block {n}/{STOP_BLOCK_LIMIT}): " + " | ".join(blockers))
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="WeaveProfiler (wp) Claude Code / Codex CLI / Qwen Code / Antigravity enforcement hook"
@@ -1265,6 +1698,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--workspace")
     ap.add_argument("--session-dir")
     ap.add_argument("--sessions-root")
+    ap.add_argument("--global-guard", action="store_true",
+                    help="User-level guard: delegates to workspace session when present, otherwise enforces PNG-only & Stop gate on WeaveProfiler sessions")
     args = ap.parse_args(list(argv) if argv is not None else None)
     payload, parse_err = _read_payload()
     event = args.event or str(payload.get("hookEventName") or payload.get("hook_event_name") or "")
@@ -1273,6 +1708,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if parse_err is not None:
             raise HookBlock("MALFORMED_HOOK_PAYLOAD", parse_err)
         ctx = Context(payload, args)
+        if args.global_guard and ctx.session is None:
+            _handle_global_guard(event, payload, args, protocol=protocol)
+            return _emit_allow(protocol, event, None)
         extra: Optional[Dict[str, Any]] = None
         if event == "PreToolUse":
             handle_pre(ctx)

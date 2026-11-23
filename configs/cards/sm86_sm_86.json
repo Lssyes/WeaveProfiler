@@ -1,0 +1,113 @@
+{
+  "schema": "weaveprofiler.card-machine/v1",
+  "version": 1,
+  "kind": "machine_profile",
+  "card": "sm86",
+  "arch": "sm_86",
+  "vendor": "nvidia",
+  "platform": "nv",
+  "warp_size": 32,
+  "machine": "Local NVIDIA GeForce RTX 3050 Laptop GPU sm_86 (16 SM, WSL2 CUDA 13.1)",
+  "date": "2026-11-23",
+  "evidence_status": "measured",
+  "granularity": [
+    "SM",
+    "warp"
+  ],
+  "evidence_policy": "Measured on local NVIDIA GeForce RTX 3050 Laptop GPU (sm_86, 16 SMs) under WSL2 /dev/dxg with CUDA 13.1 and Triton 3.9.0.",
+  "profiler": {
+    "primary": "nsys",
+    "fallback": [],
+    "sampling_model": "periodic_pm",
+    "preferred_sample_hz": 200000,
+    "evidence": "measured_local_sm86",
+    "note": "Uses WP_TIMER=1 (%clock64 + %globaltimer OPEN/CLOSE anchors, ~27 ns step) by default because sm_86 %globaltimer ticks at 1024 ns. Bare-metal Linux uses 200 kHz nsys; WSL2 falls back cleanly to software-only or CUDA-trace window."
+  },
+  "entries": [
+    {
+      "construct": "cp.async.cg.shared.global -> shared memory (Ampere async tile load)",
+      "isa_mnemonics": [
+        "PTX: cp.async.cg.shared.global",
+        "SASS: LDGSTS.E.BYPASS.LTC128B.128"
+      ],
+      "placement_rule": "On sm_86, tl.load / cp.async lowers to non-blocking cp.async.cg.shared.global followed by cp.async.commit_group and cp.async.wait_group before MMA. Use WP_TIMER=1 (%clock64 + OPEN/CLOSE anchors) because %globaltimer has 1024 ns granularity on sm_86.",
+      "evidence": {
+        "snippet": "cp.async.cg.shared.global [ %r1 ], [ %rd1 ], 16;",
+        "machine": "Local NVIDIA GeForce RTX 3050 Laptop GPU sm_86 (16 SM, WSL2 CUDA 13.1)",
+        "date": "2026-11-23"
+      },
+      "semantic_id": "load",
+      "display_name": "load",
+      "semantic_legacy": "装载",
+      "language": "triton",
+      "language_display_name": "Triton",
+      "arch": "sm_86",
+      "evidence_status": "measured",
+      "evidence_status_basis": "Measured Triton 3.9.0 FP16 GEMM PTX and clock64 recorder run on local sm_86 RTX 3050 Laptop GPU"
+    },
+    {
+      "construct": "cp.async.wait_group + bar.sync (Ampere pipeline wait)",
+      "isa_mnemonics": [
+        "PTX: cp.async.wait_group",
+        "PTX: bar.sync 0",
+        "SASS: DEPBAR.LE"
+      ],
+      "placement_rule": "Place wait begin before cp.async.wait_group and wait end after wait_group/bar.sync returns; never place probes inside polling loops.",
+      "evidence": {
+        "snippet": "cp.async.wait_group 0; bar.sync 0;",
+        "machine": "Local NVIDIA GeForce RTX 3050 Laptop GPU sm_86 (16 SM, WSL2 CUDA 13.1)",
+        "date": "2026-11-23"
+      },
+      "semantic_id": "wait",
+      "display_name": "wait",
+      "semantic_legacy": "等待",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_86",
+      "evidence_status": "measured",
+      "evidence_status_basis": "Measured PTX on local sm_86 RTX 3050 Laptop GPU"
+    },
+    {
+      "construct": "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 (Ampere Tensor Core HMMA)",
+      "isa_mnemonics": [
+        "PTX: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32",
+        "SASS: HMMA.16816.F32"
+      ],
+      "placement_rule": "Bracket the warp-level Tensor Core MMA stage (tl.dot or mma.sync) with WP_B/WP_E; if inner K-loop probe density exceeds 10% overhead, hoist to outer K-tile or mainloop boundary.",
+      "evidence": {
+        "snippet": "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%f0,%f1,%f2,%f3}, {%r0,%r1,%r2,%r3}, {%r4,%r5}, {%f0,%f1,%f2,%f3};",
+        "machine": "Local NVIDIA GeForce RTX 3050 Laptop GPU sm_86 (16 SM, WSL2 CUDA 13.1)",
+        "date": "2026-11-23"
+      },
+      "semantic_id": "mma",
+      "display_name": "mma",
+      "semantic_legacy": "计算",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_86",
+      "evidence_status": "measured",
+      "evidence_status_basis": "Measured FP16 Tensor Core HMMA GEMM on local sm_86 RTX 3050 Laptop GPU"
+    },
+    {
+      "construct": "st.global.v4.b32 (Ampere C-tile epilogue store)",
+      "isa_mnemonics": [
+        "PTX: st.global.v4.b32",
+        "SASS: STG.E.128"
+      ],
+      "placement_rule": "Bracket final accumulator conversion and global output store outside the K-reduction loop.",
+      "evidence": {
+        "snippet": "st.global.v4.b32 [%rd5], {%r8,%r9,%r10,%r11};",
+        "machine": "Local NVIDIA GeForce RTX 3050 Laptop GPU sm_86 (16 SM, WSL2 CUDA 13.1)",
+        "date": "2026-11-23"
+      },
+      "semantic_id": "store",
+      "display_name": "store",
+      "semantic_legacy": "写回",
+      "language": "cuda_cpp",
+      "language_display_name": "CUDA C++",
+      "arch": "sm_86",
+      "evidence_status": "measured",
+      "evidence_status_basis": "Measured epilogue store on local sm_86 RTX 3050 Laptop GPU"
+    }
+  ]
+}

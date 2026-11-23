@@ -1417,46 +1417,40 @@ def _lower_cutedsl_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) -
         h_bind = f"\n{method_indent}{h_name} = {wrap_cls}(_fi_l0_{h_name}, _fi_inst_{h_name}, fi_get_attached)\n"
         return (h_dec_start, h_end, h_l0_txt + "\n" + h_inst_txt + h_bind)
 
-    tail_lines = list(all_lines[fn_end:])
+    proxy_cls = (
+        ("_WpCuteDescriptor" if paper else "_FiCuteDescriptor")
+        if is_method
+        else ("_WpCuteProxy" if paper else "_FiCuteProxy")
+    )
+    proxy_bind = f"\n{method_indent}{orig_name} = {proxy_cls}(_fi_l0_{orig_name}, _fi_inst_{orig_name}, fi_get_attached)\n"
+
+    # Collect 1-based inclusive (start_line, end_line, replacement_text) spans for `@cute.kernel`
+    # and ALL enclosing sibling `@cute.jit` host launchers (whether defined before OR after `@cute.kernel`,
+    # e.g. CUTLASS PersistentDenseGemmKernel.__call__ defined above kernel()).
+    replacements: List[Tuple[int, int, str]] = [
+        (dec_start, fn_end, "".join(l0_lines) + "\n" + "".join(rebuilt_inst) + proxy_bind)
+    ]
     if _cute_dec_kind(kfn) == "kernel":
         siblings = [
             f for p_c, f in cute_targets
-            if p_c is parent_cls and f is not kfn and _cute_dec_kind(f) == "jit" and f.lineno > fn_end
+            if p_c is parent_cls and f is not kfn and _cute_dec_kind(f) == "jit"
         ]
-        for hfn in sorted(siblings, key=lambda f: f.lineno, reverse=True):
+        for hfn in siblings:
             rewritten_h = _rewrite_host_jit_launcher(hfn)
             if rewritten_h is not None:
-                h_beg, h_end, h_replacement = rewritten_h
-                rel_b = h_beg - 1 - fn_end
-                rel_e = h_end - fn_end
-                tail_lines[rel_b:rel_e] = [h_replacement]
+                replacements.append(rewritten_h)
 
-    if is_method:
-        descriptor = "_WpCuteDescriptor" if paper else "_FiCuteDescriptor"
-        proxy_bind = f"\n{method_indent}{orig_name} = {descriptor}(_fi_l0_{orig_name}, _fi_inst_{orig_name}, fi_get_attached)\n"
-        final_src = (
-            "".join(all_lines[:parent_cls.lineno - 1])
-            + import_block
-            + "".join(all_lines[parent_cls.lineno - 1:dec_start - 1])
-            + "".join(l0_lines)
-            + "\n"
-            + "".join(rebuilt_inst)
-            + proxy_bind
-            + "".join(tail_lines)
-        )
-    else:
-        proxy = "_WpCuteProxy" if paper else "_FiCuteProxy"
-        proxy_bind = f"\n{orig_name} = {proxy}(_fi_l0_{orig_name}, _fi_inst_{orig_name}, fi_get_attached)\n"
-        final_src = (
-            "".join(all_lines[:dec_start - 1])
-            + import_block
-            + "\n"
-            + "".join(l0_lines)
-            + "\n"
-            + "".join(rebuilt_inst)
-            + proxy_bind
-            + "".join(tail_lines)
-        )
+    patched_lines = list(all_lines)
+    for r_beg, r_end, r_txt in sorted(replacements, key=lambda x: x[0], reverse=True):
+        patched_lines[r_beg - 1:r_end] = [r_txt]
+
+    import_anchor = (
+        parent_cls.lineno - 1
+        if is_method
+        else min(r[0] for r in replacements) - 1
+    )
+    patched_lines.insert(import_anchor, import_block + "\n")
+    final_src = "".join(patched_lines)
     ast.parse(final_src)
     return final_src
 

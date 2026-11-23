@@ -14,9 +14,11 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import unittest
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -91,8 +93,19 @@ class _WorkspaceCase(unittest.TestCase):
         self._tmp.cleanup()
         self.assertFalse(leaked.exists(), f"session leaked into real cache: {leaked}")
 
+    @staticmethod
+    def _make_png(width: int = 400, height: int = 200) -> bytes:
+        def _chunk(tag: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+        raw = b"".join(b"\x00" + (b"\x20\x40\x80" * width) for _ in range(height))
+        return b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", zlib.compress(raw, 9)) + _chunk(b"IEND", b"")
+
+    _TINY_PNG = _make_png.__func__(400, 200)
+    _FAKE_1X1_PNG = _make_png.__func__(1, 1)
+
     # -- helpers -----------------------------------------------------------
-    def make_seal(self, *, status: str = "PASS", evil_key: bool = False) -> Path:
+    def make_seal(self, *, status: str = "PASS", evil_key: bool = False, include_png: bool = True) -> Path:
         self._seal_n += 1
         run = self.tmp / f"run{self._seal_n}"
         run.mkdir()
@@ -100,6 +113,11 @@ class _WorkspaceCase(unittest.TestCase):
         feedback.write_text(json.dumps({"status": status}), encoding="utf-8")
         trace = run / "out.perfetto-trace"
         trace.write_bytes(b"\x0a\x00trace")
+        extra_arts = {}
+        if include_png:
+            png = run / "overview.png"
+            png.write_bytes(self._TINY_PNG)
+            extra_arts["overview_png"] = png
         result = {"status": status, "checks": {"assembly": True, "output": True, "events": True, "overhead": True},
                   "metrics": {"overhead_ratio": 0.031}}
         ctx = contextlib.nullcontext()
@@ -115,6 +133,7 @@ class _WorkspaceCase(unittest.TestCase):
                 source_sha256=_sha(self.kernel), probe_path=None, instrumented_path=None, names_path=None,
                 feedback_path=feedback, verify_path=None, trace_path=trace, failed_trace_path=None,
                 result=result, policy=HarnessPolicy(), limit=0.10, region_lock={"ok": True, "gpu": 0},
+                extra_artifacts=extra_arts or None,
                 out_seal_path=run / "out.perfetto-trace.seal.json")
         return seal
 
@@ -863,6 +882,130 @@ class QwenAndAgyProtocolTests(_WorkspaceCase):
             "file_path": str(self.kernel), "old_string": "+", "new_string": "*"}})
         self.assertEqual(rc, 2)
         self.assertIn("SESSION_POLICY_TAMPER", err)
+
+    def test_png_only_enforcement_and_global_qwen_guard(self) -> None:
+        # 1. PreToolUse blocks generating .perfetto.json.gz / .trace.json.gz / --write-gz / write_perfetto_gz
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "cwd": str(self.ws), "tool_name": "run_shell_command",
+            "tool_input": {"command": "python wp_decode.py dump.bin --names names.json -o trace.perfetto.json.gz"},
+        }, protocol="qwen")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("FORBIDDEN_GZ_ARTIFACT", out["reason"])
+
+        rc, out, _ = self._run_proto("PreToolUse", {
+            "cwd": str(self.ws), "tool_name": "mcp__weaveprofiler__weaveprof_megakernel_audit",
+            "tool_input": {"bench_cmd": "python bench.py", "write_perfetto_gz": True},
+        }, protocol="qwen")
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("FORBIDDEN_GZ_ARTIFACT", out["reason"])
+
+        # 2. PostToolUse deletes stray .perfetto.json.gz created out-of-band and blocks!
+        stray_gz = self.ws / "stray.perfetto.json.gz"
+        stray_gz.write_bytes(b"\x1f\x8b\x08\x00fakegz")
+        rc, out, _ = self._run_proto("PostToolUse", {
+            "cwd": str(self.ws), "tool_name": "run_shell_command",
+            "tool_input": {"command": "python run_script.py"},
+        }, protocol="qwen")
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("FORBIDDEN_GZ_ARTIFACT", out["reason"])
+        self.assertFalse(stray_gz.exists(), "PostToolUse must delete stray .gz file")
+
+        # 3. Workspace Stop gate rejects PASS seal missing a valid overview PNG!
+        seal_no_png = self.make_seal(include_png=False)
+        self.assertTrue(register_seal(self.sd, seal_no_png, kernel_us=10.0)["registered"])
+        rc, out, _ = self._run_proto("Stop", {"cwd": str(self.ws), "stop_hook_active": False}, protocol="qwen")
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("MISSING_OVERVIEW_PNG", out["reason"])
+
+        # Once a valid PNG seal is registered, Stop succeeds!
+        seal_with_png = self.make_seal(include_png=True)
+        self.assertTrue(register_seal(self.sd, seal_with_png, kernel_us=9.5)["registered"])
+        rc, out, _ = self._run_proto("Stop", {"cwd": str(self.ws), "stop_hook_active": False}, protocol="qwen")
+        self.assertEqual(out["decision"], "allow")
+
+        # 4. Global guard mode (--global-guard) on an UNPROVISIONED workspace:
+        unprov = self.tmp / "unprovisioned_exp"
+        unprov.mkdir()
+        def run_global(event: str, payload: dict) -> dict:
+            proc = subprocess.run(
+                [sys.executable, "-B", str(GUARD), "--global-guard", "--protocol", "qwen",
+                 "--event", event, "--sessions-root", str(self.sessions)],
+                input=json.dumps(payload).encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=self.env, timeout=120,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+            return json.loads(proc.stdout.decode("utf-8", "replace"))
+
+        # Unrelated session passes Stop immediately without interference
+        out_idle = run_global("Stop", {"session_id": "unrelated-chat", "cwd": str(unprov)})
+        self.assertEqual(out_idle["decision"], "allow")
+
+        # WeaveProfiler profiling session: PreToolUse activates & blocks .gz; Stop blocks without PNG!
+        sid = "qwen-wp-session-1"
+        out_gz = run_global("PreToolUse", {
+            "session_id": sid, "cwd": str(unprov), "tool_name": "run_shell_command",
+            "tool_input": {"command": f"python wp_decode.py {unprov}/capture.fi02.bin --names n.json -o {unprov}/out.trace.json.gz"},
+        })
+        self.assertEqual(out_gz["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("FORBIDDEN_GZ_ARTIFACT", out_gz["reason"])
+
+        # Legit profiling command activates session tracking
+        out_ok = run_global("PreToolUse", {
+            "session_id": sid, "cwd": str(unprov), "tool_name": "run_shell_command",
+            "tool_input": {"command": f"python wp_decode.py {unprov}/capture.fi02.bin --names n.json -o {unprov}/overview.png"},
+        })
+        self.assertEqual(out_ok["decision"], "allow")
+
+        # Trying to Stop before generating overview.png MUST be blocked!
+        out_stop1 = run_global("Stop", {"session_id": sid, "cwd": str(unprov), "stop_hook_active": False})
+        self.assertEqual(out_stop1["decision"], "block")
+        self.assertIn("MISSING_OVERVIEW_PNG", out_stop1["reason"])
+
+        # Stray .gz created by a script is deleted & blocked on PostToolUse
+        bad_g = unprov / "accidental.trace.json.gz"
+        bad_g.write_bytes(b"\x1f\x8b\x08\x00bad")
+        out_post = run_global("PostToolUse", {
+            "session_id": sid, "cwd": str(unprov), "tool_name": "run_shell_command",
+            "tool_input": {"command": f"cd {unprov} && python run.py"},
+        })
+        self.assertEqual(out_post["decision"], "block")
+        self.assertIn("FORBIDDEN_GZ_ARTIFACT", out_post["reason"])
+        self.assertFalse(bad_g.exists())
+
+        # Read-only `--help` invocation must NOT falsely arm the profiling Stop gate
+        out_help = run_global("PreToolUse", {
+            "session_id": "help-only-chat", "cwd": str(unprov), "tool_name": "run_shell_command",
+            "tool_input": {"command": "python wp_decode.py --help"},
+        })
+        self.assertEqual(out_help["decision"], "allow")
+        out_help_stop = run_global("Stop", {"session_id": "help-only-chat", "cwd": str(unprov)})
+        self.assertEqual(out_help_stop["decision"], "allow")
+
+        # Tiny 1x1 dummy PNG must NOT fool the Stop gate!
+        (unprov / "overview.png").write_bytes(self._FAKE_1X1_PNG)
+        out_stop_fake = run_global("Stop", {"session_id": sid, "cwd": str(unprov), "stop_hook_active": True})
+        self.assertEqual(out_stop_fake["decision"], "block")
+        self.assertIn("MISSING_OVERVIEW_PNG", out_stop_fake["reason"])
+
+        # Once a real chart-sized overview.png exists and no .gz remains, Stop unlocks cleanly!
+        (unprov / "overview.png").write_bytes(self._TINY_PNG)
+        out_stop2 = run_global("Stop", {"session_id": sid, "cwd": str(unprov), "stop_hook_active": True})
+        self.assertEqual(out_stop2["decision"], "allow")
+
+        # 5. install_global_hooks writes clean ~/.qwen/settings.json without touching existing settings
+        from weaveprof.agent_installer import install_global_hooks
+        fake_home = self.tmp / "fake_home"
+        (fake_home / ".qwen").mkdir(parents=True)
+        (fake_home / ".qwen" / "settings.json").write_text(json.dumps({"model": {"name": "qwen4-max"}}), encoding="utf-8")
+        gres = install_global_hooks(agent="qwen", home_dir=fake_home, sessions_root=self.sessions)
+        self.assertTrue(gres["ok"])
+        qcfg = json.loads((fake_home / ".qwen" / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(qcfg["model"]["name"], "qwen4-max")
+        self.assertIs(qcfg["disableAllHooks"], False)
+        for ev in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop"):
+            cmds = [h["command"] for g in qcfg["hooks"][ev] for h in g["hooks"]]
+            self.assertTrue(any("--global-guard" in c and ev in c for c in cmds), (ev, cmds))
 
 
 if __name__ == "__main__":

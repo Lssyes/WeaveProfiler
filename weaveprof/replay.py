@@ -99,6 +99,7 @@ def capture(source, workspace, spec, prepared):
 
 
 def measure(workspace, prepared):
+    import shutil
     directory, base, inst = prepared
     env = workspace.environment(directory, base, inst)
     env["TRITON_ALWAYS_COMPILE"] = "1"
@@ -106,11 +107,50 @@ def measure(workspace, prepared):
     run_cmd([*worker, "measure", str(base), str(inst), str(directory)], directory, env, directory / "replay.log")
     # One dispatched instrumented kernel supplies both the hardware interval and FILITE02.
     env.pop("TRITON_ALWAYS_COMPILE")
-    run_cmd(["nsys", "profile", "--sample=none", "--cpuctxsw=none", "--trace=cuda",
-             "-o", str(directory / "capture"), *worker, "record", str(base), str(inst), str(directory)],
-            directory, env, directory / "nsys.log")
-    run_cmd(["nsys", "export", "--type=sqlite", "-o", str(directory / "capture.sqlite"),
-             str(directory / "capture.nsys-rep")], directory, env, directory / "nsys_export.log")
+    nsys_exe = shutil.which("nsys")
+    if nsys_exe:
+        import platform as _plat
+        is_wsl = "microsoft" in _plat.release().lower() or Path("/dev/dxg").exists()
+        # Prefer 200 kHz GPU metrics capture on H20/B300/bare-metal NVIDIA; on WSL2 /dev/dxg
+        # GPU PMU counters are blocked by the Windows host driver, so go straight to --trace=cuda.
+        rep_ok = False
+        if not is_wsl:
+            nsys_pmu_cmd = [
+                nsys_exe, "profile", "--sample=none", "--cpuctxsw=none", "--trace=cuda",
+                "--gpu-metrics-device=all", "--gpu-metrics-frequency=200000",
+                "-o", str(directory / "capture"), *worker, "record", str(base), str(inst), str(directory),
+            ]
+            try:
+                run_cmd(nsys_pmu_cmd, directory, env, directory / "nsys.log")
+                rep_ok = (directory / "capture.nsys-rep").is_file() and (directory / "capture.fi02.bin").is_file()
+            except Exception:
+                rep_ok = False
+        if not rep_ok:
+            for stale in ("capture.nsys-rep", "capture.sqlite"):
+                p = directory / stale
+                if p.is_file():
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+            run_cmd([
+                nsys_exe, "profile", "--sample=none", "--cpuctxsw=none", "--trace=cuda",
+                "-o", str(directory / "capture"), *worker, "record", str(base), str(inst), str(directory),
+            ], directory, env, directory / "nsys.log")
+        run_cmd([nsys_exe, "export", "--type=sqlite", "-o", str(directory / "capture.sqlite"),
+                 str(directory / "capture.nsys-rep")], directory, env, directory / "nsys_export.log")
+    else:
+        # Software-only fallback (e.g. local sm_86 without nsys installed): record FILITE02 directly
+        # and anchor the dispatch window cleanly to the measured steady-state kernel duration.
+        run_cmd([*worker, "record", str(base), str(inst), str(directory)], directory, env, directory / "record.log")
+        rt = read_json(directory / "runtime.json")
+        inst_ns = rt.get("instrumented_ns") or rt.get("baseline_ns") or [100_000]
+        dur_ns = max(1, int(sorted(inst_ns)[len(inst_ns) // 2]))
+        write_json(directory / "pm.json", {
+            "dispatch": {"ts": 0, "dur": dur_ns, "name": str(rt.get("kernel_name") or "triton_kernel")},
+            "raw": {},
+            "hw_unavailable_reason": "nsys not found in PATH (software-only timeline)",
+        })
 
 
 def _load_kernel(path, snapshot, instrumented):
@@ -151,7 +191,7 @@ def _worker(mode, base, inst, directory):
     kwargs = {k: restore(v) for k, v in snapshot["kwargs"].items()}
     grid = snapshot["grid"]
     mod, instrumented = _load_kernel(inst, snapshot, True)
-    recorder = mod.FiAutoBuffer(math.prod(grid), snapshot["num_warps"], 256, device=snapshot["device"])
+    recorder = mod.FiAutoBuffer(math.prod(grid), snapshot["num_warps"], 1024, device=snapshot["device"])
     mod.fi_attach(recorder)
     if mode == "record":
         instrumented[grid](*args, **kwargs)

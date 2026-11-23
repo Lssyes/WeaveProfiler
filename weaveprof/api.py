@@ -95,11 +95,17 @@ class _Session(ContextDecorator):
         self.llm_caller = llm_caller
         self.feedback_path = Path(feedback or (self.out.parent / "feedback.json")).resolve()
         self.verify_path = Path(verify_json or (self.out.parent / "verify.json")).resolve()
-        self.preview_path = Path(preview_png).resolve() if preview_png else self.out.with_suffix(".png")
+        self.preview_path = (
+            self.out if self.out.suffix.lower() == ".png"
+            else (Path(preview_png).resolve() if preview_png else self.out.with_suffix(".png"))
+        )
         self.seal_path = Path(str(self.out) + ".seal.json").resolve()
         self.ledger_path = (self.out.parent / "episode_ledger.json").resolve()
         self.probe_path = Path(probe).resolve() if isinstance(probe, (str, Path)) else (self.out.parent / "probe.json").resolve()
-        safe_products(self.source, self.probe_path, self.feedback_path, self.verify_path, self.preview_path, self.out)
+        prod_paths = [self.source, self.probe_path, self.feedback_path, self.verify_path, self.out]
+        if self.preview_path != self.out:
+            prod_paths.append(self.preview_path)
+        safe_products(*prod_paths)
         if max_rounds < 1 or not math.isfinite(self.limit) or self.limit < 0:
             raise ValueError("max_rounds must be positive and limit must be finite and nonnegative")
         self.model, self.max_rounds, self.card = model, max_rounds, card
@@ -269,6 +275,7 @@ class _Session(ContextDecorator):
                         bench_cmd=self.bench_cmd, fsm_state="PROMOTED",
                         escalation=escalation_tag,
                         prev_seal_sha256=prev_seal_sha,
+                        extra_artifacts=({"overview_png": self.preview_path} if self.preview_path.is_file() else None),
                         out_seal_path=self.seal_path,
                     )
                     check = verify_seal(
@@ -343,7 +350,7 @@ class _Session(ContextDecorator):
         return False
 
 
-def profile(source, *, limit=0.10, out="out.perfetto-trace", probe=None, feedback=None,
+def profile(source, *, limit=0.10, out="overview.png", probe=None, feedback=None,
             verify_json=None, preview_png=None, model="qwen4-max", max_rounds=3, card="auto",
             bench=None, policy=None, gpu_id="auto", llm_refine_first=False, llm_caller=None):
     session = _Session(source, limit, out, probe, feedback, model, max_rounds, card,
@@ -357,7 +364,7 @@ def profile(source, *, limit=0.10, out="out.perfetto-trace", probe=None, feedbac
 
 
 def verify(probe, *, source=None, limit=0.10, feedback=None, verify_json=None,
-           preview_png=None, out="out.perfetto-trace", bench, policy=None, gpu_id="auto"):
+           preview_png=None, out="overview.png", bench, policy=None, gpu_id="auto"):
     doc = read_json(probe) if isinstance(probe, (str, Path)) else probe
     if not source:
         source = doc.get("source_path") or doc.get("source_file")
@@ -526,7 +533,7 @@ def profile_for_agent(
     *,
     bench,
     limit=0.10,
-    out="out.perfetto-trace",
+    out="overview.png",
     probe=None,
     feedback=None,
     verify_json=None,

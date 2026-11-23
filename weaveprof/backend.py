@@ -534,35 +534,19 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
                         gates["pairing"] = False
                         failures["product_gate"] = "; ".join(product_report["failures"])
                 if all(gates.values()):
-                    exporter = implementation("weaveprof.pipeline.validate.tools.fi_perfetto_proto")
-                    exporter.export(aligned, out_path)
-                    tp_report = verify_trace_processor_sql(out_path)
-                    metrics["trace_processor"] = tp_report
-                    if active_policy.enforce_trace_processor and tp_report.get("ok") is not True:
-                        gates["pairing"] = False
-                        failures["trace_processor"] = "; ".join(
-                            tp_report.get("errors") or [tp_report.get("reason", "trace_processor check failed")]
-                        )
-                    if all(gates.values()):
-                        # Audit #20: Auxiliary PNG / optional json.gz errors must not invalidate a verified trace.
-                        aux_warnings = []
-                        if rt.get("write_perfetto_gz"):
-                            try:
-                                json_gz = out_path.with_suffix(".sw_hw.perfetto.json.gz")
-                                exporter.export(aligned, json_gz)
-                                metrics["perfetto_json_gz"] = str(json_gz)
-                            except Exception as aux_exc:
-                                aux_warnings.append(f"json_gz export warning: {aux_exc}")
+                    png_only_out = out_path.suffix.lower() == ".png"
+                    png_target = out_path if png_only_out else (Path(preview_png) if preview_png else out_path.with_suffix(".png"))
+                    aux_warnings = []
+                    if png_only_out:
                         try:
-                            png_target = Path(preview_png) if preview_png else out_path.with_suffix(".png")
+                            from .viz import render_swhw_overview_png
+                            render_swhw_overview_png(
+                                aligned,
+                                png_target,
+                                title=rt.get("plot_title"),
+                            )
+                        except Exception as viz_exc:
                             try:
-                                from .viz import render_swhw_overview_png
-                                render_swhw_overview_png(
-                                    aligned,
-                                    png_target,
-                                    title=rt.get("plot_title"),
-                                )
-                            except Exception:
                                 from .preview import render_timeline_png
                                 render_timeline_png(
                                     aligned,
@@ -570,11 +554,54 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
                                     png_target,
                                     title_override=rt.get("plot_title"),
                                 )
-                            metrics["preview_png"] = str(png_target)
-                        except Exception as aux_exc:
-                            aux_warnings.append(f"preview_png warning: {aux_exc}")
-                        if aux_warnings:
-                            metrics["auxiliary_warnings"] = aux_warnings
+                            except Exception as prev_exc:
+                                gates["pairing"] = False
+                                failures["overview_png"] = f"PNG render failed: {viz_exc}; fallback: {prev_exc}"
+                        if all(gates.values()):
+                            if not png_target.is_file() or png_target.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+                                gates["pairing"] = False
+                                failures["overview_png"] = f"Valid PNG deliverable missing at {png_target}"
+                            else:
+                                metrics["preview_png"] = str(png_target)
+                    else:
+                        exporter = implementation("weaveprof.pipeline.validate.tools.fi_perfetto_proto")
+                        exporter.export(aligned, out_path)
+                        tp_report = verify_trace_processor_sql(out_path)
+                        metrics["trace_processor"] = tp_report
+                        if active_policy.enforce_trace_processor and tp_report.get("ok") is not True:
+                            gates["pairing"] = False
+                            failures["trace_processor"] = "; ".join(
+                                tp_report.get("errors") or [tp_report.get("reason", "trace_processor check failed")]
+                            )
+                        if all(gates.values()):
+                            if rt.get("write_perfetto_gz"):
+                                try:
+                                    json_gz = out_path.with_suffix(".sw_hw.perfetto.json.gz")
+                                    exporter.export(aligned, json_gz)
+                                    metrics["perfetto_json_gz"] = str(json_gz)
+                                except Exception as aux_exc:
+                                    aux_warnings.append(f"json_gz export warning: {aux_exc}")
+                            try:
+                                try:
+                                    from .viz import render_swhw_overview_png
+                                    render_swhw_overview_png(
+                                        aligned,
+                                        png_target,
+                                        title=rt.get("plot_title"),
+                                    )
+                                except Exception:
+                                    from .preview import render_timeline_png
+                                    render_timeline_png(
+                                        aligned,
+                                        {"metrics": metrics},
+                                        png_target,
+                                        title_override=rt.get("plot_title"),
+                                    )
+                                metrics["preview_png"] = str(png_target)
+                            except Exception as aux_exc:
+                                aux_warnings.append(f"preview_png warning: {aux_exc}")
+                    if aux_warnings:
+                        metrics["auxiliary_warnings"] = aux_warnings
             except Exception as exc:
                 alignment_error = str(exc)
         if not all(gates.values()) and active_policy.export_failed_timeline and trace is not None:
@@ -624,6 +651,8 @@ def verify_round(directory, spec, source_text, limit, out, feedback, measure,
             "runtime": directory / "runtime.json",
             "capture_dump": directory / "capture.fi02.bin",
         }
+        if metrics.get("preview_png") and Path(metrics["preview_png"]).is_file():
+            extra_arts["overview_png"] = Path(metrics["preview_png"])
         for key in ("baseline_sass", "instrumented_sass", "baseline_output", "instrumented_output"):
             if isinstance(rt, dict) and rt.get(key):
                 extra_arts[key] = directory / rt[key]

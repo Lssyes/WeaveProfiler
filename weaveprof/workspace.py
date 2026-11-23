@@ -39,16 +39,32 @@ def digest(path):
     return h.hexdigest()
 
 
+def _is_broad_home_or_root(directory: Path) -> bool:
+    """Return True if `directory` is a filesystem root, home dir, or WSL /mnt/<drv>/Users/<name>."""
+    res = directory.resolve()
+    if res in (Path.home().resolve(), Path(res.anchor).resolve()):
+        return True
+    parts = [p.lower() for p in res.parts]
+    # WSL mount root (/mnt/c), /mnt/c/Users, /mnt/c/Users/<user>, or /home/<user>
+    if len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1:
+        if len(parts) == 3:
+            return True
+        if len(parts) in (4, 5) and parts[3] == "users":
+            return True
+    if len(parts) == 3 and parts[0] == "/" and parts[1] in ("home", "users"):
+        return True
+    return False
+
+
 def project_root(source):
     cwd = Path.cwd().resolve()
-    stop = {Path.home().resolve(), Path(source.anchor).resolve()}
     candidates = (source.parent, *source.parent.parents)
     for directory in candidates:
-        if directory.resolve() in stop:
+        if _is_broad_home_or_root(directory):
             break
         if (directory / ".git").exists() or (directory / "pyproject.toml").is_file():
             return directory
-    if source.is_relative_to(cwd) and cwd not in stop:
+    if source.is_relative_to(cwd) and not _is_broad_home_or_root(cwd):
         return cwd
     return source.parent
 
@@ -96,10 +112,10 @@ class ShadowWorkspace:
         original = directory / "L0"
         instrumented = directory / "L_inst"
         ignore = shutil.ignore_patterns(
-            ".git", ".weaveprof_cache", "__pycache__", ".venv", ".pytest_cache", "*.pyc",
+            ".git", ".weaveprof_cache", "__pycache__", ".venv", "venv", "env", ".pytest_cache", "*.pyc",
             "*.perfetto-trace", "*.perfetto*", "*.gz", "*.sqlite", "*.nsys-rep",
-            "*.fi02.bin", "*.wp02.bin", "*.out.bin", "*.cubin", "*.fatbin",
-            "build", "dist", "third_party", "node_modules", ".claude", ".codex", ".qwen", ".agents",
+            "*.fi02.bin", "*.wp02.bin", "*.out.bin", "*.cubin", "*.fatbin", "*.pt", "*.pth",
+            "build", "dist", "third_party", "node_modules", ".claude", ".codex", ".qwen", ".agents", ".gemini", ".cache",
         )
         shutil.copytree(self.project, original, ignore=ignore)
         relative = self.source.relative_to(self.project)

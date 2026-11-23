@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 ROOT = Path(__file__).resolve().parent
-CARDS = ("h20", "b300", "mi308x")
+CARDS = ("h20", "b300", "mi308x", "sm86")
 
 
 def _load(relative: str, name: str):

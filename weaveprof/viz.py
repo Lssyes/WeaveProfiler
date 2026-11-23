@@ -62,8 +62,8 @@ _OVERFLOW_SHADES: Tuple[str, ...] = (
 _DEFAULT_COLOR = ("#37474F", "Other Stage")
 _STAGE_DRAW_PRIORITY = {
     "wait": 0, "barrier": 1, "load": 2, "dispatch": 3, "compute": 4,
-    "softmax": 5, "epilogue": 6, "store": 6, "communication": 7, "reduction": 7,
-    "mma": 8, "gemm": 8,
+    "softmax": 5, "mma": 6, "gemm": 6, "communication": 7, "reduction": 7,
+    "epilogue": 8, "store": 8,
 }
 
 # Dual-color Inter-Node vs Intra-Node Fabric Palette (NVIDIA IB/RDMA vs NVLink, AMD RDMA vs xGMI).
@@ -112,6 +112,7 @@ def _short_kernel_name(raw: str, max_len: int = 72) -> str:
     s = s.split("(")[0].strip()
     if s.startswith("void "):
         s = s[5:].strip()
+    s = re.sub(r"^_(?:fi|wp)_(?:inst|l0)_", "", s)
     if "<" in s and len(s) > max_len:
         idx = s.find("<")
         prefix = s[:idx]
@@ -361,34 +362,56 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
     stages_seen: Dict[str, float] = defaultdict(float)
     meta_warps_by_sm: Dict[int, Dict[int, str]] = defaultdict(dict)
     proc_names: Dict[int, str] = {}
-    has_high_unit_pids = any(
-        ev.get("ph") == "X" and isinstance(ev.get("pid"), int) and int(ev["pid"]) >= 100
-        and str(ev.get("cat") or "") not in ("nsys_kernel", "info")
-        for ev in events
-    )
-
     for ev in events:
         ph = ev.get("ph")
         if ph == "M" and ev.get("name") == "process_name":
             pid = ev.get("pid")
             if isinstance(pid, int):
                 proc_names[pid] = str((ev.get("args") or {}).get("name") or "")
+
+    def _pid_to_unit(pid_val: Any) -> Optional[int]:
+        if not isinstance(pid_val, int):
+            return None
+        if pid_val in (1, 2, 90000):
+            return None
+        pname = proc_names.get(pid_val, "")
+        m_unit = re.match(r"^\s*(?:SM|CU)\s*(\d+)\b", pname, re.I)
+        if m_unit:
+            return int(m_unit.group(1))
+        if pid_val >= 100000:
+            return pid_val - 100000
+        if pid_val >= 100:
+            return pid_val - 100
+        return pid_val
+
+    has_high_unit_pids = any(
+        ev.get("ph") == "X" and isinstance(ev.get("pid"), int) and int(ev["pid"]) >= 100
+        and int(ev["pid"]) != 90000
+        and str(ev.get("cat") or "") not in ("nsys_kernel", "info", "hardware", "residency")
+        for ev in events
+    )
+
+    for ev in events:
+        ph = ev.get("ph")
+        if ph == "M" and ev.get("name") == "process_name":
+            continue
         elif ph == "M" and ev.get("name") == "thread_name":
             pid = ev.get("pid")
             tid = ev.get("tid")
             tname = str((ev.get("args") or {}).get("name") or "")
-            if isinstance(pid, int) and pid != 1 and (not has_high_unit_pids or pid >= 100):
-                sm = pid - 100 if pid >= 100 else pid
-                m = re.search(r"\b[wW](\d+)\b", tname)
-                if not m:
-                    m = re.search(r"\bWave\s+(\d+)\b", tname, re.I)
+            if isinstance(pid, int) and pid not in (1, 90000) and (not has_high_unit_pids or pid >= 100):
+                sm = _pid_to_unit(pid)
+                if sm is None:
+                    continue
+                m = re.search(r"\b(?:[wW]|warp\s*|wave64\s*|wave\s*)(\d+)\b", tname, re.I)
                 if m:
                     w_id = int(m.group(1))
                     m_role_bracket = re.search(r"\[(Compute|Comm|Dispatch|Scatter|Math|Epilogue|DMA|Producer|Consumer)[^\]]*\]", tname, re.I)
                     if m_role_bracket:
                         role_part = m_role_bracket.group(1).strip()
                     elif "·" in tname:
-                        role_part = tname.split("·")[-1].strip()
+                        cand_r = tname.split("·")[-1].strip()
+                        role_part = f"w{w_id:02d}" if re.match(r"^slot\s+\d+$", cand_r, re.I) else cand_r
                     elif "/" in tname:
                         role_part = tname.split("/")[-1].strip()
                     else:
@@ -410,13 +433,27 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         elif ph == "X":
             cat = str(ev.get("cat") or "")
             pid = ev.get("pid")
-            if cat == "nsys_kernel":
-                nsys_kernel = dict(ev)
+            args = ev.get("args") or {}
+            kind = str(args.get("kind") or "").lower()
+            if cat in ("nsys_kernel", "hardware") or kind == "dispatch" or pid == 90000:
+                if nsys_kernel is None or cat == "nsys_kernel":
+                    nsys_kernel = dict(ev)
                 continue
             if cat == "info":
                 d_info = float(ev.get("dur") or 0.0)
                 if d_info > 0.0 and info_dur_us is None:
                     info_dur_us = d_info
+                continue
+            if cat == "residency" or kind == "residency":
+                r_sm = args.get("sm")
+                if r_sm is None:
+                    r_sm = _pid_to_unit(pid)
+                r_w = args.get("warp", args.get("wave"))
+                if r_sm is not None and r_w is not None:
+                    r_sm_i, r_w_i = int(r_sm), int(r_w)
+                    r_role = str(args.get("role") or f"w{r_w_i:02d}")
+                    meta_warps_by_sm[r_sm_i][r_w_i] = r_role
+                    sm_set.add(r_sm_i)
                 continue
             # Skip non-unit macro summary tracks (e.g. pid=1 hardware header, pid=2 macro stage summary)
             if has_high_unit_pids and isinstance(pid, int) and pid < 100:
@@ -425,7 +462,6 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
             dur = float(ev.get("dur") or 0.0)
             if dur <= 0.0 or not math.isfinite(dur):
                 continue
-            args = ev.get("args") or {}
             raw_name = str(ev.get("name") or "").strip()
             disp_label = str(
                 args.get("display_label")
@@ -442,9 +478,10 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
                 sem = sem_raw
             sm = args.get("sm")
             if sm is None and args.get("cu") is not None and isinstance(pid, int) and pid >= 100:
-                sm = int(pid) - 100
+                sm = _pid_to_unit(pid)
             elif sm is None:
-                sm = int(pid) - 100 if isinstance(pid, int) and pid >= 100 else (int(pid) if isinstance(pid, int) else 0)
+                u = _pid_to_unit(pid)
+                sm = u if u is not None else 0
             else:
                 sm = int(sm)
             if args.get("warp") is not None:
@@ -533,6 +570,36 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
     if dual_fabric:
         # Filter pure polling/background wait slices in multi-node fabric timelines so active fabric bars stay crisp.
         sw_spans = [sp for sp in sw_spans if sp["label"].lower() not in _FABRIC_WAIT_DROP]
+
+    # Drop enclosing macro-envelope spans (e.g. outer `gemm`/`attention` wrapper) when inner
+    # per-stage spans exist, so the envelope does not paint a solid bar over finer stages.
+    _MACRO_ENVELOPES = frozenset({"gemm", "attention", "moe", "megakernel"})
+    if any(sp["sem"] not in _MACRO_ENVELOPES for sp in sw_spans) and any(sp["sem"] in _MACRO_ENVELOPES for sp in sw_spans):
+        sw_spans = [sp for sp in sw_spans if sp["sem"] not in _MACRO_ENVELOPES]
+        stages_seen = defaultdict(float)
+        for sp in sw_spans:
+            stages_seen[sp["sem"]] += sp["dur"]
+
+    # Normalize all timestamps relative to kernel start (t_origin) so aligned traces with
+    # absolute nsys/rocprof timestamps (e.g. 3.4e6 us) plot cleanly on [0, kernel_dur_us].
+    t_candidates: List[float] = []
+    if nsys_kernel is not None and nsys_kernel.get("ts") is not None:
+        k_ts = float(nsys_kernel["ts"])
+        if math.isfinite(k_ts):
+            t_candidates.append(k_ts)
+    if sw_spans:
+        min_sw = min(sp["ts"] for sp in sw_spans)
+        if math.isfinite(min_sw):
+            t_candidates.append(min_sw)
+    t_origin = min(t_candidates) if t_candidates else 0.0
+    if t_origin > 1.0 or t_origin < -1.0:
+        for sp in sw_spans:
+            sp["ts"] = max(0.0, sp["ts"] - t_origin)
+            sp["end"] = max(sp["ts"], sp["end"] - t_origin)
+        for k in list(hw_curves.keys()):
+            hw_curves[k] = [(t - t_origin, v) for t, v in hw_curves[k]]
+        if nsys_kernel is not None and nsys_kernel.get("ts") is not None:
+            nsys_kernel["ts"] = max(0.0, float(nsys_kernel["ts"]) - t_origin)
 
     sw_end = max((s["end"] for s in sw_spans), default=0.0)
     k_dur = (
@@ -752,7 +819,9 @@ def render_swhw_overview_png(
         kname = _short_kernel_name(str(meta.get("kernel") or meta.get("model") or "WeaveProfiler Kernel"))
     if not title:
         ep_tag = f" · EP{parsed['ep']}" if parsed["ep"] else ""
-        plat_tag = "AMD MI308X" if is_amd else (str(meta.get("card") or "").upper() or "GPU")
+        plat_tag = "AMD MI308X" if is_amd else (
+            str(meta.get("card") or other.get("card") or meta.get("arch") or other.get("arch") or "").upper() or "GPU"
+        )
         title = f"{kname} ({plat_tag}{ep_tag}) — {k_dur:,.1f} µs · {len(sms)} Physical {unit_nm}s"
     if not subtitle:
         freq_khz = None
@@ -760,7 +829,13 @@ def render_swhw_overview_png(
             freq_khz = float(nsys_meta["sample_freq_hz"]) / 1000.0
         elif nsys_k and (nsys_k.get("args") or {}).get("sample_freq_hz"):
             freq_khz = float(nsys_k["args"]["sample_freq_hz"]) / 1000.0
-        hw_tool_lbl = "rocprofiler-sdk PMC" if is_amd else (f"{freq_khz:.1f} kHz nsys GPU metrics" if freq_khz else "nsys GPU metrics")
+        hw_tool_lbl = (
+            "rocprofiler-sdk PMC" if is_amd
+            else (
+                f"{freq_khz:.1f} kHz nsys GPU metrics" if (has_hw and freq_khz)
+                else ("nsys GPU metrics" if has_hw else ("nsys window (SW-only)" if nsys_k else "software-only"))
+            )
+        )
         arch = str(meta.get("arch") or other.get("arch") or "")
         arch_str = f"{arch} · " if arch else ""
         magic = str(meta.get("magic") or "WPLITE02")
@@ -856,8 +931,9 @@ def render_swhw_overview_png(
             return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
 
         if top_legend_handles:
+            leg_y = 0.928 if has_hw else 0.916
             fig.legend(
-                handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.930),
+                handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, leg_y),
                 ncol=min(len(top_legend_handles), 6), frameon=False, fontsize=8.8, handlelength=1.4, columnspacing=1.5,
             )
 
@@ -980,7 +1056,11 @@ def render_swhw_overview_png(
     img = np.full((n_sms * n_sub, img_w, 3), 255, dtype=np.uint8)
     sorted_spans = sorted(
         sw_spans,
-        key=lambda s: (0 if s["sem"] in ("wait", "barrier") else 1, -float(s["dur"]), _STAGE_DRAW_PRIORITY.get(s["sem"], 4)),
+        key=lambda s: (
+            0 if s["sem"] in ("wait", "barrier") else 1,
+            _STAGE_DRAW_PRIORITY.get(s["sem"], 4),
+            float(s["dur"]),
+        ),
     )
     scale_x = (img_w - 1) / max(t_max + x_pad, 1e-6)
     for sp in sorted_spans:
@@ -1020,7 +1100,7 @@ def render_swhw_overview_png(
         ax_sm.set_title(
             f"(B) All {len(sms)} physical {unit_nm}s ({unit_nm}{sms[0]}–{unit_nm}{sms[-1]}) — full per-tile stage waterfall"
             if sms else f"(B) Physical {unit_nm} timeline",
-            fontsize=10.5, fontweight="bold", color="#111111", pad=6,
+            fontsize=10.5, fontweight="bold", color="#111111", pad=10,
         )
 
     # ---- Panel (C): Representative SM/CU warp/wave role breakdown ----
@@ -1061,11 +1141,13 @@ def render_swhw_overview_png(
             -sorted(durs_by_color[kv[0]])[len(durs_by_color[kv[0]]) // 2],
         ),
     )
+    dense_panel_c = len(rep_spans) > 240
     for layer_idx, (col_hex, verts) in enumerate(ordered_color_layers):
+        no_edge = is_priority_color.get(col_hex) or dense_panel_c
         pc = PolyCollection(
-            verts, facecolors=col_hex, edgecolors="none" if is_priority_color.get(col_hex) else "#FFFFFF",
-            linewidths=0.0 if is_priority_color.get(col_hex) else 0.16,
-            antialiased=not is_priority_color.get(col_hex),
+            verts, facecolors=col_hex, edgecolors="none" if no_edge else "#FFFFFF",
+            linewidths=0.0 if no_edge else 0.16,
+            antialiased=not no_edge,
             zorder=3 + layer_idx * 0.05,
         )
         ax_wp.add_collection(pc)
@@ -1107,7 +1189,7 @@ def render_swhw_overview_png(
     yt_labels = [t.get_text() for t in ax_wp.get_yticklabels()]
     max_lbl = max((len(s) for s in yt_labels), default=10)
     left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
-    top_m = 0.855 if (has_hw and dual_fabric) else (0.805 if has_hw else 0.875)
+    top_m = 0.855 if (has_hw and dual_fabric) else (0.805 if has_hw else 0.835)
     fig.subplots_adjust(left=left_m, right=0.985, top=top_m, bottom=0.065)
 
     out_path = Path(out_png)
