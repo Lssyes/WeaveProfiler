@@ -3,7 +3,7 @@
   "files": {
     "README.md": "70e7e57207ceb685bc24b5acf94286c4c3fc264b4d24344da9ac77a98c98e45c",
     "README_EN.md": "1d0052f0d580f169f26cafe38cfe87b6538b7d6bdcf2020c8195703a24f9112e",
-    "SKILL.md": "fe2a169470ebcbc0d947bc31b5074916b43cb956d60a8c2f2f1aeb15ec6ddd2e",
+    "SKILL.md": "9d46e546081d83629219bd083bcbceb5027d3d4115d65c3c5171dbacc49b7193",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
     "configs/cards/b300_sm_100a.json": "e26f9dfa658c1c340549b9d41266be217b5a16475df1ab4649ef3d63335c8621",
