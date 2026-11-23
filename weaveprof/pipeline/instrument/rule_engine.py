@@ -1645,12 +1645,14 @@ def run_cpu_parallel_preflight(
         l0_key = cache.compute_key(source_text=orig_text, card=card, arch=arch, language=lang,
                                   variant="L0_cubin_v2", extra_flags=kname)
 
+        win_utf8 = ["-Xcompiler", "/utf-8"] if os.name == "nt" else []
+
         def _compile_l0() -> Dict[str, Any]:
             hit = cache.lookup(l0_key)
             if hit and hit.get("binary_path"):
                 return {"ok": True, "cached": True, "binary": Path(hit["binary_path"]), "res": hit["resources"]}
             out_cubin = work_dir / "l0.cubin"
-            cmd = [nvcc, "-O3", "-std=c++17", f"-arch={arch}", "-Xptxas=-v", "-cubin",
+            cmd = [nvcc, "-O3", "-std=c++17", f"-arch={arch}", *win_utf8, "-Xptxas=-v", "-cubin",
                    f"-I{inc_dir}", "-x", "cu", str(original_source_path), "-o", str(out_cubin)]
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             if p.returncode != 0:
@@ -1661,7 +1663,7 @@ def run_cpu_parallel_preflight(
 
         def _compile_inst() -> Dict[str, Any]:
             out_cubin = work_dir / "fi_inst.cubin"
-            cmd = [nvcc, "-O3", "-std=c++17", f"-arch={arch}", "-Xptxas=-v", "-cubin",
+            cmd = [nvcc, "-O3", "-std=c++17", f"-arch={arch}", *win_utf8, "-Xptxas=-v", "-cubin",
                    "-DFI_LEVEL=2", "-DFI_TIMER=1", f"-DFI_GRAN={gran_int}",
                    f"-I{inc_dir}", "-x", "cu", str(instrumented_source_path), "-o", str(out_cubin)]
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)

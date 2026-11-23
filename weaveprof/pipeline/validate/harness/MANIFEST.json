@@ -271,7 +271,7 @@
     "weaveprof/pipeline/instrument/apply_plan.py": "76157466fa7f4fedf9ab6b62fec03cf3d31d30e63aafae31c6080fed548c1ec9",
     "weaveprof/pipeline/instrument/generate_edits.py": "984f940a49d38b0d75eed8492ee86afce2a1ec97d1dc945e9336653a49ee69b3",
     "weaveprof/pipeline/instrument/incremental_reuse.py": "db2ef16771cd6cbba835ff53b74a2a2111e5c9d62ba96570e786de97186712b7",
-    "weaveprof/pipeline/instrument/rule_engine.py": "b815a0021d89a101aeee27eb31a2971d5070182ff8f18f99577e91baece06ef2",
+    "weaveprof/pipeline/instrument/rule_engine.py": "e455c242edeb12661aa3cf583359904a818dff2a278162b3c19743c91bb3de3b",
     "weaveprof/pipeline/instrument/triton_ptx_async.py": "e9f22312b1f7243a30d5f69766888bb2b75d5ff44924e0822f6a21eea31ca1ae",
     "weaveprof/pipeline/scan/__init__.py": "c3c6ed80cacc23c12d3ab161f2c7e9bed0de33f949cfed68f4f8c72887f03f08",
     "weaveprof/pipeline/scan/auto_gemm_plan.py": "916039bb87cc62aa2bffa38ccb392e0a860f0fbb71724a6147188b4d6db4e515",
