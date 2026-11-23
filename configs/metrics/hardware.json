@@ -76,19 +76,22 @@
       "semantic_id": "communication_util",
       "display_name": "communication_util",
       "unit": "percent_of_peak",
-      "meaning": "Interconnect utilization. Same-host NVLink/XGMI and cross-host NIC/RDMA evidence must remain distinguishable.",
+      "meaning": "Intra-node interconnect utilization (NVLink on NVIDIA, xGMI P2P on AMD). Same-host NVLink/xGMI and cross-host NIC/RDMA evidence MUST remain strictly separated; multi-node traces label this curve explicitly as Intra-Node NVLink/xGMI and report Inter-Node RDMA NIC on a separate rdma_util curve (or omit with an explicit HCA footnote — never zero-fill).",
       "nvidia": {
         "preferred_observed_names": ["NVLink RX Requests User Data [Throughput %]", "NVLink RX Responses User Data [Throughput %]", "NVLink TX Requests User Data [Throughput %]", "NVLink TX Responses User Data [Throughput %]"],
         "raw_counter_ids": ["nvlrx__bytes_packet_request_data_user", "nvlrx__bytes_packet_response_data_user", "nvltx__bytes_packet_request_data_user", "nvltx__bytes_packet_response_data_user"],
-        "cross_host": "NIC-side counters required; GPU NVLink counters do not prove RDMA traffic",
+        "intra_node_fabric": "NVLink",
+        "cross_host": "NIC-side counters required (/sys/class/infiniband/*/ports/*/hw_counters or netdev statistics); GPU NVLink counters do not prove RDMA traffic",
         "evidence_status": "counter_names_compiled_config_runtime_unverified"
       },
       "amd": {
         "preferred_counters": [],
+        "intra_node_fabric": "xGMI",
+        "dcs_continuous_sampling": "rocprofiler-sdk device_counting_service (DCS) supports ~80 us intra-kernel PMC sampling on the 100 MHz HSA/s_memrealtime clock alongside host RDMA NIC sysfs pread() for EP16+ multi-node timelines",
         "same_dispatch_requirement": "Requires an XGMI, RDMA, or fabric counter collected in the same run and paired to the same dispatch. Cross-host bandwidth also requires NIC-side evidence.",
         "derivation": null,
         "proxies_not_utilization": ["TCC_EA0_RDREQ_GMI_CREDIT_STALL", "TCC_EA0_WRREQ_GMI_CREDIT_STALL", "EA requests minus HBM DRAM requests", "amd-smi NIC polling", "amd-smi GPU busy or memory busy"],
-        "unavailable_rule": "When no same-dispatch XGMI/RDMA/fabric counter exists, mark communication_util unavailable with a reason. Never invent zero, never derive it from GMI credit-stall cycles or an EA-minus-DRAM request difference, and never use amd-smi as a substitute.",
+        "unavailable_rule": "When no same-dispatch XGMI/RDMA/fabric counter exists, mark communication_util unavailable with a reason. Never invent zero, never derive it from GMI credit-stall cycles or an EA-minus-DRAM request difference, and never use amd-smi as a substitute. On multi-node HCA where GPU-initiated RDMA bypasses host sysfs counters, omit rdma_util with a one-line unavailable footnote instead of drawing a fake zero line.",
         "evidence_status": "unavailable_without_same_dispatch_interconnect_counter"
       }
     },
@@ -144,7 +147,17 @@
       "evidence_status": "measured_on_mi308x_gemm_route"
     },
     {"semantic_id": "communication_rx_util", "parent": "communication_util", "unit": "percent_of_peak"},
-    {"semantic_id": "communication_tx_util", "parent": "communication_util", "unit": "percent_of_peak"}
+    {"semantic_id": "communication_tx_util", "parent": "communication_util", "unit": "percent_of_peak"},
+    {
+      "semantic_id": "rdma_util",
+      "parent": "communication_util",
+      "unit": "percent_of_peak",
+      "scope": "inter_node",
+      "source": "real host NIC hardware counters (/sys/class/infiniband/*/ports/*/hw_counters or /sys/class/net/*/statistics)",
+      "timeline_label": "rdma_util [Inter-Node RDMA NIC %]",
+      "auxiliary": true,
+      "unavailable_rule": "On multi-node clusters where GPU-initiated RDMA bypasses host-readable HCA sysfs counters, omit rdma_util with an explicit one-line Panel A footnote instead of drawing a flat zero line."
+    }
   ],
   "coarse_auxiliary_overlays": [
     {"semantic_id": "gpu_busy", "source": "optional amd-smi polling:GPU_GFX_BUSY", "canonical_mapping": null, "auxiliary_only": true, "presentation_role": "coarse_debug_context_only", "not_compute_util": true, "not_tensor_util": true},

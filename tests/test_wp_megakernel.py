@@ -799,6 +799,84 @@ class MegakernelAuditTest(_TmpCase):
         self.assertGreaterEqual(metrics_asm["core_multiset_ratio"], 0.999)
         self.assertLess(metrics_asm["core_retention_ratio"], 0.95)
 
+    def test_multinode_fabric_dualcolor_and_rich_stage_labels(self):
+        from weaveprof.contract import resolve_fabric_scope, validate_stage_label_quality
+        from weaveprof.pipeline.instrument.rule_engine import build_names_from_probe_spec
+        from weaveprof.viz import _humanize_stage_label, _parse_trace, render_swhw_overview_png
+
+        # 1. Cross-node vs intra-node fabric classification for both AMD & NVIDIA
+        self.assertEqual(resolve_fabric_scope("InterNode_RDMA_Dispatch", platform="amd"), "inter_node_rdma")
+        self.assertEqual(resolve_fabric_scope("InterNode_IB_Dispatch", platform="nv"), "inter_node_ib")
+        self.assertEqual(resolve_fabric_scope("IntraNode_xGMI_Pull", platform="amd"), "intra_node_xgmi")
+        self.assertEqual(resolve_fabric_scope("IntraNode_NVLink_Combine", platform="nv"), "intra_node_nvlink")
+        self.assertEqual(resolve_fabric_scope("IntraNode_LocalStage", platform="amd"), "on_chip")
+        self.assertEqual(resolve_fabric_scope("Compute_GEMM1_SwiGLU", platform="amd"), "on_chip")
+
+        # 2. Label quality linter flags lazy 1-word generic labels, accepts descriptive labels
+        warns = validate_stage_label_quality([
+            {"id": "load"},
+            {"id": "mma_qk_score", "label": "QK^T Score MMA"},
+        ])
+        self.assertEqual([w["probe_id"] for w in warns], ["load"])
+        self.assertEqual(_humanize_stage_label("KV Tile Load (TMA)", "load"), "KV Tile Load (TMA)")
+        self.assertEqual(_humanize_stage_label("produce_kv", "load"), "produce_kv (load)")
+        self.assertEqual(_humanize_stage_label("load", "load"), "TMA / Tile Load")
+
+        # 3. Rich `label` and `fabric` survive probe.json -> names.json -> fi_lite_decode -> viz.py
+        spec = {
+            "platform": "amd", "card": "mi308x", "arch": "gfx942",
+            "roles": {"compute": "warps 0-3", "comm": "warps 4-7"},
+            "probes": [
+                {"id": "inter_node_rdma_dispatch", "label": "Inter-Node RDMA Dispatch", "fabric": "inter_node_rdma",
+                 "begin": {"role": "comm", "line": 10}, "end": {"role": "comm", "line": 12}},
+                {"id": "intra_node_xgmi_pull", "label": "Intra-Node xGMI Dispatch", "fabric": "intra_node_xgmi",
+                 "begin": {"role": "comm", "line": 14}, "end": {"role": "comm", "line": 16}},
+                {"id": "mma_gemm1_swiglu", "label": "GEMM1 (FC1+SwiGLU)",
+                 "begin": {"role": "compute", "line": 20}, "end": {"role": "compute", "line": 25}},
+            ],
+        }
+        names_doc = build_names_from_probe_spec(spec)
+        self.assertIn("labels", names_doc)
+        self.assertIn("fabrics", names_doc)
+        self.assertIn("Inter-Node RDMA Dispatch", names_doc["labels"].values())
+        self.assertIn("inter_node_rdma", names_doc["fabrics"].values())
+
+        # 4. Synthetic 2-node AMD MI308X trace with 4 HW curves + 5th RDMA NIC curve renders cleanly
+        synth = {
+            "otherData": {"platform": "amd", "arch": "gfx942", "meta": {"card": "mi308x", "arch": "gfx942", "ep": 16, "rank": 0}},
+            "traceEvents": [
+                {"ph": "M", "pid": 100, "tid": 1, "name": "thread_name", "args": {"name": "CU00 - Wave 0 (W00) [Compute]"}},
+                {"ph": "M", "pid": 100, "tid": 5, "name": "thread_name", "args": {"name": "CU00 - Wave 4 (W04) [Comm]"}},
+                {"ph": "C", "pid": 1, "name": "compute_util [FP8 Matrix Core % of 606.2T]", "ts": 10.0, "args": {"value": 42.0}},
+                {"ph": "C", "pid": 1, "name": "compute_util [FP8 Matrix Core % of 606.2T]", "ts": 90.0, "args": {"value": 45.0}},
+                {"ph": "C", "pid": 1, "name": "memory_util [HBM3 Bandwidth % of 3684GB/s]", "ts": 10.0, "args": {"value": 24.0}},
+                {"ph": "C", "pid": 1, "name": "memory_util [HBM3 Bandwidth % of 3684GB/s]", "ts": 90.0, "args": {"value": 26.0}},
+                {"ph": "C", "pid": 1, "name": "communication_util [xGMI P2P % of 287.2GB/s]", "ts": 10.0, "args": {"value": 31.0}},
+                {"ph": "C", "pid": 1, "name": "communication_util [xGMI P2P % of 287.2GB/s]", "ts": 90.0, "args": {"value": 15.0}},
+                {"ph": "C", "pid": 1, "name": "rdma_util [Inter-Node RDMA NIC % of 100GB/s]", "ts": 10.0, "args": {"value": 18.0}},
+                {"ph": "C", "pid": 1, "name": "rdma_util [Inter-Node RDMA NIC % of 100GB/s]", "ts": 90.0, "args": {"value": 22.0}},
+                {"ph": "C", "pid": 1, "name": "sm_active [Active MI308X CUs % of 80]", "ts": 10.0, "args": {"value": 100.0}},
+                {"ph": "C", "pid": 1, "name": "sm_active [Active MI308X CUs % of 80]", "ts": 90.0, "args": {"value": 100.0}},
+                {"ph": "X", "pid": 100, "tid": 1, "ts": 5.0, "dur": 40.0, "name": "Compute_GEMM1_SwiGLU", "args": {"cu": 0, "wave": 0}},
+                {"ph": "X", "pid": 100, "tid": 1, "ts": 45.0, "dur": 40.0, "name": "Compute_GEMM2_MFMA", "args": {"cu": 0, "wave": 0}},
+                {"ph": "X", "pid": 100, "tid": 5, "ts": 5.0, "dur": 25.0, "name": "InterNode_RDMA_Dispatch", "args": {"cu": 0, "wave": 4}},
+                {"ph": "X", "pid": 100, "tid": 5, "ts": 30.0, "dur": 25.0, "name": "IntraNode_xGMI_Pull", "args": {"cu": 0, "wave": 4}},
+                {"ph": "X", "pid": 100, "tid": 5, "ts": 55.0, "dur": 20.0, "name": "InterNode_Partial_Reduce", "args": {"cu": 0, "wave": 4}},
+                {"ph": "X", "pid": 100, "tid": 5, "ts": 75.0, "dur": 15.0, "name": "IntraNode_HomeCombine", "args": {"cu": 0, "wave": 4}},
+            ],
+        }
+        parsed = _parse_trace(synth)
+        self.assertTrue(parsed["is_amd"])
+        self.assertTrue(parsed["multi_node"])
+        self.assertTrue(parsed["dual_fabric"])
+        self.assertIn("inter_rdma", parsed["hw_curves"])
+        try:
+            import matplotlib  # noqa: F401
+            png = render_swhw_overview_png(synth, self.tmp / "mi308x_ep16_dual.png", dpi=110)
+            self.assertTrue(png.is_file() and png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        except ImportError:
+            pass
+
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})
         self.assertEqual(rep["status"], "FAIL", rep)

@@ -1,10 +1,13 @@
 """Publication-style single-run 3-panel SW+HW overview renderer for WeaveProfiler traces.
 
-Renders a WeaveProfiler ``trace.perfetto.json.gz`` (or in-memory trace dict) into a single
-high-DPI PNG with one locked microsecond time axis across all three panels:
-  (A) Same-run hardware utilization curves from nsys (Tensor Active, DRAM BW, SM Issue, SMs Active)
-  (B) All physical SMs (SM0..SM{N-1}) dense per-tile stage waterfall
-  (C) Representative SM (SM 0 or first observed SM) per-warp-role stage timeline
+Renders any WeaveProfiler ``trace.perfetto.json[.gz]`` (or in-memory trace dict) across
+NVIDIA (H20 / B300, SM + warp, nsys) and AMD (MI308X, CU + wave, rocprofiler-sdk / rocprof)
+into a single high-DPI PNG with one locked microsecond time axis across all three panels:
+  (A) Same-run real hardware utilization curves (Compute / HBM / Intra-Node NVLink or xGMI /
+      optional 5th Inter-Node RDMA NIC curve or explicit unavailable HCA footnote / Active SM or CU)
+  (B) All physical SMs or CUs dense multi-stage / dual-fabric waterfall
+  (C) Representative SM 0 / CU 0 per-warp / per-wave role timeline (preserving rich domain stage
+      labels and crisp >= 2 px visibility for short streaming Combine / Reduce / RDMA slices)
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ sys.dont_write_bytecode = True
 import gzip
 import json
 import math
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -27,9 +31,9 @@ STAGE_COLORS: Dict[str, Tuple[str, str]] = {
     "epilogue": ("#FB8C00", "Epilogue"),
     "store": ("#D84315", "Store"),
     "wait": ("#90A4AE", "Wait / Sync"),
-    "barrier": ("#607D8B", "Barrier / Sync"),
+    "barrier": ("#607D8B", "Route / Barrier Sync"),
     "communication": ("#8E24AA", "Communication"),
-    "reduction": ("#C2185B", "Reduction"),
+    "reduction": ("#C2185B", "Combine / Reduce"),
     "dispatch": ("#00838F", "Dispatch / Schedule"),
     "gemm": ("#1E88E5", "GEMM / MMA"),
     "attention": ("#1976D2", "Attention"),
@@ -62,6 +66,44 @@ _STAGE_DRAW_PRIORITY = {
     "mma": 8, "gemm": 8,
 }
 
+# Dual-color Inter-Node vs Intra-Node Fabric Palette (NVIDIA IB/RDMA vs NVLink, AMD RDMA vs xGMI).
+# Warm crimson / amber is strictly reserved for Inter-Node RDMA / IB; cool teal / royal blue for
+# Intra-Node xGMI / NVLink; emerald / forest green for GEMM1 / GEMM2; slate for Route / Sync;
+# light violet for on-GPU Local Stage prep. Min RGB channel separation >= 60 across all pairs.
+FABRIC_COLORS_BY_ROLE: Dict[str, str] = {
+    "inter_dispatch": "#D62728",  # crimson red
+    "inter_combine": "#F28E2B",   # warm amber / orange
+    "intra_dispatch": "#009FB7",  # vivid teal / cyan
+    "intra_combine": "#2563EB",   # royal blue
+    "gemm1": "#16A34A",           # emerald green
+    "gemm2": "#166534",           # deep forest green
+    "route_sync": "#94A3B8",      # cool slate gray
+    "local_prep": "#8B5CF6",      # light violet
+}
+
+_FABRIC_WAIT_DROP = frozenset({
+    "gemm1_wait_payload", "gemm2_wait_stage1", "post_plan_wait",
+    "scatter_ready_wait", "dispatch_wait_plan", "home_ready_wait",
+    "gemm1_wait_route", "route_wait_meta",
+    "internode_rdma_rxwatch", "rdma_wqe_cqe_service", "legacy_gda_service",
+    "disp_idle_wait",
+})
+_GENERIC_LABELS = frozenset(STAGE_COLORS.keys()) | {"other", "stage", "unknown", ""}
+_INTER_SLICE_RE = re.compile(
+    r"(?:^|[_\-\s])(?:inter[_\-\s]?node|internode|rdma|roce|infiniband|ibgda|remote[_\-\s]?node)",
+    re.I,
+)
+_INTRA_SLICE_RE = re.compile(
+    r"(?:^|[_\-\s])(?:intra[_\-\s]?node|intranode|xgmi|nvlink|home[_\-]?combine|scatter[_\-]?xgmi|dispatch[_\-]?xgmi|p2p)",
+    re.I,
+)
+_COMBINE_RE = re.compile(r"(?:combine|reduce|return|scatter|push|store|epilogue)", re.I)
+_DISPATCH_RE = re.compile(r"(?:dispatch|pull|alltoall|a2a|send|recv|load)", re.I)
+_GEMM1_RE = re.compile(r"(?:gemm1|gmm1|fc1|swiglu|gate_up|l1_gemm|mma_qk|qk_mma)", re.I)
+_GEMM2_RE = re.compile(r"(?:gemm2|gmm2|fc2|down_proj|l2_gemm|mma_pv|pv_mma)", re.I)
+_LOCAL_PREP_RE = re.compile(r"(?:local[_\-\s]?stage|local[_\-\s]?prep|quant[_\-\s]?prep)", re.I)
+_ROUTE_SYNC_RE = re.compile(r"(?:route|ballot|plan|sync|barrier|meta|cleanup)", re.I)
+
 
 def _short_kernel_name(raw: str, max_len: int = 72) -> str:
     s = str(raw or "").strip()
@@ -70,7 +112,6 @@ def _short_kernel_name(raw: str, max_len: int = 72) -> str:
     s = s.split("(")[0].strip()
     if s.startswith("void "):
         s = s[5:].strip()
-    # Collapse verbose C++ template argument lists so title fits cleanly on one line
     if "<" in s and len(s) > max_len:
         idx = s.find("<")
         prefix = s[:idx]
@@ -82,7 +123,7 @@ def _short_kernel_name(raw: str, max_len: int = 72) -> str:
 
 
 def _pack_concurrent_ctas(spans: Sequence[Mapping[str, Any]]) -> Tuple[Dict[int, int], int]:
-    """Pack overlapping CTAs on one SM into the minimal number of non-overlapping resident slots."""
+    """Pack overlapping CTAs on one SM/CU into the minimal number of non-overlapping resident slots."""
     cta_win: Dict[int, List[float]] = {}
     for sp in spans:
         c = int(sp["cta"])
@@ -128,16 +169,22 @@ def _load_trace(trace_or_path: Mapping[str, Any] | str | Path) -> Dict[str, Any]
 
 def _classify_hw_metric(name: str) -> Optional[str]:
     low = name.lower()
-    if "tensor" in low:
+    if "rdma_util" in low or "inter-node rdma" in low or "infiniband" in low or "roce" in low:
+        return "inter_rdma"
+    if "tensor" in low or "compute_util" in low or "matrix core" in low or "mfma" in low:
         return "tensor_active"
-    if "sms active" in low or "sm active" in low:
+    if "sms active" in low or "sm active" in low or "sm_active" in low or "active mi308x cu" in low or ("active" in low and "cu" in low):
         return "sm_active"
-    if "sm issue" in low or "issue" in low:
+    if "sm issue" in low or "warp issue" in low or "issue" in low:
         return "sm_issue"
-    if "dram read" in low or "hbm" in low:
+    if "memory_util" in low or ("hbm" in low and "read" not in low and "write" not in low):
+        return "dram_bw_direct"
+    if "dram read" in low or ("hbm" in low and "read" in low):
         return "dram_read"
-    if "dram write" in low:
+    if "dram write" in low or ("hbm" in low and "write" in low):
         return "dram_write"
+    if "communication_util" in low or "xgmi" in low:
+        return "intra_comm_direct"
     if "nvlink" in low:
         if "protocol" in low:
             return None
@@ -153,32 +200,190 @@ def _classify_hw_metric(name: str) -> Optional[str]:
     return None
 
 
+def _pretty_hw_curve_label(raw_name: str, role: str, *, is_amd: bool, multi_node: bool) -> Tuple[str, str]:
+    """Turn a raw Perfetto counter track name into a publication-grade legend label + short chip title."""
+    m = re.match(r"^[a-z0-9_]+\s*\[(.+)\]\s*$", str(raw_name or "").strip(), re.I)
+    bracket = m.group(1).strip() if m else ""
+    if role == "tensor_active":
+        if bracket:
+            return f"Compute — {bracket}", "Compute"
+        return ("Compute — Matrix Core / MFMA %" if is_amd else "Tensor Active / MMA Pipe %"), "Compute"
+    if role == "dram_bw":
+        if bracket:
+            return f"HBM — {bracket}", "HBM BW"
+        return "HBM / DRAM Bandwidth %", "HBM BW"
+    if role == "nvlink_bw":
+        fabric_nm = "xGMI" if is_amd else "NVLink"
+        prefix = f"Intra-Node {fabric_nm}" if multi_node else fabric_nm
+        if bracket:
+            b_clean = re.sub(r"^(?:Intra-Node\s+)?(?:xGMI|NVLink\d*)\s*", "", bracket, flags=re.I).strip()
+            return (f"{prefix} — {b_clean}" if b_clean else prefix), prefix
+        return f"{prefix} — P2P / User Data %", prefix
+    if role == "inter_rdma":
+        if bracket:
+            b_clean = re.sub(r"^Inter-Node\s+RDMA\s*(?:\(NIC\)|NIC)?\s*", "", bracket, flags=re.I).strip()
+            return (f"Inter-Node RDMA (NIC) — {b_clean}" if b_clean else "Inter-Node RDMA (NIC) %"), "Inter-Node RDMA"
+        return "Inter-Node RDMA (NIC) %", "Inter-Node RDMA"
+    if role == "sm_active":
+        unit_pl = "CUs" if is_amd else "SMs"
+        if bracket:
+            m_of = re.search(r"%\s*of\s*\d+", bracket, re.I)
+            if m_of:
+                return f"Active — {unit_pl} {m_of.group(0)}", f"Active {unit_pl}"
+            return f"Active — {bracket}", f"Active {unit_pl}"
+        return f"Active {unit_pl} %", f"Active {unit_pl}"
+    if role == "sm_issue":
+        return "SM Issue %", "SM Issue"
+    return str(raw_name), role
+
+
+def _classify_fabric_role(sp: Mapping[str, Any], *, is_amd: bool) -> Optional[str]:
+    """Classify a span into a dual-fabric display role when rendering multi-node traces."""
+    raw = str(sp.get("label") or sp.get("raw_name") or sp.get("sem") or "").strip()
+    low = raw.lower()
+    fab = str(sp.get("fabric") or "").strip().lower()
+    sem = str(sp.get("sem") or "").lower()
+
+    if fab.startswith("inter_node") or _INTER_SLICE_RE.search(raw):
+        if _COMBINE_RE.search(low) or sem in ("reduction", "store", "epilogue"):
+            return "inter_combine"
+        return "inter_dispatch"
+    if _LOCAL_PREP_RE.search(low):
+        return "local_prep"
+    if fab.startswith("intra_node") or _INTRA_SLICE_RE.search(raw):
+        if _COMBINE_RE.search(low) or sem in ("reduction", "store", "epilogue"):
+            return "intra_combine"
+        return "intra_dispatch"
+    if _GEMM1_RE.search(low):
+        return "gemm1"
+    if _GEMM2_RE.search(low):
+        return "gemm2"
+    if _ROUTE_SYNC_RE.search(low) or sem in ("barrier", "wait"):
+        return "route_sync"
+    if sem in ("mma", "gemm"):
+        return "gemm1"
+    if sem == "reduction":
+        return "intra_combine"
+    if sem in ("communication", "dispatch"):
+        return "intra_dispatch"
+    if sem == "load":
+        return "local_prep"
+    return None
+
+
+def _fabric_role_label(role: str, *, is_amd: bool, use_ib: bool = False) -> str:
+    intra_nm = "xGMI" if is_amd else "NVLink"
+    inter_nm = "IB/RDMA" if use_ib else "RDMA"
+    return {
+        "inter_dispatch": f"Inter-Node {inter_nm} Dispatch",
+        "inter_combine": f"Inter-Node {inter_nm} Combine",
+        "intra_dispatch": f"Intra-Node {intra_nm} Dispatch",
+        "intra_combine": f"Intra-Node {intra_nm} Combine",
+        "gemm1": "GEMM1 (FC1+SwiGLU)",
+        "gemm2": "GEMM2 (FC2)",
+        "route_sync": "Route / Sync",
+        "local_prep": "Local Stage (prep)",
+    }[role]
+
+
+def _humanize_stage_label(raw_label: str, sem: str) -> str:
+    """Preserve meaningful domain/stage names instead of collapsing them to bare `load` / `mma`."""
+    lbl = str(raw_label or "").strip()
+    low = lbl.lower()
+    if not lbl or low in _GENERIC_LABELS:
+        return STAGE_COLORS.get(sem, _DEFAULT_COLOR)[1]
+    # Already a richly formatted human display label (contains spaces, parens, arrows, or dashes)
+    if any(ch in lbl for ch in (" ", "(", "/", "—", "->")):
+        return lbl
+    # Known rich compound stage tokens
+    pretty_known = {
+        "compute_gemm1_swiglu": "GEMM1 (FC1+SwiGLU)",
+        "gemm1_tile_swiglu": "GEMM1 (FC1+SwiGLU)",
+        "compute_gemm2_mfma": "GEMM2 (FC2)",
+        "gemm2_tile_mfma": "GEMM2 (FC2)",
+        "intranode_localstage": "Local Stage (prep)",
+        "intranode_xgmi_pull": "Intra-Node xGMI Dispatch",
+        "intranode_xgmi_scatterpush": "Intra-Node xGMI Combine",
+        "intranode_homecombine": "Intra-Node xGMI Combine",
+        "internode_rdma_dispatch": "Inter-Node RDMA Dispatch",
+        "internode_rdma_return": "Inter-Node RDMA Combine",
+        "internode_partial_reduce": "Inter-Node RDMA Combine",
+        "route_plan_local": "Route / Sync",
+        "route_plan_remote": "Route / Sync",
+    }
+    if low in pretty_known:
+        return pretty_known[low]
+    return f"{lbl} ({sem})" if low != sem else STAGE_COLORS.get(sem, _DEFAULT_COLOR)[1]
+
+
+def _detect_platform(other: Mapping[str, Any], events: Sequence[Mapping[str, Any]], hw_labels: Mapping[str, str]) -> bool:
+    """Return True when the trace belongs to an AMD GPU (CU / wave / rocprof), else False (NVIDIA SM / warp)."""
+    meta = other.get("meta") if isinstance(other.get("meta"), Mapping) else {}
+    plat = str(other.get("platform") or meta.get("platform") or "").lower()
+    if plat == "amd":
+        return True
+    if plat in ("nv", "nvidia"):
+        return False
+    card = str(other.get("card") or meta.get("card") or "").lower()
+    arch = str(other.get("arch") or meta.get("arch") or "").lower()
+    if "mi308" in card or "mi300" in card or arch.startswith("gfx"):
+        return True
+    if any("xgmi" in v.lower() or "mi308" in v.lower() or "matrix core" in v.lower() for v in hw_labels.values()):
+        return True
+    for ev in events[:120]:
+        if ev.get("ph") == "M" and ev.get("name") == "process_name":
+            nm = str((ev.get("args") or {}).get("name") or "")
+            if re.match(r"^\s*CU\s*\d+", nm):
+                return True
+    return False
+
+
 def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
     events = trace.get("traceEvents") or []
+    other = dict(trace.get("otherData") or {})
+    meta = other.get("meta") if isinstance(other.get("meta"), Mapping) else {}
     hw_curves: Dict[str, List[Tuple[float, float]]] = defaultdict(list)
     hw_labels: Dict[str, str] = {}
     nsys_kernel: Optional[Dict[str, Any]] = None
+    info_dur_us: Optional[float] = None
     sw_spans: List[Dict[str, Any]] = []
     sm_set: set[int] = set()
     stages_seen: Dict[str, float] = defaultdict(float)
     meta_warps_by_sm: Dict[int, Dict[int, str]] = defaultdict(dict)
+    proc_names: Dict[int, str] = {}
+    has_high_unit_pids = any(
+        ev.get("ph") == "X" and isinstance(ev.get("pid"), int) and int(ev["pid"]) >= 100
+        and str(ev.get("cat") or "") not in ("nsys_kernel", "info")
+        for ev in events
+    )
 
-    import re as _re
     for ev in events:
         ph = ev.get("ph")
-        if ph == "M" and ev.get("name") == "thread_name":
+        if ph == "M" and ev.get("name") == "process_name":
             pid = ev.get("pid")
+            if isinstance(pid, int):
+                proc_names[pid] = str((ev.get("args") or {}).get("name") or "")
+        elif ph == "M" and ev.get("name") == "thread_name":
+            pid = ev.get("pid")
+            tid = ev.get("tid")
             tname = str((ev.get("args") or {}).get("name") or "")
-            if isinstance(pid, int) and pid != 1:
+            if isinstance(pid, int) and pid != 1 and (not has_high_unit_pids or pid >= 100):
                 sm = pid - 100 if pid >= 100 else pid
-                m = _re.search(r"\bw(\d+)\b", tname)
+                m = re.search(r"\b[wW](\d+)\b", tname)
+                if not m:
+                    m = re.search(r"\bWave\s+(\d+)\b", tname, re.I)
                 if m:
                     w_id = int(m.group(1))
-                    role_part = tname.split("·")[-1].strip() if "·" in tname else (
-                        tname.split("/")[-1].strip() if "/" in tname else f"w{w_id:02d}"
-                    )
-                    # Strip leading `w00` prefix if role_part is just `w00` or `cta0 w00`
-                    if _re.fullmatch(r"w\d+", role_part):
+                    m_role_bracket = re.search(r"\[(Compute|Comm|Dispatch|Scatter|Math|Epilogue|DMA|Producer|Consumer)[^\]]*\]", tname, re.I)
+                    if m_role_bracket:
+                        role_part = m_role_bracket.group(1).strip()
+                    elif "·" in tname:
+                        role_part = tname.split("·")[-1].strip()
+                    elif "/" in tname:
+                        role_part = tname.split("/")[-1].strip()
+                    else:
+                        role_part = f"w{w_id:02d}"
+                    if re.fullmatch(r"[wW]\d+", role_part):
                         role_part = f"w{w_id:02d}"
                     meta_warps_by_sm[sm].setdefault(w_id, role_part)
                     sm_set.add(sm)
@@ -194,49 +399,82 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
             hw_labels.setdefault(key, cname)
         elif ph == "X":
             cat = str(ev.get("cat") or "")
+            pid = ev.get("pid")
             if cat == "nsys_kernel":
                 nsys_kernel = dict(ev)
                 continue
             if cat == "info":
+                d_info = float(ev.get("dur") or 0.0)
+                if d_info > 0.0 and info_dur_us is None:
+                    info_dur_us = d_info
+                continue
+            # Skip non-unit macro summary tracks (e.g. pid=1 hardware header, pid=2 macro stage summary)
+            if has_high_unit_pids and isinstance(pid, int) and pid < 100:
                 continue
             ts = float(ev.get("ts") or 0.0)
             dur = float(ev.get("dur") or 0.0)
             if dur <= 0.0 or not math.isfinite(dur):
                 continue
             args = ev.get("args") or {}
-            sem = str(args.get("semantic_id") or ev.get("name") or "compute").lower()
-            if sem not in STAGE_COLORS:
-                sem = str(ev.get("name") or "compute").lower()
+            raw_name = str(ev.get("name") or "").strip()
+            disp_label = str(
+                args.get("display_label")
+                or args.get("original_label")
+                or raw_name
+                or args.get("semantic_id")
+                or "compute"
+            ).strip()
+            sem_raw = str(args.get("semantic_id") or cat or raw_name or "compute").lower()
+            if sem_raw not in STAGE_COLORS:
+                from .contract import resolve_semantic_id
+                sem = resolve_semantic_id(disp_label or raw_name or sem_raw)
+            else:
+                sem = sem_raw
             sm = args.get("sm")
-            if sm is None:
-                pid = ev.get("pid")
+            if sm is None and args.get("cu") is not None and isinstance(pid, int) and pid >= 100:
+                sm = int(pid) - 100
+            elif sm is None:
                 sm = int(pid) - 100 if isinstance(pid, int) and pid >= 100 else (int(pid) if isinstance(pid, int) else 0)
             else:
                 sm = int(sm)
-            warp = int(args.get("warp", 0))
+            if args.get("warp") is not None:
+                warp = int(args["warp"])
+            elif args.get("wave") is not None:
+                warp = int(args["wave"])
+            elif isinstance(ev.get("tid"), int) and has_high_unit_pids and int(ev["tid"]) >= 1:
+                warp = int(ev["tid"]) - 1 if (sm in meta_warps_by_sm and 0 in meta_warps_by_sm[sm]) else int(ev["tid"])
+            else:
+                warp = 0
             cta = int(args.get("cta", 0))
-            role = str(args.get("role") or f"w{warp:02d}")
+            role = str(args.get("role") or meta_warps_by_sm.get(sm, {}).get(warp) or f"w{warp:02d}")
+            fabric = str(args.get("fabric") or "").strip().lower()
             sm_set.add(sm)
             stages_seen[sem] += dur
             sw_spans.append({
                 "ts": ts, "dur": dur, "end": ts + dur, "sem": sem,
-                "label": str(args.get("original_label") or sem),
+                "label": disp_label, "raw_name": raw_name, "fabric": fabric,
                 "sm": sm, "warp": warp, "cta": cta, "role": role,
             })
 
     for k in hw_curves:
         hw_curves[k].sort(key=lambda x: x[0])
 
-    # Combine DRAM read + write into aggregate DRAM bandwidth curve if both present
-    if "dram_read" in hw_curves or "dram_write" in hw_curves:
+    # Combine DRAM read + write or use direct memory_util curve
+    if "dram_bw_direct" in hw_curves:
+        hw_curves["dram_bw"] = list(hw_curves["dram_bw_direct"])
+        hw_labels["dram_bw"] = hw_labels.get("dram_bw_direct", "memory_util")
+    elif "dram_read" in hw_curves or "dram_write" in hw_curves:
         by_t: Dict[float, float] = defaultdict(float)
         for k in ("dram_read", "dram_write"):
             for t, v in hw_curves.get(k, ()):
                 by_t[round(t, 3)] += v
         hw_curves["dram_bw"] = sorted(by_t.items())
 
-    # Combine NVLink RX/TX user data into peak directional link utilization curve
-    if any(k in hw_curves for k in ("nvlink_rx_req", "nvlink_rx_rsp", "nvlink_tx_req", "nvlink_tx_rsp", "nvlink_user")):
+    # Combine NVLink RX/TX user data or use direct intra-node communication_util / xGMI curve
+    if "intra_comm_direct" in hw_curves:
+        hw_curves["nvlink_bw"] = list(hw_curves["intra_comm_direct"])
+        hw_labels["nvlink_bw"] = hw_labels.get("intra_comm_direct", "communication_util")
+    elif any(k in hw_curves for k in ("nvlink_rx_req", "nvlink_rx_rsp", "nvlink_tx_req", "nvlink_tx_rsp", "nvlink_user")):
         rx_t: Dict[float, float] = defaultdict(float)
         tx_t: Dict[float, float] = defaultdict(float)
         for k in ("nvlink_rx_req", "nvlink_rx_rsp"):
@@ -251,8 +489,32 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         elif "nvlink_user" in hw_curves:
             hw_curves["nvlink_bw"] = list(hw_curves["nvlink_user"])
 
+    is_amd = _detect_platform(other, events, hw_labels)
+    has_inter_slices = any(
+        sp["fabric"].startswith("inter_node") or bool(_INTER_SLICE_RE.search(sp["label"]))
+        for sp in sw_spans
+    )
+    has_intra_slices = any(
+        sp["fabric"].startswith("intra_node") or bool(_INTRA_SLICE_RE.search(sp["label"]))
+        for sp in sw_spans
+    )
+    ep_val = int(meta.get("ep") or other.get("ep") or 0)
+    multi_node = bool(ep_val > 8 or meta.get("multi_node") or "inter_rdma" in hw_curves or has_inter_slices)
+    dual_fabric = bool(has_inter_slices and (has_intra_slices or multi_node))
+    use_ib = any(
+        sp["fabric"] == "inter_node_ib" or bool(re.search(r"\b(?:infiniband|ibgda|ib_)\b", sp["label"], re.I))
+        for sp in sw_spans
+    )
+
+    if dual_fabric:
+        # Filter pure polling/background wait slices in multi-node fabric timelines so active fabric bars stay crisp.
+        sw_spans = [sp for sp in sw_spans if sp["label"].lower() not in _FABRIC_WAIT_DROP]
+
     sw_end = max((s["end"] for s in sw_spans), default=0.0)
-    k_dur = float(nsys_kernel["dur"]) if nsys_kernel and nsys_kernel.get("dur") else sw_end
+    k_dur = (
+        float(nsys_kernel["dur"]) if (nsys_kernel and nsys_kernel.get("dur"))
+        else (info_dur_us if info_dur_us else sw_end)
+    )
     t_max = max(sw_end, k_dur, 1.0)
 
     return {
@@ -266,8 +528,64 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         "t_max": t_max,
         "k_dur": k_dur,
         "sw_end": sw_end,
-        "other": dict(trace.get("otherData") or {}),
+        "other": other,
+        "is_amd": is_amd,
+        "multi_node": multi_node,
+        "dual_fabric": dual_fabric,
+        "use_ib": use_ib,
+        "ep": ep_val,
     }
+
+
+def _compute_panel_c_role_labels(
+    rep_warps: Sequence[Tuple[int, str]],
+    rep_spans: Sequence[Mapping[str, Any]],
+    all_spans: Sequence[Mapping[str, Any]],
+    *,
+    dual_fabric: bool,
+    is_amd: bool,
+) -> List[str]:
+    """Build clean per-warp / per-wave Y-axis labels, detecting Streaming Reduce on comm lanes."""
+    if not rep_warps:
+        return ["W00"]
+    if not dual_fabric:
+        return [f"W{w:02d} · {r}" for w, r in rep_warps]
+
+    # Detect streaming Reduce on comm lanes using per-(unit, lane) comm identification so
+    # pure-comm CTAs (where W00..W03 are also comm lanes) never pollute `tail_comb_start`.
+    comm_tracks: set[Tuple[int, int]] = set()
+    for sp in all_spans:
+        frole = sp.get("_frole")
+        rl = str(sp.get("role") or "").lower()
+        if frole in ("inter_dispatch", "intra_dispatch") or any(k in rl for k in ("comm", "dispatch", "scatter")):
+            comm_tracks.add((int(sp["sm"]), int(sp["warp"])))
+    rep_sm_id = int(rep_spans[0]["sm"]) if rep_spans else 0
+    for w, r in rep_warps:
+        if any(k in r.lower() for k in ("comm", "dispatch", "scatter")):
+            comm_tracks.add((rep_sm_id, int(w)))
+    non_comm_comb = [
+        float(sp["ts"]) for sp in all_spans
+        if (int(sp["sm"]), int(sp["warp"])) not in comm_tracks
+        and ("combine" in sp["label"].lower() or "reduce" in sp["label"].lower())
+    ]
+    tail_comb_start = min(non_comm_comb) if non_comm_comb else float("inf")
+    streaming_warps = set()
+    for sp in rep_spans:
+        if (int(sp["sm"]), int(sp["warp"])) in comm_tracks and float(sp["ts"]) < tail_comb_start:
+            low = sp["label"].lower()
+            if "combine" in low or "reduce" in low or "return" in low:
+                streaming_warps.add(int(sp["warp"]))
+    out = []
+    for w, r in rep_warps:
+        rl = r.lower()
+        if "compute" in rl or "math" in rl:
+            out.append(f"W{w:02d} (Compute / Combine)")
+        elif "comm" in rl or "dispatch" in rl or "scatter" in rl:
+            suffix = "Comm / Scatter -> Streaming Reduce" if w in streaming_warps else "Comm / Scatter"
+            out.append(f"W{w:02d} ({suffix})")
+        else:
+            out.append(f"W{w:02d} ({r})")
+    return out
 
 
 def render_swhw_overview_png(
@@ -279,11 +597,10 @@ def render_swhw_overview_png(
     focus_sm: Optional[int] = None,
     dpi: int = 220,
 ) -> Path:
-    """Render a compact 3-panel single-run SW+HW overview PNG on one locked time axis."""
+    """Render a publication-grade 3-panel single-run SW+HW overview PNG on one locked time axis."""
     import matplotlib
     matplotlib.use("Agg")
     if sys.version_info >= (3, 14):
-        # Work around Python 3.14 copy.deepcopy(super(), memo) recursion in older Matplotlib Path.__deepcopy__
         from matplotlib.path import Path as _MplPath
         def _safe_path_deepcopy(self, memo):
             p = _MplPath(
@@ -303,20 +620,28 @@ def render_swhw_overview_png(
     trace = _load_trace(trace_or_path)
     parsed = _parse_trace(trace)
     hw_curves = parsed["hw_curves"]
+    hw_labels = parsed["hw_labels"]
     sw_spans = parsed["sw_spans"]
     sms = parsed["sms"]
     t_max = parsed["t_max"]
     k_dur = parsed["k_dur"]
     nsys_k = parsed["nsys_kernel"]
-    nsys_meta = (parsed["other"].get("nsys_hw") or {})
+    other = parsed["other"]
+    meta = other.get("meta") if isinstance(other.get("meta"), Mapping) else {}
+    nsys_meta = (other.get("nsys_hw") or {})
+    is_amd = bool(parsed["is_amd"])
+    multi_node = bool(parsed["multi_node"])
+    dual_fabric = bool(parsed["dual_fabric"])
+    use_ib = bool(parsed["use_ib"])
+    unit_nm = "CU" if is_amd else "SM"
+    lane_nm = "wave" if is_amd else "warp"
 
-    # Pick representative SM for Panel (C): focus_sm if present, else SM 0 if present, else first SM with most roles
+    # Pick representative SM/CU for Panel (C)
     sm_warp_role: Dict[int, Dict[int, str]] = defaultdict(dict)
     for sm_id, wmap in (parsed.get("meta_warps_by_sm") or {}).items():
         for w_id, r_lbl in wmap.items():
             sm_warp_role[int(sm_id)][int(w_id)] = str(r_lbl)
-    # Include all opened warp lanes recorded in otherData.sm_warps / otherData.warp_roles (e.g. OPEN/CLOSE-only idle warps)
-    other_sm_warps = parsed["other"].get("sm_warps") or {}
+    other_sm_warps = other.get("sm_warps") or {}
     if isinstance(other_sm_warps, Mapping):
         for sm_k, wmap in other_sm_warps.items():
             if isinstance(wmap, Mapping):
@@ -326,15 +651,14 @@ def render_swhw_overview_png(
                     except (ValueError, TypeError):
                         pass
     for sp in sw_spans:
-        sm_warp_role[sp["sm"]][sp["warp"]] = sp["role"]
-    # Ensure every warp 0..wpc-1 exists on observed SMs if wpc > 1 (using otherData.warp_roles when available)
+        sm_warp_role[sp["sm"]].setdefault(sp["warp"], sp["role"])
     wpc_meta = int(
-        parsed["other"].get("wpc")
-        or (parsed["other"].get("meta") or {}).get("wpc")
-        or (parsed["other"].get("summary") or {}).get("wpc")
+        other.get("wpc")
+        or meta.get("wpc")
+        or (other.get("summary") or {}).get("wpc")
         or 0
     )
-    global_warp_roles = parsed["other"].get("warp_roles") or {}
+    global_warp_roles = other.get("warp_roles") or {}
     if wpc_meta > 1:
         for sm_id in list(sm_warp_role.keys()):
             for w_id in range(wpc_meta):
@@ -364,12 +688,12 @@ def render_swhw_overview_png(
     n_sms = max(1, len(sms))
     n_rep_rows = rep_slot_count if use_cta_slots else max(1, len(rep_warps))
 
-    has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw", "nvlink_bw"))
-    panel_c_h = max(2.1, min(4.8, (0.25 if n_rep_rows >= 8 else 0.40) * n_rep_rows + 0.95))
-    panel_b_h = max(3.0, min(4.3, 0.036 * n_sms + 1.5))
-    panel_a_h = 2.15 if has_hw else 0.0
-    fig_h = 2.15 + panel_a_h + panel_b_h + panel_c_h
-    fig_w = 15.5
+    has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw", "nvlink_bw", "inter_rdma"))
+    panel_c_h = max(2.2, min(4.8, (0.26 if n_rep_rows >= 8 else 0.40) * n_rep_rows + 1.05))
+    panel_b_h = max(3.1, min(4.4, 0.036 * n_sms + 1.55))
+    panel_a_h = 2.25 if has_hw else 0.0
+    fig_h = 2.25 + panel_a_h + panel_b_h + panel_c_h
+    fig_w = 16.0
 
     plt.rcParams.update({
         "font.family": "DejaVu Sans",
@@ -383,106 +707,140 @@ def render_swhw_overview_png(
     if has_hw:
         fig, axes = plt.subplots(
             3, 1, figsize=(fig_w, fig_h), sharex=True,
-            gridspec_kw={"height_ratios": [panel_a_h, panel_b_h, panel_c_h], "hspace": 0.28},
+            gridspec_kw={"height_ratios": [panel_a_h, panel_b_h, panel_c_h], "hspace": 0.42 if dual_fabric else 0.28},
         )
         ax_hw, ax_sm, ax_wp = axes
     else:
         fig, axes = plt.subplots(
             2, 1, figsize=(fig_w, fig_h), sharex=True,
-            gridspec_kw={"height_ratios": [panel_b_h, panel_c_h], "hspace": 0.24},
+            gridspec_kw={"height_ratios": [panel_b_h, panel_c_h], "hspace": 0.28},
         )
         ax_hw = None
         ax_sm, ax_wp = axes
 
     fig.patch.set_facecolor("#FFFFFF")
 
-    # ---- Title & legend ----
+    # ---- Title & subtitle ----
     kname = ""
     if nsys_k and nsys_k.get("name"):
         kname = _short_kernel_name(str(nsys_k["name"]))
     if not kname:
-        kname = _short_kernel_name(str((parsed["other"].get("meta") or {}).get("kernel") or "WeaveProfiler Kernel"))
+        kname = _short_kernel_name(str(meta.get("kernel") or meta.get("model") or "WeaveProfiler Kernel"))
     if not title:
-        title = f"{kname} — {k_dur:,.1f} µs · {len(sms)} Physical SMs"
+        ep_tag = f" · EP{parsed['ep']}" if parsed["ep"] else ""
+        plat_tag = "AMD MI308X" if is_amd else (str(meta.get("card") or "").upper() or "GPU")
+        title = f"{kname} ({plat_tag}{ep_tag}) — {k_dur:,.1f} µs · {len(sms)} Physical {unit_nm}s"
     if not subtitle:
         freq_khz = None
         if nsys_meta.get("sample_freq_hz"):
             freq_khz = float(nsys_meta["sample_freq_hz"]) / 1000.0
         elif nsys_k and (nsys_k.get("args") or {}).get("sample_freq_hz"):
             freq_khz = float(nsys_k["args"]["sample_freq_hz"]) / 1000.0
-        freq_str = f"{freq_khz:.1f} kHz nsys GPU metrics + " if freq_khz else ""
-        arch = (parsed["other"].get("meta") or {}).get("arch") or ""
+        hw_tool_lbl = "rocprofiler-sdk PMC" if is_amd else (f"{freq_khz:.1f} kHz nsys GPU metrics" if freq_khz else "nsys GPU metrics")
+        arch = str(meta.get("arch") or other.get("arch") or "")
         arch_str = f"{arch} · " if arch else ""
-        magic = str((parsed["other"].get("meta") or {}).get("magic") or "WPLITE02")
+        magic = str(meta.get("magic") or "WPLITE02")
         lane_desc = (
-            f"up to {rep_slot_count} concurrent CTAs/SM"
+            f"up to {rep_slot_count} concurrent CTAs/{unit_nm}"
             if use_cta_slots
-            else f"{len(rep_warps) or 1} recorded warp lane{'s' if len(rep_warps) != 1 else ''}/SM"
+            else f"{len(rep_warps) or 1} recorded {lane_nm} lane{'s' if len(rep_warps) != 1 else ''}/{unit_nm}"
         )
         subtitle = (
-            f"{arch_str}{len(sms)} physical SMs × {lane_desc} · "
-            f"{len(sw_spans):,} software stage spans · {freq_str}{magic} timeline"
+            f"{arch_str}{len(sms)} physical {unit_nm}s × {lane_desc} · "
+            f"{len(sw_spans):,} software stage spans · {hw_tool_lbl} + {magic} timeline"
         )
 
     fig.text(0.5, 0.985, title, ha="center", va="top", fontsize=14.2, fontweight="bold", color="#111111")
     fig.text(0.5, 0.955, subtitle, ha="center", va="top", fontsize=9.1, color="#455A64")
 
-    # Legend & per-stage color map: keep distinct shades + explicit stage labels when multiple
-    # distinct `original_label`s share one semantic family (e.g., `mma_qk` vs `mma_pv`), while
-    # preserving clean single semantic labels for simple single-stage-per-semantic kernels.
-    labels_by_sem: Dict[str, List[str]] = defaultdict(list)
-    for sp in sw_spans:
-        lbl = str(sp.get("label") or sp["sem"]).strip()
-        if lbl and lbl not in labels_by_sem[sp["sem"]]:
-            labels_by_sem[sp["sem"]].append(lbl)
-    stage_color_map: Dict[Tuple[str, str], Tuple[str, str]] = {}
-    stage_order = ("load", "mma", "gemm", "softmax", "compute", "epilogue", "store", "wait", "barrier", "communication", "reduction", "dispatch")
-    ordered_sems = [s for s in stage_order if s in parsed["stages_seen"]] + sorted(
-        s for s in parsed["stages_seen"] if s not in stage_order
-    )
-    seen_leg = set()
-    used_colors = set()
-    overflow_idx = 0
-    leg_handles: List[Patch] = []
-    for sem in ordered_sems:
-        base_col, base_desc = STAGE_COLORS.get(sem, _DEFAULT_COLOR)
-        lbls = sorted(labels_by_sem.get(sem) or [sem], key=lambda x: (x.lower() == sem, x.lower()))
-        # Disambiguate when >=2 distinct non-generic labels exist within this semantic family
-        distinct_named = [l for l in lbls if l.lower() != sem]
-        if len(lbls) >= 2 and distinct_named:
+    # ---- Stage / Dual-Fabric Color Map & Legends ----
+    panel_b_fabric_handles: List[Patch] = []
+    panel_c_handles: List[Patch] = []
+    top_legend_handles: List[Patch] = []
+
+    if dual_fabric:
+        # Multi-node dual-color fabric mode: Inter-Node RDMA/IB (warm red/amber) vs Intra-Node xGMI/NVLink (cool teal/blue)
+        role_order = (
+            "inter_dispatch", "inter_combine", "intra_dispatch", "intra_combine",
+            "gemm1", "gemm2", "route_sync", "local_prep",
+        )
+        seen_roles: set[str] = set()
+        for sp in sw_spans:
+            frole = _classify_fabric_role(sp, is_amd=is_amd)
+            sp["_frole"] = frole
+            if frole:
+                seen_roles.add(frole)
+        # Panel B dedicated 4-swatch Inter-Node vs Intra-Node legend strip
+        for frole in ("inter_dispatch", "inter_combine", "intra_dispatch", "intra_combine"):
+            col = FABRIC_COLORS_BY_ROLE[frole]
+            lbl = _fabric_role_label(frole, is_amd=is_amd, use_ib=use_ib)
+            panel_b_fabric_handles.append(Patch(facecolor=col, edgecolor="none", label=lbl))
+        # Panel C complete legend (4 fabrics + compute/route/prep stages present)
+        for frole in role_order:
+            if frole in ("inter_dispatch", "inter_combine", "intra_dispatch", "intra_combine") or frole in seen_roles:
+                col = FABRIC_COLORS_BY_ROLE[frole]
+                lbl = _fabric_role_label(frole, is_amd=is_amd, use_ib=use_ib)
+                panel_c_handles.append(Patch(facecolor=col, edgecolor="none", label=lbl))
+
+        def _span_color(sp: Mapping[str, Any]) -> str:
+            fr = sp.get("_frole")
+            if fr and fr in FABRIC_COLORS_BY_ROLE:
+                return FABRIC_COLORS_BY_ROLE[fr]
+            return STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR)[0]
+    else:
+        # Single-node / general kernel mode: preserve rich human-readable stage labels for EVERY stage!
+        labels_by_sem: Dict[str, List[str]] = defaultdict(list)
+        for sp in sw_spans:
+            lbl = str(sp.get("label") or sp["sem"]).strip()
+            if lbl and lbl not in labels_by_sem[sp["sem"]]:
+                labels_by_sem[sp["sem"]].append(lbl)
+        stage_color_map: Dict[Tuple[str, str], Tuple[str, str]] = {}
+        stage_order = ("load", "mma", "gemm", "softmax", "compute", "epilogue", "store", "wait", "barrier", "communication", "reduction", "dispatch")
+        ordered_sems = [s for s in stage_order if s in parsed["stages_seen"]] + sorted(
+            s for s in parsed["stages_seen"] if s not in stage_order
+        )
+        seen_leg = set()
+        used_colors = set()
+        overflow_idx = 0
+        for sem in ordered_sems:
+            base_col, _base_desc = STAGE_COLORS.get(sem, _DEFAULT_COLOR)
+            lbls = sorted(labels_by_sem.get(sem) or [sem], key=lambda x: (x.lower() == sem, x.lower()))
             shades = list(_SEMANTIC_SHADES.get(sem, (base_col,)))
-            for idx_l, lbl in enumerate(lbls):
-                col = next((c for c in shades[idx_l:] if c not in used_colors), None)
-                if col is None:
-                    col = _OVERFLOW_SHADES[overflow_idx % len(_OVERFLOW_SHADES)]
-                    overflow_idx += 1
-                used_colors.add(col)
-                desc = f"{lbl} ({sem})" if lbl.lower() != sem else base_desc
-                stage_color_map[(sem, lbl)] = (col, desc)
+            if len(lbls) >= 2:
+                for idx_l, lbl in enumerate(lbls):
+                    col = next((c for c in shades[idx_l:] if c not in used_colors), None)
+                    if col is None:
+                        col = _OVERFLOW_SHADES[overflow_idx % len(_OVERFLOW_SHADES)]
+                        overflow_idx += 1
+                    used_colors.add(col)
+                    desc = _humanize_stage_label(lbl, sem)
+                    stage_color_map[(sem, lbl)] = (col, desc)
+                    if desc not in seen_leg:
+                        seen_leg.add(desc)
+                        top_legend_handles.append(Patch(facecolor=col, edgecolor="none", label=desc))
+            else:
+                only_lbl = lbls[0]
+                used_colors.add(base_col)
+                desc = _humanize_stage_label(only_lbl, sem)
+                stage_color_map[(sem, only_lbl)] = (base_col, desc)
                 if desc not in seen_leg:
                     seen_leg.add(desc)
-                    leg_handles.append(Patch(facecolor=col, edgecolor="none", label=desc))
-        else:
-            only_lbl = lbls[0]
-            used_colors.add(base_col)
-            stage_color_map[(sem, only_lbl)] = (base_col, base_desc)
-            if base_desc not in seen_leg:
-                seen_leg.add(base_desc)
-                leg_handles.append(Patch(facecolor=base_col, edgecolor="none", label=base_desc))
+                    top_legend_handles.append(Patch(facecolor=base_col, edgecolor="none", label=desc))
 
-    def _span_color(sp: Mapping[str, Any]) -> str:
-        lbl = str(sp.get("label") or sp["sem"]).strip()
-        return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
-    if leg_handles:
-        fig.legend(
-            handles=leg_handles, loc="upper center", bbox_to_anchor=(0.5, 0.930),
-            ncol=min(len(leg_handles), 6), frameon=False, fontsize=8.8, handlelength=1.4, columnspacing=1.5,
-        )
+        def _span_color(sp: Mapping[str, Any]) -> str:
+            lbl = str(sp.get("label") or sp["sem"]).strip()
+            return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
+
+        if top_legend_handles:
+            fig.legend(
+                handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.930),
+                ncol=min(len(top_legend_handles), 6), frameon=False, fontsize=8.8, handlelength=1.4, columnspacing=1.5,
+            )
 
     x_pad = max(1.0, t_max * 0.015)
     x_lim = (0.0, t_max + x_pad)
 
-    # ---- Panel (A): nsys hardware utilization curves ----
+    # ---- Panel (A): real same-run hardware utilization curves ----
     if ax_hw is not None:
         ax_hw.set_facecolor("#FFFFFF")
         ax_hw.grid(True, axis="y", linestyle="-", linewidth=0.5, color="#ECEFF1", zorder=0)
@@ -490,21 +848,32 @@ def render_swhw_overview_png(
         ax_hw.axhline(100.0, color="#CFD8DC", linestyle="--", linewidth=0.8, zorder=1)
         ax_hw.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=2)
 
-        nvlink_pts = hw_curves.get("nvlink_bw") or []
-        has_active_nvlink = bool(nvlink_pts and max((p[1] for p in nvlink_pts if 0.0 <= p[0] <= k_dur), default=0.0) >= 0.5)
-        curve_specs = [
-            ("tensor_active", "Tensor Active / MMA Pipe %", "#1565C0", "-", 1.9, "Compute"),
-            ("dram_bw", "HBM / DRAM Bandwidth %", "#E65100", "-", 1.5, "HBM BW"),
-            (
-                ("nvlink_bw", "NVLink RX/TX User Data %", "#00897B", "-", 1.55, "NVLink")
-                if has_active_nvlink
-                else ("sm_issue", "SM Issue %", "#00897B", "-", 1.5, "SM Issue")
-            ),
-            ("sm_active", "Active SMs %", "#37474F", "--", 1.35, "Active SMs"),
-        ]
+        comm_pts = hw_curves.get("nvlink_bw") or []
+        has_active_comm = bool(comm_pts and max((p[1] for p in comm_pts if 0.0 <= p[0] <= k_dur), default=0.0) >= 0.5)
+        rdma_pts = hw_curves.get("inter_rdma") or []
+        has_active_rdma = bool(rdma_pts and max((p[1] for p in rdma_pts if 0.0 <= p[0] <= k_dur), default=0.0) > 0.0)
+
+        curve_order_keys = ["tensor_active", "dram_bw"]
+        if has_active_comm:
+            curve_order_keys.append("nvlink_bw")
+        elif hw_curves.get("sm_issue"):
+            curve_order_keys.append("sm_issue")
+        if has_active_rdma:
+            curve_order_keys.append("inter_rdma")
+        if hw_curves.get("sm_active"):
+            curve_order_keys.append("sm_active")
+
+        style_map = {
+            "tensor_active": ("#1565C0", "-", 1.9),
+            "dram_bw": ("#E65100", "-", 1.6),
+            "nvlink_bw": ("#00897B", "-", 1.6),
+            "inter_rdma": ("#7B1FA2", "-", 1.7),
+            "sm_issue": ("#00897B", "-", 1.5),
+            "sm_active": ("#37474F", "--", 1.35),
+        }
         chips: List[Tuple[str, str]] = []
         hw_max_val = 100.0
-        for key, label, color, ls, lw, short in curve_specs:
+        for key in curve_order_keys:
             pts = hw_curves.get(key)
             if not pts:
                 continue
@@ -512,6 +881,8 @@ def render_swhw_overview_png(
             ys = [p[1] for p in pts if 0.0 <= p[0] <= t_max + x_pad]
             if not xs:
                 continue
+            color, ls, lw = style_map[key]
+            label, short = _pretty_hw_curve_label(hw_labels.get(key, ""), key, is_amd=is_amd, multi_node=multi_node)
             ax_hw.plot(xs, ys, label=label, color=color, linestyle=ls, linewidth=lw, zorder=4)
             in_w = [p[1] for p in pts if 0.0 <= p[0] <= k_dur] or ys
             mean_v = sum(in_w) / len(in_w)
@@ -523,11 +894,24 @@ def render_swhw_overview_png(
         ax_hw.set_ylim(-4, y_top)
         ax_hw.set_yticks([0, 25, 50, 75, 100])
         ax_hw.set_ylabel("Utilization (%)", fontsize=9.5, color="#263238")
-        ax_hw.set_title("(A) Same-run hardware utilization — real nsys GPU metric curves",
+        hw_title_src = "same-run SW+HW capture" if is_amd else "real nsys GPU metric curves"
+        ax_hw.set_title(f"(A) Aligned Hardware Utilization Curves ({hw_title_src})",
                         fontsize=10.5, fontweight="bold", color="#111111", pad=44)
-        ax_hw.legend(loc="upper center", bbox_to_anchor=(0.5, 1.32), ncol=4, frameon=False, fontsize=8.4, handlelength=2.0)
+        ax_hw.legend(
+            loc="upper center", bbox_to_anchor=(0.5, 1.33),
+            ncol=min(max(2, len(curve_order_keys)), 3 if len(curve_order_keys) >= 5 else 4),
+            frameon=False, fontsize=8.4, handlelength=2.0,
+        )
 
-        if chips:
+        if multi_node and not has_active_rdma:
+            ax_hw.text(
+                0.012, 0.78,
+                "Inter-Node RDMA NIC counters unavailable on this HCA (omitted, not zero-filled)",
+                transform=ax_hw.transAxes, ha="left", va="center",
+                fontsize=8.2, fontstyle="italic", color="#8B1E1E", zorder=6,
+            )
+
+        if chips and not dual_fabric:
             n_ch = len(chips)
             for idx_c, (txt, col) in enumerate(chips):
                 chip_x = 0.004 + idx_c * (0.992 / max(1, n_ch))
@@ -537,7 +921,7 @@ def render_swhw_overview_png(
                     bbox=dict(boxstyle="round,pad=0.22", facecolor="#F8FAFC", edgecolor=col, linewidth=1.0),
                 )
 
-    # ---- Panel (B): All physical SMs dense rasterized waterfall (sub-row per warp role or concurrent CTA slot) ----
+    # ---- Panel (B): All physical SMs / CUs dense rasterized waterfall ----
     ax_sm.set_facecolor("#FFFFFF")
     img_w = 2400
     sm_to_row = {sm: idx for idx, sm in enumerate(sms)}
@@ -558,8 +942,6 @@ def render_swhw_overview_png(
     else:
         n_sub = max(1, len(all_warps))
     img = np.full((n_sms * n_sub, img_w, 3), 255, dtype=np.uint8)
-    # Draw background waits/barriers first, then active spans from LONGEST to SHORTEST duration
-    # so short nested/adjacent stages (`load`, `softmax`, `store`) are never painted over by longer spans.
     sorted_spans = sorted(
         sw_spans,
         key=lambda s: (0 if s["sem"] in ("wait", "barrier") else 1, -float(s["dur"]), _STAGE_DRAW_PRIORITY.get(s["sem"], 4)),
@@ -575,6 +957,8 @@ def render_swhw_overview_png(
             sub = warp_to_sub.get(sp["warp"], 0)
         x0 = max(0, min(img_w - 1, int(sp["ts"] * scale_x)))
         x1 = max(x0 + 1, min(img_w, int(math.ceil(sp["end"] * scale_x))))
+        if dual_fabric and sp.get("_frole") in ("inter_dispatch", "inter_combine", "intra_combine"):
+            x1 = max(x1, min(img_w, x0 + 2))
         img[row * n_sub + sub, x0:x1] = _hex_to_rgb(_span_color(sp))
 
     ax_sm.imshow(img, aspect="auto", interpolation="nearest", extent=[0.0, t_max + x_pad, n_sms - 0.5, -0.5])
@@ -584,21 +968,37 @@ def render_swhw_overview_png(
     if n_sms > 1 and ((n_sms - 1) - yt[-1]) >= max(2, step // 2):
         yt.append(n_sms - 1)
     ax_sm.set_yticks(yt)
-    ax_sm.set_yticklabels([f"SM{sms[i]}" for i in yt] if sms else ["SM0"], fontsize=8.2)
-    ax_sm.set_ylabel(f"Physical SM ({len(sms)} SMs)", fontsize=9.5, color="#263238")
-    ax_sm.set_title(f"(B) All {len(sms)} physical SMs (SM{sms[0]}–SM{sms[-1]}) — full per-tile stage waterfall"
-                    if sms else "(B) Physical SM timeline",
-                    fontsize=10.5, fontweight="bold", color="#111111", pad=6)
+    ax_sm.set_yticklabels([f"{unit_nm}{sms[i]}" for i in yt] if sms else [f"{unit_nm}0"], fontsize=8.2)
+    rank_tag = f" (rank {meta['rank']})" if meta.get("rank") is not None else f" ({len(sms)} {unit_nm}s)"
+    ax_sm.set_ylabel(f"Physical {unit_nm}{rank_tag}", fontsize=9.5, color="#263238")
+    if dual_fabric and panel_b_fabric_handles:
+        ax_sm.set_title(
+            f"(B) Multi-CTA Execution Across All {len(sms)} Physical {unit_nm}s",
+            fontsize=10.5, fontweight="bold", color="#111111", loc="left", pad=8,
+        )
+        ax_sm.legend(
+            handles=panel_b_fabric_handles, loc="lower right", bbox_to_anchor=(1.0, 1.005),
+            ncol=4, frameon=False, fontsize=8.1, handlelength=1.25, columnspacing=1.1,
+        )
+    else:
+        ax_sm.set_title(
+            f"(B) All {len(sms)} physical {unit_nm}s ({unit_nm}{sms[0]}–{unit_nm}{sms[-1]}) — full per-tile stage waterfall"
+            if sms else f"(B) Physical {unit_nm} timeline",
+            fontsize=10.5, fontweight="bold", color="#111111", pad=6,
+        )
 
-    # ---- Panel (C): Representative SM warp-role (or concurrent resident CTA) breakdown ----
+    # ---- Panel (C): Representative SM/CU warp/wave role breakdown ----
     ax_wp.set_facecolor("#FFFFFF")
     ax_wp.grid(True, axis="x", linestyle="-", linewidth=0.4, color="#ECEFF1", zorder=0)
     warp_to_y = {w: idx for idx, (w, _r) in enumerate(rep_warps)}
     verts_by_color: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
     durs_by_color: Dict[str, List[float]] = defaultdict(list)
     sem_by_color: Dict[str, str] = {}
+    is_priority_color: Dict[str, bool] = {}
     bar_h = 0.72
     rep_spans = [sp for sp in sorted_spans if sp["sm"] == rep_sm]
+    # Crisp minimum display width (~2 px on 16-inch 220 DPI figure) for short combine/RDMA slices on Panel C
+    min_vis_us = (t_max + x_pad) * (2.0 / 2800.0)
     for sp in rep_spans:
         if use_cta_slots:
             y = rep_cta_slot.get(sp["cta"])
@@ -606,49 +1006,73 @@ def render_swhw_overview_png(
             y = warp_to_y.get(sp["warp"])
         if y is None:
             continue
-        x0, x1 = sp["ts"], sp["end"]
+        x0, x1 = float(sp["ts"]), float(sp["end"])
+        is_crit = dual_fabric and sp.get("_frole") in ("inter_dispatch", "inter_combine", "intra_combine")
+        if is_crit and (x1 - x0) < min_vis_us:
+            x1 = x0 + min_vis_us
         y0, y1 = y - bar_h / 2.0, y + bar_h / 2.0
         col_hex = _span_color(sp)
         verts_by_color[col_hex].append([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
         durs_by_color[col_hex].append(float(sp["dur"]))
         sem_by_color.setdefault(col_hex, sp["sem"])
+        if is_crit:
+            is_priority_color[col_hex] = True
 
     ordered_color_layers = sorted(
         verts_by_color.items(),
         key=lambda kv: (
-            0 if sem_by_color.get(kv[0]) in ("wait", "barrier") else 1,
+            2 if is_priority_color.get(kv[0]) else (0 if sem_by_color.get(kv[0]) in ("wait", "barrier") else 1),
             -sorted(durs_by_color[kv[0]])[len(durs_by_color[kv[0]]) // 2],
         ),
     )
     for layer_idx, (col_hex, verts) in enumerate(ordered_color_layers):
-        pc = PolyCollection(verts, facecolors=col_hex, edgecolors="#FFFFFF", linewidths=0.18, zorder=3 + layer_idx * 0.01)
+        pc = PolyCollection(
+            verts, facecolors=col_hex, edgecolors="none" if is_priority_color.get(col_hex) else "#FFFFFF",
+            linewidths=0.0 if is_priority_color.get(col_hex) else 0.16,
+            antialiased=not is_priority_color.get(col_hex),
+            zorder=3 + layer_idx * 0.05,
+        )
         ax_wp.add_collection(pc)
 
-    ax_wp.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=5)
+    ax_wp.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=6)
     ax_wp.set_ylim(n_rep_rows - 0.45, -0.55)
     ax_wp.set_yticks(range(n_rep_rows))
-    yt_fs = 7.8 if n_rep_rows >= 12 else 8.4
+    yt_fs = 7.8 if n_rep_rows >= 12 else 8.2
     if use_cta_slots:
         role_lbl = rep_warps[0][1] if rep_warps else "cta"
         ax_wp.set_yticklabels([f"Slot {i} · {role_lbl}" for i in range(n_rep_rows)], fontsize=yt_fs)
-        ax_wp.set_ylabel(f"SM {rep_sm} CTA slots", fontsize=9.5, color="#263238")
+        ax_wp.set_ylabel(f"{unit_nm} {rep_sm} CTA slots", fontsize=9.5, color="#263238")
         ax_wp.set_title(
-            f"(C) SM {rep_sm} — {n_rep_rows} concurrent CTA slots ({len(rep_cta_slot)} CTAs total on SM {rep_sm})",
+            f"(C) {unit_nm} {rep_sm} — {n_rep_rows} concurrent CTA slots ({len(rep_cta_slot)} CTAs total on {unit_nm} {rep_sm})",
             fontsize=10.5, fontweight="bold", color="#111111", pad=6,
         )
     else:
-        ax_wp.set_yticklabels([f"W{w:02d} · {r}" for w, r in rep_warps] if rep_warps else ["W00"], fontsize=yt_fs)
-        ax_wp.set_ylabel(f"SM {rep_sm} warp", fontsize=9.5, color="#263238")
-        role_names = ", ".join(dict.fromkeys(r for _, r in rep_warps))
-        ax_wp.set_title(f"(C) SM {rep_sm} — all {len(rep_warps)} warps ({role_names})",
-                        fontsize=10.5, fontweight="bold", color="#111111", pad=6)
+        c_labels = _compute_panel_c_role_labels(rep_warps, rep_spans, sw_spans, dual_fabric=dual_fabric, is_amd=is_amd)
+        ax_wp.set_yticklabels(c_labels, fontsize=yt_fs)
+        ax_wp.set_ylabel(f"{unit_nm} {rep_sm} {lane_nm}", fontsize=9.5, color="#263238")
+        if dual_fabric and panel_c_handles:
+            ax_wp.set_title(
+                f"(C) Representative {unit_nm} {rep_sm} — Complete Pipeline by Real {lane_nm.title()} Role",
+                fontsize=10.5, fontweight="bold", color="#111111", pad=30,
+            )
+            ax_wp.legend(
+                handles=panel_c_handles, loc="upper center", bbox_to_anchor=(0.5, 1.135),
+                ncol=min(len(panel_c_handles), 8), frameon=False, fontsize=7.9, handlelength=1.2, columnspacing=1.0,
+            )
+        else:
+            role_names = ", ".join(dict.fromkeys(r for _, r in rep_warps))
+            ax_wp.set_title(
+                f"(C) {unit_nm} {rep_sm} — all {len(rep_warps)} {lane_nm}s ({role_names})",
+                fontsize=10.5, fontweight="bold", color="#111111", pad=6,
+            )
     ax_wp.set_xlim(*x_lim)
     ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=9.5, color="#263238")
 
     yt_labels = [t.get_text() for t in ax_wp.get_yticklabels()]
     max_lbl = max((len(s) for s in yt_labels), default=10)
-    left_m = max(0.098, min(0.155, 0.050 + 0.0042 * max_lbl))
-    fig.subplots_adjust(left=left_m, right=0.985, top=0.805 if has_hw else 0.875, bottom=0.065)
+    left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
+    top_m = 0.855 if (has_hw and dual_fabric) else (0.805 if has_hw else 0.875)
+    fig.subplots_adjust(left=left_m, right=0.985, top=top_m, bottom=0.065)
 
     out_path = Path(out_png)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -664,7 +1088,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("-o", "--out", required=True, help="Output PNG path")
     ap.add_argument("--title", default=None)
     ap.add_argument("--subtitle", default=None)
-    ap.add_argument("--sm", type=int, default=None, help="Physical SM id to feature in Panel (C)")
+    ap.add_argument("--sm", type=int, default=None, help="Physical SM/CU id to feature in Panel (C)")
     ap.add_argument("--dpi", type=int, default=220)
     args = ap.parse_args(argv)
     out = render_swhw_overview_png(args.trace, args.out, title=args.title, subtitle=args.subtitle, focus_sm=args.sm, dpi=args.dpi)

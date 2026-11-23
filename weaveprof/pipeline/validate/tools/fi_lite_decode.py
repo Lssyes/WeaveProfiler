@@ -472,6 +472,8 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
     except SemanticKBError as exc:
         raise SystemExit(f"canonical semantic contract invalid: {exc}") from exc
     ev_name = {int(k): v for k, v in names.get("events", {}).items()}
+    ev_label = {int(k): str(v) for k, v in (names.get("labels") or {}).items() if str(v).strip()}
+    ev_fabric = {int(k): str(v) for k, v in (names.get("fabrics") or {}).items() if str(v).strip()}
     ev_sem = {int(k): v for k, v in semantic_contract["events"].items()}
     role_name = {int(k): v for k, v in names.get("roles", {}).items()}
     aux_name = {int(k): v for k, v in names.get("aux", {}).items()}
@@ -845,6 +847,10 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
             args["wave_id"] = w & 0xF
         args["event_id"] = i
         args["original_label"] = semantic_row.get("input_label", ev_name.get(i, ""))
+        if i in ev_label:
+            args["display_label"] = ev_label[i]
+        if i in ev_fabric:
+            args["fabric"] = ev_fabric[i]
         if semantic_row.get("detail"):
             args["semantic_detail"] = semantic_row["detail"]
         if i in aux_name:

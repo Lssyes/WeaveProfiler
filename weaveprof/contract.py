@@ -50,6 +50,21 @@ _SEMANTIC_TOKEN_ALIASES = {
     "conv": "convolution",
     "mdo": "softmax",
     "exp2": "softmax",
+    "xgmi": "communication",
+    "nvlink": "communication",
+    "rdma": "communication",
+    "roce": "communication",
+    "infiniband": "communication",
+    "ib": "communication",
+    "combine": "reduction",
+    "homecombine": "reduction",
+    "pull": "communication",
+    "scatterpush": "communication",
+    "localstage": "load",
+    "route": "barrier",
+    "swiglu": "mma",
+    "gemm1": "mma",
+    "gemm2": "mma",
 }
 
 _SEMANTIC_EXACT_ALIASES = {
@@ -63,6 +78,79 @@ _SEMANTIC_EXACT_ALIASES = {
     "finalize_m": "softmax",
     "update_mdo_states": "softmax",
 }
+
+FABRIC_SCOPES = (
+    "on_chip",
+    "intra_node_nvlink",
+    "intra_node_xgmi",
+    "inter_node_rdma",
+    "inter_node_ib",
+)
+
+_INTER_NODE_FABRIC_RE = re.compile(
+    r"(?:^|[_\-\s])(?:inter[_\-\s]?node|internode|rdma|roce|infiniband|ibgda|ib[_\-]|eic|solarrdma|remote[_\-\s]?node|cross[_\-\s]?node)",
+    re.I,
+)
+_INTRA_XGMI_RE = re.compile(r"(?:^|[_\-\s])(?:xgmi|gmi)", re.I)
+_INTRA_NVLINK_RE = re.compile(r"(?:^|[_\-\s])(?:nvlink|nvl|nvshmem[_\-]?intra)", re.I)
+_INTRA_GENERIC_RE = re.compile(
+    r"(?:^|[_\-\s])(?:intra[_\-\s]?node|intranode|p2p|home[_\-]?combine|peer[_\-]?rank)",
+    re.I,
+)
+_BARE_GENERIC_LABELS = frozenset({
+    "load", "mma", "compute", "store", "epilogue", "wait", "barrier",
+    "communication", "dispatch", "reduction", "softmax", "gemm", "attention", "moe",
+})
+
+
+def resolve_fabric_scope(
+    raw_id: str,
+    *,
+    label: str = "",
+    explicit_fabric: str = "",
+    platform: str = "",
+) -> str:
+    """Classify communication fabric scope (`on_chip`, `intra_node_nvlink`, `intra_node_xgmi`, `inter_node_rdma`, `inter_node_ib`)."""
+    exp = str(explicit_fabric or "").strip().lower()
+    if exp in FABRIC_SCOPES:
+        return exp
+    blob = f"{raw_id or ''} {label or ''}".strip()
+    if not blob:
+        return "on_chip"
+    if _INTER_NODE_FABRIC_RE.search(blob):
+        return "inter_node_ib" if re.search(r"(?:^|[_\-\s])(?:ib|infiniband|ibgda)(?:$|[_\-\s])", blob, re.I) else "inter_node_rdma"
+    if _INTRA_XGMI_RE.search(blob):
+        return "intra_node_xgmi"
+    if _INTRA_NVLINK_RE.search(blob):
+        return "intra_node_nvlink"
+    if _INTRA_GENERIC_RE.search(blob):
+        if re.search(r"local[_\-\s]?stage", blob, re.I):
+            return "on_chip"
+        return "intra_node_xgmi" if str(platform or "").lower() in ("amd", "mi308x", "gfx942") else "intra_node_nvlink"
+    return "on_chip"
+
+
+def validate_stage_label_quality(probes) -> list:
+    """Return advisory warnings when probes use bare generic 1-word IDs without descriptive `label`s."""
+    warnings = []
+    for pr in (probes or ()):
+        if not isinstance(pr, Mapping):
+            continue
+        pid = str(pr.get("id") or pr.get("probe_id") or "").strip()
+        lbl = str(pr.get("label") or pr.get("display_label") or "").strip()
+        low_id = pid.lower()
+        low_lbl = lbl.lower()
+        if low_id in _BARE_GENERIC_LABELS and (not lbl or low_lbl in _BARE_GENERIC_LABELS):
+            warnings.append({
+                "code": "GENERIC_STAGE_LABEL",
+                "probe_id": pid,
+                "message": (
+                    f"Probe '{pid}' uses a bare generic stage name with no descriptive `label`. "
+                    "Prefer algorithm/fabric-specific names (e.g. `kv_tile_load` / 'KV Tile Load (TMA)', "
+                    "`mma_qk_score` / 'QK^T Score MMA', `inter_node_rdma_dispatch` / 'Inter-Node RDMA Dispatch')."
+                ),
+            })
+    return warnings
 
 
 def resolve_semantic_id(raw_id, *, default="compute"):
@@ -284,7 +372,19 @@ def normalize_probe_spec(doc, source_text=None, *, language=None):
         if eid in event_ids and not (legacy or "v1_roles" in doc):
             raise ValueError(f"Duplicate paper event ID {eid}")
         event_ids.add(eid)
+        disp_label = str(p.get("label") or p.get("display_label") or "").strip()
+        fab = resolve_fabric_scope(
+            pid,
+            label=disp_label,
+            explicit_fabric=str(p.get("fabric") or ""),
+            platform=str(result.get("platform") or result.get("card") or ""),
+        )
         p.update(semantic_id=sem, event_id=eid)
+        if disp_label:
+            p["label"] = disp_label
+            p["display_label"] = disp_label
+        if fab != "on_chip" or p.get("fabric"):
+            p["fabric"] = fab
     # Weak-LLM half-open boundary repair: if two same-role probes touch at an exact 1-line boundary
     # (a.begin < a.end == b.begin < b.end), trim a.end by 1 so inclusive intervals stay disjoint.
     same_role = [

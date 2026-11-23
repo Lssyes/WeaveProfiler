@@ -69,6 +69,8 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
     cross_warp = {}
     slotted_events = {}
     probe_ids = {}
+    labels_map: Dict[str, str] = {}
+    fabrics_map: Dict[str, str] = {}
 
     op_fam = str(probe_spec.get("operator_family") or "gemm").strip().lower()
     if op_fam in STAGE_EVENT_IDS:
@@ -76,6 +78,8 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
         events[op_ev] = op_fam
         semantics_map[op_ev] = {"semantic_id": op_fam, "display_name": op_fam}
 
+    from weaveprof.contract import resolve_fabric_scope
+    plat_hint = str(probe_spec.get("platform") or probe_spec.get("card") or "")
     for pr in probe_spec.get("probes") or []:
         sem = str(pr.get("semantic_id") or "compute").strip().lower()
         ev_id = int(pr.get("event_id") or STAGE_EVENT_IDS.get(sem, 4))
@@ -83,6 +87,14 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
         events[str(ev_id)] = probe_id
         semantics_map[str(ev_id)] = {"semantic_id": sem, "display_name": sem}
         probe_ids[str(ev_id)] = probe_id
+        disp_lbl = str(pr.get("label") or pr.get("display_label") or "").strip()
+        if disp_lbl:
+            labels_map[str(ev_id)] = disp_lbl
+        fab = resolve_fabric_scope(
+            probe_id, label=disp_lbl, explicit_fabric=str(pr.get("fabric") or ""), platform=plat_hint,
+        )
+        if fab != "on_chip" or pr.get("fabric"):
+            fabrics_map[str(ev_id)] = fab
         begin_role = int(pr.get("begin_role_id", pr.get("role_id", 0)))
         end_role = int(pr.get("end_role_id", begin_role))
         slot_expr = pr.get("slot", pr.get("aux_expr"))
@@ -99,7 +111,7 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
 
     multi_role = len(probe_spec.get("warp_roles") or []) > 1
     gran = str(probe_spec.get("granularity") or ("warp" if multi_role else "sm"))
-    return {
+    out_doc = {
         "events": events,
         "semantics": semantics_map,
         "roles": roles_map,
@@ -119,6 +131,11 @@ def build_names_from_probe_spec(probe_spec: Mapping[str, Any]) -> Dict[str, Any]
             "zero_signature_edits": True,
         },
     }
+    if labels_map:
+        out_doc["labels"] = labels_map
+    if fabrics_map:
+        out_doc["fabrics"] = fabrics_map
+    return out_doc
 
 
 # ---------------------------------------------------------------------------

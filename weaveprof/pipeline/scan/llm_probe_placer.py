@@ -878,18 +878,40 @@ def _build_readonly_probe_prompt(
         "   - `wait` vs `barrier`: waiting for an async producer/DMA/MMA completion (mbarrier.wait, cp.async.wait, "
         "wgmma.wait, s_waitcnt) is `wait`; CTA/warp-group synchronization (__syncthreads, bar.sync, s_barrier) is `barrier`.\n"
         "   - `epilogue` vs `store`: post-GEMM scale/bias/cast/quantize + writeback is `epilogue`; pure global/TMA writeout is `store`.\n"
-        "   - Distinct multi-phase IDs: when a kernel has two distinct phases in the same semantic family, give them "
-        "descriptive unique IDs with the canonical prefix (e.g., `mma_qk` and `mma_pv`, `mma_gmm1` and `mma_gmm2`, "
-        "`load_q` and `load_kv`, `communication_dispatch` and `communication_combine`) so they stay distinguishable.\n"
+        "   - Distinct multi-phase & publication-grade stage labels (NO lazy bare `load`/`mma`/`compute`!): "
+        "EVERY probe MUST carry BOTH a descriptive compound `id` (encoding the real algorithmic phase or "
+        "communication fabric, e.g., `load_kv_tile`, `mma_qk_score`, `softmax_online_rescale`, `mma_pv_accum`, "
+        "`epilogue_o_store`, `mma_gemm1_swiglu`, `mma_gemm2_fc2`, `inter_node_rdma_dispatch`, "
+        "`inter_node_rdma_combine`, `intra_node_xgmi_pull`, `intra_node_nvlink_combine`, `route_plan_sync`) AND "
+        "a concise human-readable `label` field for plot legends (e.g., `\"KV Tile Load (TMA)\"`, "
+        "`\"QK^T Score MMA\"`, `\"Online Softmax (exp/rescale)\"`, `\"GEMM1 (FC1+SwiGLU)\"`, "
+        "`\"Inter-Node RDMA Dispatch\"`, `\"Intra-Node xGMI Dispatch\"`, `\"Intra-Node NVLink Combine\"`). "
+        "NEVER emit bare generic 1-word IDs like `\"load\"`, `\"mma\"`, `\"compute\"`, or `\"communication\"` "
+        "without a descriptive `label` when the source reveals the concrete stage.\n"
+        "   - MULTI-NODE FABRIC SEPARATION (INTRA-NODE vs INTER-NODE): On multi-GPU / multi-node kernels "
+        "(e.g., EP8/EP16 MoE, All-to-All, DeepEP/Weave/NVSHMEM/RCCL/IBGDA), ALWAYS separate cross-node "
+        "RDMA/InfiniBand/RoCE operations (`fabric: \"inter_node_rdma\"` or `\"inter_node_ib\"`, e.g., "
+        "`InterNode_RDMA_Dispatch`, `InterNode_RDMA_Return`, `InterNode_Partial_Reduce`) from intra-node "
+        "xGMI/NVLink P2P operations (`fabric: \"intra_node_xgmi\"` on AMD MI308X or `\"intra_node_nvlink\"` "
+        "on NVIDIA H20/B300, e.g., `IntraNode_xGMI_Pull`, `IntraNode_xGMI_ScatterPush`, `IntraNode_HomeCombine`, "
+        "`IntraNode_NVLink_Dispatch`, `IntraNode_NVLink_Combine`) and on-GPU local staging (`fabric: \"on_chip\"`, "
+        "e.g., `IntraNode_LocalStage`). Never merge inter-node RDMA and intra-node xGMI/NVLink into one probe.\n"
         "   - DISJOINT SIBLING RULE (NO OUTER MACRO-WRAPPERS): NEVER wrap an entire kernel or device function call "
         "in an outer `attention`/`mma`/`compute` probe that encloses inner `load`/`softmax`/`store` probes. Every "
         "stage on the same lane must be a disjoint sibling interval. For FlashInfer/FA2/FA3 attention kernels, "
-        "always bracket per-tile `produce_kv`/`cp_async` (`load`), `compute_qk` (`mma_qk`), `update_mdo_states`/"
-        "`finalize_m` (`softmax`), `compute_sv` (`mma_pv`), and `write_o_reg_gmem` (`epilogue`/`store`)."
+        "always bracket per-tile `produce_kv`/`cp_async` (`load_kv_tile`), `compute_qk` (`mma_qk_score`), "
+        "`update_mdo_states`/`finalize_m` (`softmax_online_rescale`), `compute_sv` (`mma_pv_accum`), and "
+        "`write_o_reg_gmem` (`epilogue_o_store`)."
     )
-    example = {"roles": {"dma": "warp 4", "math": "warps 0-3"},
-               "probes": [{"id": "load", "begin": {"role": "dma", "line": 42},
-                           "end": {"role": "math", "line": 55}, "slot": "s"}]}
+    example = {
+        "roles": {"dma": "warp 4", "math": "warps 0-3"},
+        "probes": [
+            {"id": "load_kv_tile", "label": "KV Tile Load (TMA)", "fabric": "on_chip",
+             "begin": {"role": "dma", "line": 42}, "end": {"role": "math", "line": 55}, "slot": "s"},
+            {"id": "mma_qk_score", "label": "QK^T Score MMA", "fabric": "on_chip",
+             "begin": {"role": "math", "line": 58}, "end": {"role": "math", "line": 64}},
+        ],
+    }
     parts = [
         "Example of the output schema (choose actual roles and lines from the input): "
         + json.dumps(example),
