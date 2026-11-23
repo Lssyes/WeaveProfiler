@@ -57,7 +57,7 @@
       "nvidia": {
         "preferred_observed_names": ["DRAM Read Bandwidth [Throughput %]", "DRAM Write Bandwidth [Throughput %]"],
         "raw_counter_ids": ["dram__read_throughput.avg.pct_of_peak_sustained_elapsed", "dram__write_throughput.avg.pct_of_peak_sustained_elapsed"],
-        "combine": "max(read,write) as a lower-bound utilization, plus directional curves",
+        "combine": "per-timestamp sum(read, write) capped at 100% (HBM read and write share one half-duplex memory bus), plus directional read/write curves",
         "evidence_status": "measured_on_h20_config_compiled_for_b300"
       },
       "amd": {
@@ -80,6 +80,7 @@
       "nvidia": {
         "preferred_observed_names": ["NVLink RX Requests User Data [Throughput %]", "NVLink RX Responses User Data [Throughput %]", "NVLink TX Requests User Data [Throughput %]", "NVLink TX Responses User Data [Throughput %]"],
         "raw_counter_ids": ["nvlrx__bytes_packet_request_data_user", "nvlrx__bytes_packet_response_data_user", "nvltx__bytes_packet_request_data_user", "nvltx__bytes_packet_response_data_user"],
+        "direction_policy": "NVLink TX (egress) and NVLink RX (ingress) are two independent full-duplex physical links and MUST NEVER be summed or merged into a single curve; only same-direction Request + Response user data may be summed (TX Total = TX Req + TX Rsp; RX Total = RX Req + RX Rsp). Only HBM DRAM Read + Write share one bus and may be summed.",
         "intra_node_fabric": "NVLink",
         "cross_host": "NIC-side counters required (/sys/class/infiniband/*/ports/*/hw_counters or netdev statistics); GPU NVLink counters do not prove RDMA traffic",
         "evidence_status": "counter_names_compiled_config_runtime_unverified"

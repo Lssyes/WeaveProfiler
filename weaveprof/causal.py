@@ -518,6 +518,10 @@ def _normalize_from_perfetto(doc: Mapping[str, Any], arch: Optional[str], total_
                 metric_key = "dram_read"
             elif any(k in cname for k in ("dram_write", "dram write", "hbm_write")):
                 metric_key = "dram_write"
+            elif "nvlink" in cname and "protocol" not in cname and "tx" in cname:
+                metric_key = "nvlink_tx"
+            elif "nvlink" in cname and "protocol" not in cname and "rx" in cname:
+                metric_key = "nvlink_rx"
             elif "issue" in cname:
                 metric_key = "warp_issue"
             if metric_key:

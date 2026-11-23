@@ -877,6 +877,34 @@ class MegakernelAuditTest(_TmpCase):
         except ImportError:
             pass
 
+        # 5. NVLink TX (egress) and RX (ingress) MUST remain two independent full-duplex curves
+        # (never merged/summed together), while HBM DRAM Read + Write share one bus and sum.
+        nv_duplex = {
+            "otherData": {"platform": "nv", "arch": "sm_90a", "meta": {"card": "h20", "arch": "sm_90a"}},
+            "traceEvents": [
+                {"ph": "C", "pid": 1, "name": "Tensor Active [Throughput %]", "ts": 10.0, "args": {"pct": 52.0}},
+                {"ph": "C", "pid": 1, "name": "DRAM Read Bandwidth [Throughput %]", "ts": 10.0, "args": {"pct": 40.0}},
+                {"ph": "C", "pid": 1, "name": "DRAM Write Bandwidth [Throughput %]", "ts": 10.0, "args": {"pct": 25.0}},
+                {"ph": "C", "pid": 1, "name": "NVLink TX Requests User Data [Throughput %]", "ts": 10.0, "args": {"pct": 30.0}},
+                {"ph": "C", "pid": 1, "name": "NVLink TX Responses User Data [Throughput %]", "ts": 10.0, "args": {"pct": 12.0}},
+                {"ph": "C", "pid": 1, "name": "NVLink RX Requests User Data [Throughput %]", "ts": 10.0, "args": {"pct": 15.0}},
+                {"ph": "C", "pid": 1, "name": "NVLink RX Responses User Data [Throughput %]", "ts": 10.0, "args": {"pct": 5.0}},
+                {"ph": "C", "pid": 1, "name": "SMs Active [Throughput %]", "ts": 10.0, "args": {"pct": 95.0}},
+                {"ph": "X", "pid": 100, "tid": 1, "ts": 0.0, "dur": 40.0, "name": "GEMM1 (FC1+SwiGLU)", "args": {"sm": 0, "warp": 0}},
+            ],
+        }
+        p_nv = _parse_trace(nv_duplex)
+        self.assertEqual(p_nv["hw_curves"]["dram_bw"], [(10.0, 65.0)])
+        self.assertEqual(p_nv["hw_curves"]["nvlink_tx"], [(10.0, 42.0)])
+        self.assertEqual(p_nv["hw_curves"]["nvlink_rx"], [(10.0, 20.0)])
+        self.assertNotIn("nvlink_bw", p_nv["hw_curves"])
+        try:
+            import matplotlib  # noqa: F401
+            png_nv = render_swhw_overview_png(nv_duplex, self.tmp / "h20_nvlink_duplex.png", dpi=110)
+            self.assertTrue(png_nv.is_file() and png_nv.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        except ImportError:
+            pass
+
     def test_b_empty_64ns_stub_probe_fails(self):
         rep = self._audit("stub", dump_kw={"stub": True})
         self.assertEqual(rep["status"], "FAIL", rep)

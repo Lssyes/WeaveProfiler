@@ -1043,8 +1043,8 @@ def _lower_triton_probe_spec(source_text: str, probe_spec: Mapping[str, Any]) ->
             ")\n"
         )
         extra_params = (
-            "_fi_rec_ptr=None, _fi_ovf_ptr=None, _FI_LEVEL: tl.constexpr = 2, _FI_GRAN: tl.constexpr = 1, "
-            "_FI_CAP: tl.constexpr = 256, _FI_WPC: tl.constexpr = 1, _FI_THREADS: tl.constexpr = 256, _FI_TIMER: tl.constexpr = 1"
+            "_fi_rec_ptr=None, _fi_ovf_ptr=None, _FI_LEVEL: tl.constexpr = 2, _FI_GRAN: tl.constexpr = 0, "
+            "_FI_CAP: tl.constexpr = 256, _FI_WPC: tl.constexpr = 64, _FI_THREADS: tl.constexpr = 256, _FI_TIMER: tl.constexpr = 1"
         )
         open_block = (
             f"{body_indent}_fi_cta = tl.program_id(0) + tl.program_id(1) * tl.num_programs(0) + tl.program_id(2) * tl.num_programs(0) * tl.num_programs(1)\n"

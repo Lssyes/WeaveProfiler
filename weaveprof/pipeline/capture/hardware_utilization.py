@@ -519,15 +519,41 @@ def _communication_metric(counters: Sequence[Mapping[str, Any]], *,
             source='{}[NIC/RDMA/fabric or NVLink/XGMI]'.format(source_prefix),
             reason='no normalized NIC/RDMA/fabric or NVLink/XGMI utilization counter is present',
             scope=requested_scope)
-    series: Dict[int, float] = {}
+    tx_by_ts: Dict[int, float] = {}
+    rx_by_ts: Dict[int, float] = {}
+    other_by_ts: Dict[int, float] = {}
     useful_names = []
     for counter in chosen:
         samples = _samples(counter)
         if not samples:
             continue
-        useful_names.append(_base_name(counter))
-        for timestamp, value in samples:
-            series[int(timestamp)] = max(series.get(int(timestamp), float('-inf')), float(value))
+        bname = _base_name(counter)
+        useful_names.append(bname)
+        low = bname.lower()
+        is_nvl = bool(_NVLINK_RE.search(bname))
+        if is_nvl and 'tx' in low and 'protocol' not in low:
+            # Same-direction NVLink TX Request + Response share the egress link and sum per timestamp.
+            for timestamp, value in samples:
+                ts_i = int(timestamp)
+                tx_by_ts[ts_i] = min(100.0, tx_by_ts.get(ts_i, 0.0) + float(value))
+        elif is_nvl and 'rx' in low and 'protocol' not in low:
+            # Same-direction NVLink RX Request + Response share the ingress link and sum per timestamp.
+            for timestamp, value in samples:
+                ts_i = int(timestamp)
+                rx_by_ts[ts_i] = min(100.0, rx_by_ts.get(ts_i, 0.0) + float(value))
+        else:
+            for timestamp, value in samples:
+                ts_i = int(timestamp)
+                other_by_ts[ts_i] = max(other_by_ts.get(ts_i, float('-inf')), float(value))
+    # NVLink TX (egress) and RX (ingress) are independent full-duplex physical paths:
+    # NEVER sum TX + RX. Preserve separate directional TX/RX summaries and use max(TX, RX)
+    # solely as the single-scalar bottleneck-direction envelope for `communication_util`.
+    all_ts = sorted(set(tx_by_ts) | set(rx_by_ts) | set(other_by_ts))
+    series: Dict[int, float] = {}
+    for ts_i in all_ts:
+        cands = [m[ts_i] for m in (tx_by_ts, rx_by_ts, other_by_ts) if ts_i in m]
+        if cands:
+            series[ts_i] = max(cands)
     if not series:
         return _unavailable(
             metric_id, source='{}[{}]'.format(source_prefix, '+'.join(observed)),
@@ -542,16 +568,36 @@ def _communication_metric(counters: Sequence[Mapping[str, Any]], *,
         evidence_kind = 'nvlink' if any(_NVLINK_RE.search(name) for name in useful_names) else 'xgmi'
         scope = 'same_host'
         cross_host_allowed = False
+    directional_extra: Dict[str, Any] = {}
+    if tx_by_ts:
+        tx_vals = [tx_by_ts[t] for t in sorted(tx_by_ts)]
+        directional_extra['communication_tx_util'] = {
+            'mean': round(sum(tx_vals) / len(tx_vals), 6),
+            'peak': round(max(tx_vals), 6),
+            'sample_count': len(tx_vals),
+            'samples': [[t, tx_by_ts[t]] for t in sorted(tx_by_ts)],
+        }
+    if rx_by_ts:
+        rx_vals = [rx_by_ts[t] for t in sorted(rx_by_ts)]
+        directional_extra['communication_rx_util'] = {
+            'mean': round(sum(rx_vals) / len(rx_vals), 6),
+            'peak': round(max(rx_vals), 6),
+            'sample_count': len(rx_vals),
+            'samples': [[t, rx_by_ts[t]] for t in sorted(rx_by_ts)],
+        }
     return _available(
         metric_id, merged,
-        source='{}[{}]; per-sample max'.format(source_prefix, '+'.join(useful_names)),
+        source='{}[{}]; independent full-duplex directions (TX and RX never summed)'.format(
+            source_prefix, '+'.join(useful_names)),
         evidence_status='derived' if len(useful_names) > 1 else 'measured',
-        method=('per-timestamp max across reported directions/counters; directional raw '
-                'counters remain in the trace'),
+        method=('NVLink TX (Req+Rsp) and RX (Req+Rsp) kept independent as full-duplex links; '
+                'communication_util reports per-timestamp max(TX, RX) bottleneck envelope only'),
         scope=scope,
         observed_names=useful_names,
         extra={'evidence_kind': evidence_kind,
                'cross_host_claim_allowed': cross_host_allowed,
+               'full_duplex_directions_separate': True,
+               **directional_extra,
                'coverage_scope': ('NIC/RDMA/fabric' if cross_host_allowed else
                                   'same-host GPU interconnect only')})
 

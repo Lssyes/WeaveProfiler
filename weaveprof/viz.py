@@ -196,6 +196,10 @@ def _classify_hw_metric(name: str) -> Optional[str]:
             return "nvlink_tx_req"
         if "tx" in low and "response" in low:
             return "nvlink_tx_rsp"
+        if "rx" in low:
+            return "nvlink_rx_total"
+        if "tx" in low:
+            return "nvlink_tx_total"
         return "nvlink_user"
     return None
 
@@ -211,7 +215,13 @@ def _pretty_hw_curve_label(raw_name: str, role: str, *, is_amd: bool, multi_node
     if role == "dram_bw":
         if bracket:
             return f"HBM — {bracket}", "HBM BW"
-        return "HBM / DRAM Bandwidth %", "HBM BW"
+        return "HBM / DRAM Bandwidth (R+W) %", "HBM BW"
+    if role == "nvlink_tx":
+        prefix = "Intra-Node NVLink TX" if multi_node else "NVLink TX"
+        return f"{prefix} (Egress User Data) %", prefix
+    if role == "nvlink_rx":
+        prefix = "Intra-Node NVLink RX" if multi_node else "NVLink RX"
+        return f"{prefix} (Ingress User Data) %", prefix
     if role == "nvlink_bw":
         fabric_nm = "xGMI" if is_amd else "NVLink"
         prefix = f"Intra-Node {fabric_nm}" if multi_node else fabric_nm
@@ -459,7 +469,7 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
     for k in hw_curves:
         hw_curves[k].sort(key=lambda x: x[0])
 
-    # Combine DRAM read + write or use direct memory_util curve
+    # Combine DRAM read + write (shared half-duplex HBM bus) or use direct memory_util curve
     if "dram_bw_direct" in hw_curves:
         hw_curves["dram_bw"] = list(hw_curves["dram_bw_direct"])
         hw_labels["dram_bw"] = hw_labels.get("dram_bw_direct", "memory_util")
@@ -468,26 +478,40 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
         for k in ("dram_read", "dram_write"):
             for t, v in hw_curves.get(k, ()):
                 by_t[round(t, 3)] += v
-        hw_curves["dram_bw"] = sorted(by_t.items())
+        hw_curves["dram_bw"] = [(t, min(100.0, v)) for t, v in sorted(by_t.items())]
 
-    # Combine NVLink RX/TX user data or use direct intra-node communication_util / xGMI curve
-    if "intra_comm_direct" in hw_curves:
-        hw_curves["nvlink_bw"] = list(hw_curves["intra_comm_direct"])
-        hw_labels["nvlink_bw"] = hw_labels.get("intra_comm_direct", "communication_util")
-    elif any(k in hw_curves for k in ("nvlink_rx_req", "nvlink_rx_rsp", "nvlink_tx_req", "nvlink_tx_rsp", "nvlink_user")):
-        rx_t: Dict[float, float] = defaultdict(float)
+    # NVLink TX (egress) and NVLink RX (ingress) are TWO independent full-duplex physical links:
+    # sum Request + Response WITHIN each direction only; NEVER sum or merge TX with RX!
+    if "nvlink_tx_total" in hw_curves:
+        hw_curves["nvlink_tx"] = list(hw_curves["nvlink_tx_total"])
+        hw_labels["nvlink_tx"] = hw_labels.get("nvlink_tx_total", "NVLink TX User Data Total")
+    elif "nvlink_tx_req" in hw_curves or "nvlink_tx_rsp" in hw_curves:
         tx_t: Dict[float, float] = defaultdict(float)
-        for k in ("nvlink_rx_req", "nvlink_rx_rsp"):
-            for t, v in hw_curves.get(k, ()):
-                rx_t[round(t, 3)] += v
         for k in ("nvlink_tx_req", "nvlink_tx_rsp"):
             for t, v in hw_curves.get(k, ()):
                 tx_t[round(t, 3)] += v
-        if rx_t or tx_t:
-            all_t = sorted(set(rx_t.keys()) | set(tx_t.keys()))
-            hw_curves["nvlink_bw"] = [(t, min(100.0, max(rx_t.get(t, 0.0), tx_t.get(t, 0.0)))) for t in all_t]
-        elif "nvlink_user" in hw_curves:
-            hw_curves["nvlink_bw"] = list(hw_curves["nvlink_user"])
+        if tx_t:
+            hw_curves["nvlink_tx"] = [(t, min(100.0, v)) for t, v in sorted(tx_t.items())]
+            hw_labels["nvlink_tx"] = "NVLink TX User Data (Req+Rsp)"
+
+    if "nvlink_rx_total" in hw_curves:
+        hw_curves["nvlink_rx"] = list(hw_curves["nvlink_rx_total"])
+        hw_labels["nvlink_rx"] = hw_labels.get("nvlink_rx_total", "NVLink RX User Data Total")
+    elif "nvlink_rx_req" in hw_curves or "nvlink_rx_rsp" in hw_curves:
+        rx_t: Dict[float, float] = defaultdict(float)
+        for k in ("nvlink_rx_req", "nvlink_rx_rsp"):
+            for t, v in hw_curves.get(k, ()):
+                rx_t[round(t, 3)] += v
+        if rx_t:
+            hw_curves["nvlink_rx"] = [(t, min(100.0, v)) for t, v in sorted(rx_t.items())]
+            hw_labels["nvlink_rx"] = "NVLink RX User Data (Req+Rsp)"
+
+    # Single-series intra-node fabric curve (e.g. AMD xGMI P2P or unsplit generic counter)
+    if "intra_comm_direct" in hw_curves:
+        hw_curves["nvlink_bw"] = list(hw_curves["intra_comm_direct"])
+        hw_labels["nvlink_bw"] = hw_labels.get("intra_comm_direct", "communication_util")
+    elif "nvlink_user" in hw_curves and "nvlink_tx" not in hw_curves and "nvlink_rx" not in hw_curves:
+        hw_curves["nvlink_bw"] = list(hw_curves["nvlink_user"])
 
     is_amd = _detect_platform(other, events, hw_labels)
     has_inter_slices = any(
@@ -688,7 +712,7 @@ def render_swhw_overview_png(
     n_sms = max(1, len(sms))
     n_rep_rows = rep_slot_count if use_cta_slots else max(1, len(rep_warps))
 
-    has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw", "nvlink_bw", "inter_rdma"))
+    has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw", "nvlink_tx", "nvlink_rx", "nvlink_bw", "inter_rdma"))
     panel_c_h = max(2.2, min(4.8, (0.26 if n_rep_rows >= 8 else 0.40) * n_rep_rows + 1.05))
     panel_b_h = max(3.1, min(4.4, 0.036 * n_sms + 1.55))
     panel_a_h = 2.25 if has_hw else 0.0
@@ -849,15 +873,25 @@ def render_swhw_overview_png(
         ax_hw.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75, zorder=2)
 
         comm_pts = hw_curves.get("nvlink_bw") or []
+        nvl_tx_pts = hw_curves.get("nvlink_tx") or []
+        nvl_rx_pts = hw_curves.get("nvlink_rx") or []
+        has_active_nvl_tx = bool(nvl_tx_pts and max((p[1] for p in nvl_tx_pts if 0.0 <= p[0] <= k_dur), default=0.0) >= 0.5)
+        has_active_nvl_rx = bool(nvl_rx_pts and max((p[1] for p in nvl_rx_pts if 0.0 <= p[0] <= k_dur), default=0.0) >= 0.5)
         has_active_comm = bool(comm_pts and max((p[1] for p in comm_pts if 0.0 <= p[0] <= k_dur), default=0.0) >= 0.5)
         rdma_pts = hw_curves.get("inter_rdma") or []
         has_active_rdma = bool(rdma_pts and max((p[1] for p in rdma_pts if 0.0 <= p[0] <= k_dur), default=0.0) > 0.0)
 
         curve_order_keys = ["tensor_active", "dram_bw"]
-        if has_active_comm:
-            curve_order_keys.append("nvlink_bw")
-        elif hw_curves.get("sm_issue"):
-            curve_order_keys.append("sm_issue")
+        # NVLink TX (egress) and NVLink RX (ingress) are independent full-duplex paths: plot separately, NEVER merged.
+        if has_active_nvl_tx:
+            curve_order_keys.append("nvlink_tx")
+        if has_active_nvl_rx:
+            curve_order_keys.append("nvlink_rx")
+        if not (has_active_nvl_tx or has_active_nvl_rx):
+            if has_active_comm:
+                curve_order_keys.append("nvlink_bw")
+            elif hw_curves.get("sm_issue"):
+                curve_order_keys.append("sm_issue")
         if has_active_rdma:
             curve_order_keys.append("inter_rdma")
         if hw_curves.get("sm_active"):
@@ -866,6 +900,8 @@ def render_swhw_overview_png(
         style_map = {
             "tensor_active": ("#1565C0", "-", 1.9),
             "dram_bw": ("#E65100", "-", 1.6),
+            "nvlink_tx": ("#00897B", "-", 1.6),
+            "nvlink_rx": ("#2E7D32", "-.", 1.55),
             "nvlink_bw": ("#00897B", "-", 1.6),
             "inter_rdma": ("#7B1FA2", "-", 1.7),
             "sm_issue": ("#00897B", "-", 1.5),

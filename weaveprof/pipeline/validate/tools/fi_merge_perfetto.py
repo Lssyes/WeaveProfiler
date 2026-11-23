@@ -314,6 +314,22 @@ def align(trace, summary, window, runtime=None):
                                          name="Memory Util — HBM Read+Write (%) [NSYS PMU]",
                                          args=dict(value=bw_pct)))
                 has_mem_hw = True
+            # NVLink TX (egress) and RX (ingress) are independent full-duplex physical links:
+            # sum Request + Response WITHIN each direction only; NEVER sum or merge TX with RX.
+            nvl_tx_req = [v for k, v in row.items() if "nvlink" in k.lower() and "tx" in k.lower() and "request" in k.lower() and "protocol" not in k.lower()]
+            nvl_tx_rsp = [v for k, v in row.items() if "nvlink" in k.lower() and "tx" in k.lower() and "response" in k.lower() and "protocol" not in k.lower()]
+            if nvl_tx_req or nvl_tx_rsp:
+                tx_pct = min(100.0, (nvl_tx_req[0] if nvl_tx_req else 0.0) + (nvl_tx_rsp[0] if nvl_tx_rsp else 0.0))
+                clean_events.append(dict(ph="C", pid=hw_pid, tid=1, ts_ns=ts, ts=ts / 1000.0,
+                                         name="NVLink TX User Data Total (%) [NSYS PMU]",
+                                         args=dict(value=tx_pct)))
+            nvl_rx_req = [v for k, v in row.items() if "nvlink" in k.lower() and "rx" in k.lower() and "request" in k.lower() and "protocol" not in k.lower()]
+            nvl_rx_rsp = [v for k, v in row.items() if "nvlink" in k.lower() and "rx" in k.lower() and "response" in k.lower() and "protocol" not in k.lower()]
+            if nvl_rx_req or nvl_rx_rsp:
+                rx_pct = min(100.0, (nvl_rx_req[0] if nvl_rx_req else 0.0) + (nvl_rx_rsp[0] if nvl_rx_rsp else 0.0))
+                clean_events.append(dict(ph="C", pid=hw_pid, tid=1, ts_ns=ts, ts=ts / 1000.0,
+                                         name="NVLink RX User Data Total (%) [NSYS PMU]",
+                                         args=dict(value=rx_pct)))
             tc_vals = [v for k, v in row.items() if "tensor active" in k.lower() or "tensor pipe" in k.lower()]
             if tc_vals:
                 clean_events.append(dict(ph="C", pid=hw_pid, tid=1, ts_ns=ts, ts=ts / 1000.0,
