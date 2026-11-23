@@ -1,8 +1,8 @@
 {
   "file_count": 329,
   "files": {
-    "README.md": "f31464f3272eb537f6bb78f53b39097a59d2767bf10bf1754fe39590e6fe99be",
-    "README_EN.md": "f0b981b642724b9960136e72c83684dedd14888e9141531bff7d45dac46ef258",
+    "README.md": "a72a774431cd4150e273a3ada32f14eff758e9a8af94a92346f4d56ab0866d1a",
+    "README_EN.md": "25f1da02617bc50149970d55b62a2186617e474c54e66a3cb7bd07286e2006c5",
     "SKILL.md": "870aa8ea4ef6960f98ee1747ea21f1eb40f16761ec54b4ee0f562a9a885616a0",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
@@ -331,8 +331,8 @@
     "weaveprof/viz.py": "2ab681b5f0d59e6b991e1de81a528e7f0354f915271ca3d8a76ecc24483f9597",
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
-  "generated_at_utc": "2026-11-23T06:49:03.408166Z",
-  "root_sha256": "c914a866f43227334f7990430525982520d5c8b2e37a88865dc6527318856060",
+  "generated_at_utc": "2026-11-23T06:57:28.476257Z",
+  "root_sha256": "3386f971369b1e0470cc705761859038cb7f438f7b9c4b00efe8e258e603a30a",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }

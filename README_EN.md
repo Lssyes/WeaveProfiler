@@ -2,19 +2,26 @@
 
 [简体中文](README.md) | English
 
-WeaveProfiler is a low-overhead intra-kernel GPU profiler and software–hardware timeline alignment tool for both kernel engineers and AI coding agents (Claude Code, OpenAI Codex CLI, Qwen Code, Antigravity). It aligns microsecond-resolution per-SM/CU, per-warp/wave stages—including asynchronous memory and matrix-multiply in-flight depth, issue markers, and exposed waits—with same-run 200 kHz hardware utilization curves in a single **four-panel PNG diagnostic view**. All instrumentation, compilation, and measurement run inside an isolated temporary copy, leaving protected source files, function signatures, and caller code untouched.
+> **Give AI microsecond X-ray vision inside GPU kernels — the automated SW+HW intra-kernel diagnostic engine built for RSI (Recursive Self-Improvement) and next-generation Megakernels.**
+
+WeaveProfiler fuses **automated low-overhead in-kernel instrumentation** with **same-run hardware utilization curves**, packaged natively as **`Skill + MCP + Hook`** for AI coding agents (Claude Code, Qwen Code, OpenAI Codex CLI, Antigravity, etc.). Across CUDA C++, HIP C++, CuTeDSL, and Triton—without touching protected source files or function signatures—it aligns 200 kHz chip-wide hardware curves, all-SM/CU waterfalls, per-warp async pipelines (in-flight memory/MMA depth strips, fixed-pixel issue pins `▼`, and exposed waits), and deterministic single-CTA micro-zooms into a single **four-panel PNG diagnostic view**.
 
 ---
 
-## 1. Why WeaveProfiler
+## 1. Why RSI Needs WeaveProfiler
 
-Optimizing modern GPU kernels (MoE, FlashAttention, persistent GEMM) runs into three practical bottlenecks:
+**Recursive Self-Improvement (RSI)** is shifting GPU kernel engineering toward autonomous loops where AI agents write, diagnose, and evolve complex fused **Megakernels** (MegaMoE, FlashAttention, persistent GEMM). End-to-end latency alone is blind: to autonomously break through microarchitectural ceilings, **every RSI loop needs a deep, semantically grounded diagnostic engine**.
 
-1. **Existing vendor tools do not give an intra-kernel microsecond timeline.** `nsys` and `rocprof-sys` report chip-wide compute, HBM, and NVLink/xGMI utilization curves, but treat each kernel launch as a black box. `ncu` inspects inside a kernel, yet relies on multi-pass replay to produce whole-kernel averages—losing the time axis (tail waves, cross-SM skew, microsecond pipeline bubbles), running tens of times slower, and failing on persistent or multi-GPU collective kernels.
-2. **Manual in-kernel timing easily distorts the kernel and misses async pipelines.** Register- and SMEM-bound inner loops quickly spill or change unrolling when timing code is inserted by hand. Modern kernels also rely heavily on asynchronous execution (`cp.async`, TMA, `wgmma`, `tcgen05`), where synchronous bracketing cannot separate background in-flight depth from true exposed waits—and rewriting recorders across NVIDIA/AMD architectures and CUDA/HIP/CuTeDSL/Triton is expensive.
-3. **AI coding agents need deterministic guardrails during profiling and optimization.** Editing source files directly leads to probes dropped inside spin loops, bloated overhead, leftover timing macros in production code, or optimization decisions made without real aligned timelines.
+Existing GPU profiling approaches force an impossible trade-off:
 
-WeaveProfiler solves these directly through: (1) **isolated closed-loop verification**—read-only stage identification followed by deterministic injection in a temporary copy, gated by four blocking checks (disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead, auto-coarsening on failure); (2) **low-perturbation recording with async engine modeling**—atomic-free hot paths, unchanged call signatures across CUDA/HIP/CuTeDSL/Triton, plus a PTX-level async pass for Triton that peels out compiler-hidden `cp.async`/`wgmma` waits and renders **main track + thin in-flight depth strip + fixed-pixel issue pins (`▼`)**; and (3) **four-panel PNG-only delivery with lifecycle hooks**—pairing same-run hardware curves, all-SM waterfall, SM-0 per-warp async view, and deterministic single-CTA micro-zoom while keeping source files clean.
+- **Automatic vendor profilers (`nsys`, `rocprof-sys`, etc.) → automated, but semantically blind.** They capture chip-wide aggregate hardware utilization (Compute / HBM / NVLink / xGMI), yet treat every kernel launch as an opaque box—showing a utilization trough without revealing which SM, warp role, async copy, or barrier caused it. (`ncu` peers inside kernels via multi-pass replay, discarding the microsecond time axis and breaking on persistent or multi-GPU collective megakernels.)
+- **Manual in-kernel instrumentation → semantically rich, but complex, fragile, and impossible to automate.** Hand-writing timing code inside register- and SMEM-saturated inner loops easily triggers spills or scheduler distortions; pairing asynchronous hardware pipelines (`cp.async`, TMA, `wgmma`, `tcgen05`) by hand is error-prone and cannot scale inside an autonomous RSI loop.
+
+**WeaveProfiler unifies both worlds into a native RSI building block:**
+
+1. **Hand-crafted semantic fidelity × fully automated SW+HW alignment.** Automatically identifies stages and injects atomic-free, signature-preserving probes in an isolated temporary copy (including a PTX-level async pass for Triton that peels out compiler-hidden `cp.async`/`wgmma` waits), rigidly aligned with same-run 200 kHz hardware utilization curves in a **four-panel PNG diagnostic view**.
+2. **Four deterministic blocking gates.** Disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead are enforced automatically—auto-coarsening hot probes on failure so corrupted measurements never mislead the next RSI round.
+3. **Native `Skill + MCP + Hook` integration for RSI frameworks.** `Skill` teaches agents how to diagnose hardware–software bottlenecks from four-panel views; `MCP` exposes clean isolated profiling and cross-round comparison tools; `Hook` enforces clean source files, profile-before-edit discipline, and PNG-only delivery across every tool call—making WeaveProfiler the go-to diagnostic engine for autonomous Megakernel development.
 
 ---
 
