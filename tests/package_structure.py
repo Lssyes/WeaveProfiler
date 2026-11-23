@@ -63,6 +63,7 @@ CARD_FILES = {
     "h20": ("sm_90", ["h20_sm_90.json"]),
     "b300": ("sm_100a+sm_103a", ["b300_sm_100a.json", "b300_sm_103a.json"]),
     "mi308x": ("gfx942", ["mi308x_gfx942.json"]),
+    "sm86": ("sm_86", ["sm86_sm_86.json"]),
 }
 LANGUAGE_FILES = [
     "configs/languages/cuda_cpp/patterns.json",
@@ -163,7 +164,7 @@ def _check_cards(fails: list[str]) -> None:
         fails.append("MI308X profiler must be rocprof-sys")
     if "rocprofv3" not in (mi.get("profiler", {}).get("fallback") or []):
         fails.append("MI308X must expose rocprofv3 fallback")
-    print("  cards: H20/B300(2 arch)/MI308X checked")
+    print("  cards: H20/B300(2 arch)/MI308X/sm86 checked")
 
 
 def _check_recipes(fails: list[str]) -> None:

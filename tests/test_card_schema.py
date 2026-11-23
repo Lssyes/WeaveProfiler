@@ -52,7 +52,7 @@ def failure_text(failures):
 
 class FilenameSchemaTests(unittest.TestCase):
     def test_all_three_cards_match_every_spec1_regex(self):
-        for card in ("h20", "b300", "mi308x"):
+        for card in ("h20", "b300", "mi308x", "sm86"):
             name = BASE.format(card=card)
             for regex in (deliver_gate.CANONICAL_TRACE_FILENAME_RE,
                           verify_receipt.SPEC1, hooklib.SPEC1,
@@ -103,6 +103,7 @@ class TargetCardTests(unittest.TestCase):
         self.assert_valid(contract("b300", "nv", "sm_100a"), "b300")
         self.assert_valid(contract("b300", "nv", "sm_103a"), "b300")
         self.assert_valid(contract("mi308x", "amd", "gfx942"), "mi308x")
+        self.assert_valid(contract("sm86", "nv", "sm_86"), "sm86")
 
     def test_unknown_missing_and_cross_platform_are_rejected(self):
         cases = (
@@ -149,6 +150,7 @@ class ReconciliationTests(unittest.TestCase):
             ("b300", "nv", "sm_100a", "sw"),
             ("b300", "nv", "sm_103a", "sw"),
             ("mi308x", "amd", "gfx942", "sw"),
+            ("sm86", "nv", "sm_86", "sw"),
         )
         for card, platform, arch, bundle in cases:
             name = BASE.format(card=card)
@@ -214,7 +216,7 @@ class GeneratorTests(unittest.TestCase):
             build_perfetto.validate_explicit_trace_filename(wrong, contract())
 
     def test_merge_inherits_card_and_rejects_legacy_names(self):
-        for card in ("h20", "b300", "mi308x"):
+        for card in ("h20", "b300", "mi308x", "sm86"):
             sw_name = BASE.format(card=card)
             merged = merge_hw_into_perfetto.build_merged_trace_filename(Path(sw_name))
             self.assertEqual(merged, sw_name.replace("__sw.perfetto", "__sw_hw.perfetto"))

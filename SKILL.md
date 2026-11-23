@@ -1,11 +1,11 @@
 ---
 name: weaveprofiler
-description: Instrument and profile GPU kernels across NVIDIA H20/B300 and AMD MI308X in CUDA C++, HIP C++, Triton, or CuTeDSL, with validated software and hardware timelines. Use for source recorder edits, profiler capture, and delivery evidence; generic GPU benchmarking does not need this workflow.
+description: Instrument and profile GPU kernels across NVIDIA H20/B300/Ampere sm_86 (RTX 30xx/A10/A40/A6000) and AMD MI308X in CUDA C++, HIP C++, Triton, or CuTeDSL, with validated software and hardware timelines. Use for source recorder edits, profiler capture, and delivery evidence; generic GPU benchmarking does not need this workflow.
 ---
 
 # WeaveProfiler
 
-WeaveProfiler is a portable agent skill and deterministic Python backend (`weaveprof`) for automated, verified fine-grained GPU kernel profiling across NVIDIA H20 (`sm_90a`), NVIDIA B300 (`sm_100a` / `sm_103a`), and AMD Instinct MI308X (`gfx942`) in CUDA C++, HIP C++, Triton, and CuTeDSL.
+WeaveProfiler is a portable agent skill and deterministic Python backend (`weaveprof`) for automated, verified fine-grained GPU kernel profiling across NVIDIA H20 (`sm_90a`), NVIDIA B300 (`sm_100a` / `sm_103a`), NVIDIA Ampere (`sm_86`, RTX 30xx / A10 / A40 / A6000), and AMD Instinct MI308X (`gfx942`) in CUDA C++, HIP C++, Triton, and CuTeDSL.
 
 ## Architecture & Python Skill Interface (`weaveprof`)
 
@@ -102,9 +102,9 @@ Language knowledge: [CUDA C++](configs/languages/cuda_cpp/patterns.json), [HIP C
 All commands enter through [run.py](run.py). Use absolute project, run, and evidence paths.
 
 ```bash
-python3 -B run.py scan --project P --card h20|b300|mi308x [--arch A] --language L --source F [--source F] [--glob G] [--out SCAN]
+python3 -B run.py scan --project P --card h20|b300|mi308x|sm86 [--arch A] --language L --source F [--source F] [--glob G] [--out SCAN]
 python3 -B run.py instrument --scan SCAN --selection SELECTION --plan EDITS [--apply|--dry-run] [--diff-output DIFF]
-python3 -B run.py capture --card h20|b300|mi308x [--arch A] --project P --out RUN [--collector auto|nsys|rocprof-sys|rocprofv3] [--deadline ISO8601_UTC] [--heartbeat PATH] --payload CMD [ARG...]
+python3 -B run.py capture --card h20|b300|mi308x|sm86 [--arch A] --project P --out RUN [--collector auto|nsys|rocprof-sys|rocprofv3] [--deadline ISO8601_UTC] [--heartbeat PATH] --payload CMD [ARG...]
 python3 -B run.py validate --run-dir RUN [--trace TRACE]
 python3 -B run.py check --run-dir RUN
 python3 -B run.py fast --job JOB [--out FAST] [--no-smoke]

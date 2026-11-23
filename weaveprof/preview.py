@@ -185,6 +185,7 @@ def render_timeline_png(aligned: dict, verify_doc: dict, out_png: str | Path, ti
     default_title = (
         f"AMD Instinct MI308X ({arch})" if amd else
         f"NVIDIA Blackwell B300 ({arch})" if "10" in arch else
+        f"NVIDIA Ampere ({arch})" if "86" in arch else
         f"NVIDIA Hopper H20 ({arch})"
     )
     main_title = title_override or default_title

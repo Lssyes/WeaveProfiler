@@ -1602,7 +1602,9 @@ def run_cpu_parallel_preflight(
     inst_text = instrumented_source_path.read_text(encoding="utf-8")
     lang = str(probe_spec.get("language") or "cuda_cpp")
     card = str(probe_spec.get("card") or "h20")
-    arch = str(probe_spec.get("arch") or ("gfx942" if card == "mi308x" else "sm_90a"))
+    arch = str(probe_spec.get("arch") or (
+        "gfx942" if card == "mi308x" else ("sm_86" if card == "sm86" else "sm_90a")
+    ))
     kname = str(probe_spec.get("kernel_name") or "").strip()
 
     diagnostics = validate_probe_spec_static(orig_text, probe_spec, check_sha=False)

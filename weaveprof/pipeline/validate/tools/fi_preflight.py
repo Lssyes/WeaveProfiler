@@ -402,6 +402,8 @@ def _host_card_from_name(name):
         return "h20"
     if re.search(r"(^|[^A-Z0-9])B300([^A-Z0-9]|$)", text):
         return "b300"
+    if re.search(r"(RTX\s*30\d\d|RTX\s*A(?:2000|3000|4000|5000|6000)|(^|[^A-Z0-9])A(?:10|16|40)G?([^A-Z0-9]|$)|SM_?86)", text):
+        return "sm86"
     return None
 
 
@@ -410,6 +412,7 @@ def _host_arch_from_compute_cap(value):
     if not match:
         return None
     return {
+        (8, 6): "sm_86",
         (9, 0): "sm_90",
         (10, 0): "sm_100a",
         (10, 3): "sm_103a",
@@ -440,6 +443,10 @@ def _query_nvidia_host():
         arch = _host_arch_from_compute_cap(cap)
         if card == "h20" and not arch:
             arch = "sm_90"
+        elif card == "sm86" and not arch:
+            arch = "sm_86"
+        elif arch == "sm_86" and not card:
+            card = "sm86"
         return {"platform": "nv", "card": card, "arch": arch,
                 "gpu_name": name, "compute_cap": cap,
                 "evidence": ["nvidia-smi --query-gpu=" + fields]}

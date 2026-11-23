@@ -680,10 +680,10 @@ def validate_target_card(contract):
     raw_card = target.get('card')
     if raw_card is None:
         fails.append(('target_card_missing',
-                      '契约缺少 target.card；合法值只有 h20、b300、mi308x'))
+                      '契约缺少 target.card；合法值只有 h20、b300、mi308x、sm86'))
     elif card is None:
         fails.append(('target_card_invalid',
-                      f'契约 target.card={raw_card!r} 非法；合法值只有 h20、b300、mi308x'))
+                      f'契约 target.card={raw_card!r} 非法；合法值只有 h20、b300、mi308x、sm86'))
 
     raw_platform = target.get('platform')
     platform = normalize_platform(raw_platform)

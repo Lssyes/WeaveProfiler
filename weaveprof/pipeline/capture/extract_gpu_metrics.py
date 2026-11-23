@@ -191,6 +191,8 @@ def card_from_device_name(device_name: Optional[str]) -> Optional[str]:
         return 'b300'
     if 'H20' in text:
         return 'h20'
+    if re.search(r'(RTX\s*30\d\d|RTX\s*A(?:2000|3000|4000|5000|6000)|(^|[^A-Z0-9])A(?:10|16|40)G?([^A-Z0-9]|$)|GA10[2467]|SM_?86)', text):
+        return 'sm86'
     return None
 
 

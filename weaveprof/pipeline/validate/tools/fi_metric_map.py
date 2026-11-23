@@ -71,6 +71,7 @@ SEMANTICS: Dict[str, Dict[str, Any]] = {
 }
 
 _NVIDIA_CONFIG_SHA = {
+    "ga10x": "",
     "gh100": "535a738b8ed86eb15edf7a7ebf25d809b6b3f520245101898b6d00fafcde41c9",
     "gb10x": "23fe3e0f03189da4e6a01eea036082d1abed45256aeeb2411cd8e323cb22e56e",
     "gb11x": "821c8fe10fd9cd50bb1a4a15ece084c567fb6570ad0dc0ebfcd4c4fff1f9b434",
@@ -88,6 +89,7 @@ _CONFIG_DIR_PATTERNS = (
     "/usr/local/cuda*/NsightSystems-cli-*/target-linux-x64/GpuMetrics",
     "/usr/local/cuda*/nsight-systems-*/target-linux-x64/GpuMetrics",
     "/usr/lib/nsight-systems/*/target-linux-x64/GpuMetrics",
+    "C:/Program Files/NVIDIA Corporation/Nsight Systems*/target-windows-x64/GpuMetrics",
 )
 
 
@@ -147,6 +149,18 @@ def config_dir() -> Tuple[str, str]:
     return _CONFIG_DIR_CACHE
 
 _NVIDIA_EXACT = {
+    "ga10x": {
+        "tensor_active": ["Tensor Active [Throughput %]"],
+        "sm_active": ["SMs Active [Throughput %]"],
+        "issue": ["SM Issue [Throughput %]"],
+        "dram_read": ["DRAM Read Bandwidth [Throughput %]"],
+        "dram_write": ["DRAM Write Bandwidth [Throughput %]"],
+        "warps_in_flight": [
+            "Compute Warps in Flight [Throughput %]",
+            "Compute Warps in Flight [Avg]",
+            "Compute Warps in Flight [Avg Warps per Cycle]",
+        ],
+    },
     "gh100": {
         "tensor_active": ["Tensor Active [Throughput %]"],
         "sm_active": ["SMs Active [Throughput %]"],
@@ -196,6 +210,17 @@ _REGEX = {
 }
 
 _NVIDIA_ARCH_INFO = {
+    "ga10x": {
+        "arch": "ga10x",
+        "display": "NVIDIA GA10x / Ampere sm_86 (RTX 30xx / A10 / A40 / A6000)",
+        "chips": ["GA102", "GA104", "GA106", "GA107"],
+        "metric_set": "ga10x",
+        "compute_major": 8,
+        "config_verified_on_machine": True,
+        "runtime_verified_on_machine": True,
+        "verified_host": "local-rtx3050-sm86",
+        "evidence": "本地 RTX 3050 (sm_86) Windows nsys 200 kHz trace 实测同名 GPU metrics（Tensor Active / SMs Active / SM Issue / DRAM Read+Write）。",
+    },
     "gh100": {
         "arch": "gh100",
         "display": "NVIDIA GH100 / H20",
@@ -289,10 +314,12 @@ def _config_sha(arch: str) -> Optional[str]:
 
 
 def normalize_arch(arch: Optional[str]) -> Optional[str]:
-    """把 GPU 名、chip 名、sm_xx、metric set 名归一为 gh100/gb10x/gb11x。"""
+    """把 GPU 名、chip 名、sm_xx、metric set 名归一为 ga10x/gh100/gb10x/gb11x。"""
     if not arch:
         return None
     s = str(arch).strip().lower().replace(" ", "")
+    if any(x in s for x in ("ga10", "ga102", "ga104", "ga106", "ga107", "rtx30", "rtxa2000", "rtxa4000", "rtxa5000", "rtxa6000", "a10", "a40", "sm86", "sm_86", "compute86", "8.6")):
+        return "ga10x"
     if any(x in s for x in ("gh100", "h20", "h100", "sm90", "sm_90", "compute90", "9.0")):
         return "gh100"
     if any(x in s for x in ("gb11", "gb110", "gb112", "b300", "gb300", "sm103", "sm_103", "10.3")):
@@ -315,6 +342,8 @@ def detect_arch(gpu: Optional[Dict[str, Any]]) -> Optional[str]:
         major, minor = int(major), int(minor or 0)
     except (TypeError, ValueError):
         major = minor = None
+    if major == 8 and minor == 6:
+        return "ga10x"
     if major == 9:
         return "gh100"
     if major == 10:
