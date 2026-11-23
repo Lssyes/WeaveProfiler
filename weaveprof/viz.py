@@ -71,8 +71,8 @@ _ASYNC_ENGINE_STYLE: Dict[str, Dict[str, Any]] = {
     "mem": {
         "short": "mem",
         # 5 perceptually distinct shades for shallow (1-3) and deep (4-8+) async pipelines
-        "depth_colors": ("#D8F7EC", "#96E6CA", "#46C89B", "#149C72", "#075E45"),
-        "rail_bg": "#EFF5F3",
+        "depth_colors": ("#A7ECD4", "#63D9B0", "#22B585", "#0E8760", "#055039"),
+        "rail_bg": "#F2F7F5",
         "rail_ec": "#D2E0DC",
         "pin_color": "#D81B60",                              # vivid magenta ▼
         "pin_label": "Mem Async Issue (v)",
@@ -81,8 +81,8 @@ _ASYNC_ENGINE_STYLE: Dict[str, Dict[str, Any]] = {
     },
     "mma": {
         "short": "mma",
-        "depth_colors": ("#DCEBFF", "#96C2FA", "#4A90E8", "#1D5FD1", "#0D3482"),
-        "rail_bg": "#EEF3FA",
+        "depth_colors": ("#A8CEFF", "#64A5FA", "#2D77E5", "#154EC2", "#092B75"),
+        "rail_bg": "#F1F5FB",
         "rail_ec": "#CFDCEB",
         "pin_color": "#7B1FA2",                              # vivid violet ▼
         "pin_label": "MMA Async Issue (v)",
@@ -1113,9 +1113,10 @@ def _render_warp_panel(
             # Pure-async Producer warp (e.g. TMA Producer): fill full row height with depth strip + ▼ pins
             row_geom[r] = ((r - 0.36, r + 0.36), {engs[0]: (r - 0.36, r + 0.36)})
         elif len(engs) == 1:
-            row_geom[r] = ((r - 0.38, r + 0.12), {engs[0]: (r + 0.15, r + 0.38)})
+            # Clean two-row split: upper main track (Softmax/ALU/Wait/Store) + lower async depth row (MEM or MMA)
+            row_geom[r] = ((r - 0.39, r + 0.03), {engs[0]: (r + 0.09, r + 0.39)})
         else:
-            row_geom[r] = ((r - 0.39, r + 0.01), {"mem": (r + 0.04, r + 0.20), "mma": (r + 0.23, r + 0.39)})
+            row_geom[r] = ((r - 0.40, r - 0.04), {"mem": (r + 0.01, r + 0.18), "mma": (r + 0.23, r + 0.40)})
 
     # 1) Draw Main Execution Track spans
     verts_by_color: Dict[str, List[List[Tuple[float, float]]]] = defaultdict(list)
