@@ -56,6 +56,7 @@ def main(argv=None):
     render_sub.add_argument("--subtitle", default=None, help="Optional figure subtitle")
     render_sub.add_argument("--sm", type=int, default=None, help="Physical SM id to feature in Panel (C)")
     render_sub.add_argument("--dpi", type=int, default=220, help="Output PNG DPI (default: 220)")
+    render_sub.add_argument("--allow-no-hw", action="store_true", help="Debug-only: allow rendering without Panel (A) hardware utilization curves")
 
     args = vars(parser.parse_args(argv))
     action = args.pop("action")
@@ -84,7 +85,7 @@ def main(argv=None):
         from .viz import render_swhw_overview_png
         out = render_swhw_overview_png(
             args["trace"], args["out"], title=args["title"], subtitle=args["subtitle"],
-            focus_sm=args["sm"], dpi=args["dpi"],
+            focus_sm=args["sm"], dpi=args["dpi"], require_hw_curves=not args["allow_no_hw"],
         )
         print(str(out))
         return 0

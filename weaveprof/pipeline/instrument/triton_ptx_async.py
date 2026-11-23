@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import re
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 EV_LOAD = 1
 EV_WAIT = 2
@@ -357,3 +357,44 @@ def triton_ptx_async_hook(
         yield
     finally:
         CUDABackend.make_cubin = orig_make_cubin
+
+
+def build_triton_ptx_async_names(
+    stats: Optional[Mapping[str, Any]] = None,
+    *,
+    has_wgmma_async: Optional[bool] = None,
+    store_label: str = "C Tile Store (HBM)",
+) -> Dict[str, Any]:
+    """Build a canonical `names.json` dict for decoding Triton PTX-async dumps.
+
+    Automatically registers Hopper `wgmma` (`ev=3`) as a FIFO slotted async MMA engine
+    when ``stats.get('wgmma_commits', 0) > 0`` (or ``has_wgmma_async=True``).
+    """
+    use_wgmma = bool(has_wgmma_async) if has_wgmma_async is not None else bool((stats or {}).get("wgmma_commits", 0) > 0)
+    slotted: Dict[str, Any] = {
+        "1": {"id": "cp_async_tile_load", "slot": "seq", "cross_warp": False},
+    }
+    async_engines: Dict[str, str] = {"1": "mem"}
+    if use_wgmma:
+        slotted["3"] = {"id": "wgmma_async", "slot": "seq", "cross_warp": False}
+        async_engines["3"] = "mma"
+    return {
+        "events": {
+            "1": "cp_async_tile_load",
+            "2": "async_wait_group",
+            "3": "wgmma_async" if use_wgmma else "mma_sync_hmma",
+            "6": "tl_store_c",
+        },
+        "labels": {
+            "1": "Triton Async Load (cp.async/TMA FIFO)",
+            "2": "Exposed Wait (wait_group + bar.sync)",
+            "3": "Tensor Core WGMMA (async FIFO)" if use_wgmma else "Tensor Core MMA",
+            "6": store_label,
+        },
+        "semantics": {"1": "load", "2": "wait", "3": "mma", "6": "store"},
+        "slotted_events": slotted,
+        "async_engines": async_engines,
+        "roles": {"0": "cta_worker"},
+        "group": "sm",
+        "pair": "stack",
+    }

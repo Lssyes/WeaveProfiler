@@ -970,15 +970,24 @@ class MegakernelAuditTest(_TmpCase):
             "    shutil.copy(os.path.join(sys.argv[1], f), os.path.join(os.environ['WEAVEPROF_OUT_DIR'], f))\n",
             encoding="utf-8", newline="\n")
         build = [sys.executable, "-B", "-c", "open('built.txt', 'w').write('ok')"]
+        sq = make_nsys_sqlite(fixtures / "capture.sqlite")
         kw = dict(entry_source="sparse_mla.cu", bench_cmd=[sys.executable, "-B", "bench.py", str(fixtures)],
-                  build_cmd=build, inst_files={"sparse_mla.cu": INSTRUMENTED_SOURCE}, card="h20")
+                  build_cmd=build, inst_files={"sparse_mla.cu": INSTRUMENTED_SOURCE}, card="h20", nsys_sqlite=sq)
+        # Fail-closed check: without nsys_sqlite, rendering overview PNG MUST block PASS
+        no_hw_rep = mk.run_megakernel_audit(
+            ws, out_dir=self.tmp / "wa_nohw",
+            entry_source="sparse_mla.cu", bench_cmd=[sys.executable, "-B", "bench.py", str(fixtures)],
+            build_cmd=build, inst_files={"sparse_mla.cu": INSTRUMENTED_SOURCE}, card="h20",
+        )
+        self.assertEqual(no_hw_rep["status"], "FAIL")
+        self.assertTrue(any("MISSING_HARDWARE_UTILIZATION_CURVES" in b for b in no_hw_rep["structural_blockers"]), no_hw_rep)
         rep = mk.run_megakernel_audit(ws, out_dir=self.tmp / "wa1", **kw)
         self.assertEqual(rep["status"], "PASS", rep)
         self.assertEqual(rep["mode"], "shadow_build_run")
         self.assertTrue(rep["seal_verified"])
         self.assertEqual((ws / "sparse_mla.cu").read_text(encoding="utf-8"), CLEAN_SOURCE)
         fb1 = json.loads((self.tmp / "wa1" / "feedback.json").read_text(encoding="utf-8"))
-        self.assertFalse(fb1["l0_cache"]["hit"])
+        self.assertTrue(fb1["l0_cache"]["hit"])  # warmed by wa_nohw build above
         rep2 = mk.run_megakernel_audit(ws, out_dir=self.tmp / "wa2", **kw)
         self.assertEqual(rep2["status"], "PASS", rep2)
         fb2 = json.loads((self.tmp / "wa2" / "feedback.json").read_text(encoding="utf-8"))
@@ -988,8 +997,11 @@ class MegakernelAuditTest(_TmpCase):
         self.assertIsNotNone(seal["artifacts"]["instrumented_source"])
 
     def test_async_engine_depth_pins_4panel_and_triton_ptx_pass(self):
-        from weaveprof.pipeline.instrument.triton_ptx_async import instrument_triton_ptx_async
-        from weaveprof.viz import _compute_depth_segments, _pick_micro_zoom_window, render_swhw_overview_png
+        from weaveprof.pipeline.instrument.triton_ptx_async import build_triton_ptx_async_names, instrument_triton_ptx_async
+        from weaveprof.viz import _compute_depth_segments, _parse_trace, _pick_micro_zoom_window, render_swhw_overview_png
+        h20_names = build_triton_ptx_async_names({"wgmma_commits": 1})
+        self.assertEqual(h20_names["async_engines"], {"1": "mem", "3": "mma"})
+        self.assertIn("3", h20_names["slotted_events"])
 
         # 1. Exact sweep-line depth math (0->1->2->3->2->1->0)
         segs, avg_d, max_d = _compute_depth_segments([(0.0, 3.0), (1.0, 4.0), (2.0, 5.0)])
@@ -1068,6 +1080,19 @@ class MegakernelAuditTest(_TmpCase):
             import matplotlib  # noqa: F401
             out_png = render_swhw_overview_png(synth_4p, self.tmp / "dual_async_4panel.png", dpi=110)
             self.assertTrue(out_png.is_file() and out_png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+            # Fail-closed gate: rendering without same-run hardware curves MUST raise by default
+            no_hw = {"otherData": synth_4p["otherData"], "traceEvents": [e for e in evs if e.get("ph") != "C"]}
+            with self.assertRaises(ValueError) as cm:
+                render_swhw_overview_png(no_hw, self.tmp / "should_fail_no_hw.png", dpi=110)
+            self.assertIn("MISSING_HARDWARE_UTILIZATION_CURVES", str(cm.exception))
+            # HBM Read+Write synthesized curve MUST NOT double-count raw DRAM Read + DRAM Write
+            dup_evs = list(evs) + [
+                {"ph": "C", "pid": 90000, "tid": 1, "ts": 10.0, "name": "DRAM Read Bandwidth [Throughput %]", "args": {"value": 5.0}},
+                {"ph": "C", "pid": 90000, "tid": 1, "ts": 10.0, "name": "DRAM Write Bandwidth [Throughput %]", "args": {"value": 3.0}},
+                {"ph": "C", "pid": 90000, "tid": 1, "ts": 10.0, "name": "Memory Util — HBM Read+Write (%) [NSYS PMU]", "args": {"value": 8.0}},
+            ]
+            parsed_dup = _parse_trace({"otherData": synth_4p["otherData"], "traceEvents": dup_evs})
+            self.assertEqual(parsed_dup["hw_curves"]["dram_bw"][0][1], 8.0)
         except ImportError:
             pass
 

@@ -202,7 +202,7 @@ def _classify_hw_metric(name: str) -> Optional[str]:
         return "sm_active"
     if "sm issue" in low or "warp issue" in low or "issue" in low:
         return "sm_issue"
-    if "memory_util" in low or ("hbm" in low and "read" not in low and "write" not in low):
+    if "memory_util" in low or "memory util" in low or ("hbm" in low and ("read+write" in low or ("read" not in low and "write" not in low))):
         return "dram_bw_direct"
     if "dram read" in low or ("hbm" in low and "read" in low):
         return "dram_read"
@@ -582,8 +582,12 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
                 "async_engine": async_engine, "sm": sm, "warp": warp, "cta": cta, "role": role,
             })
 
-    for k in hw_curves:
-        hw_curves[k].sort(key=lambda x: x[0])
+    for k in list(hw_curves.keys()):
+        by_ts: Dict[float, float] = {}
+        for t, v in hw_curves[k]:
+            prev = by_ts.get(t)
+            by_ts[t] = v if prev is None else max(prev, v)
+        hw_curves[k] = sorted(by_ts.items(), key=lambda x: x[0])
 
     # Combine DRAM read + write (shared half-duplex HBM bus) or use direct memory_util curve
     if "dram_bw_direct" in hw_curves:
@@ -874,6 +878,7 @@ def _pick_micro_zoom_window(
             return max(0.0, z0), min(t_max * 1.015, z1), zoom_cta, 0.0, "user-specified window"
 
     cta_bounds: Dict[int, List[float]] = {}
+    cta_warps: Dict[int, set[int]] = defaultdict(set)
     cta_wait: Dict[int, float] = defaultdict(float)
     cta_wait_spans: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
     cta_issues: Dict[int, List[float]] = defaultdict(list)
@@ -881,6 +886,7 @@ def _pick_micro_zoom_window(
 
     for sp in rep_main:
         c = int(sp["cta"])
+        cta_warps[c].add(int(sp["warp"]))
         t0, t1 = float(sp["ts"]), float(sp["end"])
         b = cta_bounds.get(c)
         cta_bounds[c] = [t0, t1] if b is None else [min(b[0], t0), max(b[1], t1)]
@@ -889,6 +895,7 @@ def _pick_micro_zoom_window(
             cta_wait_spans[c].append((t0, t1))
     for sp in rep_async:
         c = int(sp["cta"])
+        cta_warps[c].add(int(sp["warp"]))
         t0, t1 = float(sp["ts"]), float(sp["end"])
         b = cta_bounds.get(c)
         cta_bounds[c] = [t0, t1] if b is None else [min(b[0], t0), max(b[1], t1)]
@@ -896,6 +903,7 @@ def _pick_micro_zoom_window(
         all_issue_ts_by_warp[int(sp["warp"])].append(t0)
     for mk in rep_marks:
         c = int(mk["cta"])
+        cta_warps[c].add(int(mk["warp"]))
         t0 = float(mk["ts"])
         b = cta_bounds.get(c)
         cta_bounds[c] = [t0, t0] if b is None else [min(b[0], t0), max(b[1], t0)]
@@ -964,8 +972,9 @@ def _pick_micro_zoom_window(
     for c, (t0, t1) in cta_bounds.items():
         dur = t1 - t0
         n_it = len(cta_iter_ts.get(c, ()))
+        n_w = max(1, len(cta_warps.get(c) or ()))
         if dur >= 0.4 and n_it >= 2:
-            w_ratio = cta_wait.get(c, 0.0) / max(dur, 1e-6)
+            w_ratio = min(1.0, cta_wait.get(c, 0.0) / max(dur * n_w, 1e-6))
             cands.append((c, t0, t1, dur, cta_wait.get(c, 0.0), w_ratio, n_it))
 
     if len(cands) >= 2:
@@ -1074,6 +1083,7 @@ def _render_warp_panel(
     wait_verts: List[List[Tuple[float, float]]] = []
     row_wait_us: Dict[int, float] = defaultdict(float)
     row_main_us: Dict[int, float] = defaultdict(float)
+    row_all_ivs: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
 
     for sp in vis_main:
         r = _row_of(sp)
@@ -1087,6 +1097,7 @@ def _render_warp_panel(
         if (x1 - x0) <= 0.0:
             continue
         row_main_us[r] += (x1 - x0)
+        row_all_ivs[r].append((x0, x1))
         y_top, y_bot = row_geom[r][0]
         poly = [(x0, y_top), (x1, y_top), (x1, y_bot), (x0, y_bot)]
         if sp["sem"] == "wait" and not dual_fabric:
@@ -1141,6 +1152,9 @@ def _render_warp_panel(
             r = _row_of(sp)
             eng = sp["async_engine"]
             if r is not None and eng in _ASYNC_ENGINE_STYLE:
+                ax0, ax1 = max(x_lo, float(sp["ts"])), min(x_hi, float(sp["end"]))
+                if ax1 > ax0:
+                    row_all_ivs[r].append((ax0, ax1))
                 async_by_re[(r, eng)].append((float(sp["ts"]), float(sp["end"]), int(sp["cta"])))
                 if x_lo <= float(sp["ts"]) <= x_hi:
                     issues_by_re[(r, eng)].append(float(sp["ts"]))
@@ -1239,13 +1253,29 @@ def _render_warp_panel(
                             last_tick_t = t_val
 
                 n_iss = len(ts_all)
+                compact = len(sub_map) >= 2
+                eng_short = "M" if eng == "mem" else "W"
                 if max_d >= 1:
-                    stat_parts.append(f"{n_iss} {eng} · d={avg_d:.1f}")
+                    stat_parts.append(f"{n_iss}{eng_short} d={avg_d:.1f}" if compact else f"{n_iss} {eng} · d={avg_d:.1f}")
                 elif n_iss > 0:
-                    stat_parts.append(f"{n_iss} {eng} issues")
+                    stat_parts.append(f"{n_iss}{eng_short}" if compact else f"{n_iss} {eng} issues")
 
-            if row_wait_us.get(r, 0.0) > 0.0 and row_main_us.get(r, 0.0) > 0.0:
-                wpct = 100.0 * row_wait_us[r] / row_main_us[r]
+            if row_wait_us.get(r, 0.0) > 0.0:
+                # Union wall-clock active duration on row r inside [x_lo, x_hi] (main + async),
+                # so dual-async warps (cp.async + wgmma) report true % of wall time stalled in wait!
+                ivs = sorted(row_all_ivs.get(r, ()))
+                union_us = 0.0
+                if ivs:
+                    cur_s, cur_e = ivs[0]
+                    for s_i, e_i in ivs[1:]:
+                        if s_i <= cur_e:
+                            cur_e = max(cur_e, e_i)
+                        else:
+                            union_us += (cur_e - cur_s)
+                            cur_s, cur_e = s_i, e_i
+                    union_us += (cur_e - cur_s)
+                denom = max(union_us, row_main_us.get(r, 0.0), 1e-6)
+                wpct = min(100.0, 100.0 * row_wait_us[r] / denom)
                 stat_parts.append(f"wait {wpct:.1f}%")
             if stat_parts:
                 row_stats[r] = {"text": " · ".join(stat_parts)}
@@ -1308,6 +1338,7 @@ def render_swhw_overview_png(
     zoom_cta: Optional[int] = None,
     zoom_window: Optional[Tuple[float, float]] = None,
     dpi: int = 220,
+    require_hw_curves: bool = True,
 ) -> Path:
     """Render a publication-grade SW+HW overview PNG (with on-demand async depth strips, ▼ issue pins & micro-zoom)."""
     import matplotlib
@@ -1428,6 +1459,14 @@ def render_swhw_overview_png(
     has_zoom = zoom_win is not None
 
     has_hw = any(hw_curves.get(k) for k in ("tensor_active", "sm_active", "sm_issue", "dram_bw", "nvlink_tx", "nvlink_rx", "nvlink_bw", "inter_rdma"))
+    if require_hw_curves and not has_hw:
+        raise ValueError(
+            "MISSING_HARDWARE_UTILIZATION_CURVES: Panel (A) requires same-run hardware profiler "
+            "utilization curves (200 kHz nsys on NVIDIA or rocprof-sys on AMD). Refusing to emit "
+            "an incomplete SW-only PNG without Panel (A). Capture real GPU metrics (e.g., sudo nsys "
+            "on Linux, or enable NVIDIA Control Panel Developer GPU Performance Counters on Windows) "
+            "or pass require_hw_curves=False / --allow-no-hw explicitly for offline debugging only."
+        )
     row_h_unit = 0.50 if (has_async_rep and n_rep_rows <= 6) else (0.28 if n_rep_rows >= 8 else 0.40)
     panel_c_h = max(2.25, min(5.0, row_h_unit * n_rep_rows + 1.05))
     panel_d_h = max(2.15, min(4.2, row_h_unit * n_rep_rows + 0.90)) if has_zoom else 0.0
@@ -1739,20 +1778,24 @@ def render_swhw_overview_png(
     else:
         n_sub = max(1, len(all_warps))
     img = np.full((n_sms * n_sub, img_w, 3), 255, dtype=np.uint8)
-    panel_b_spans = sw_spans if dual_fabric else (main_spans + [
-        sp for sp in async_spans
-        if not any(m["sm"] == sp["sm"] and m["warp"] == sp["warp"] for m in main_spans[:256])
-    ] if not main_spans else main_spans)
-    # Also include pure-async producer warps (warps with zero main spans) on Panel (B)
-    if not dual_fabric and async_spans and main_spans:
-        main_sm_warps = {(sp["sm"], sp["warp"]) for sp in main_spans}
-        pure_async_b = [sp for sp in async_spans if (sp["sm"], sp["warp"]) not in main_sm_warps]
-        panel_b_spans = main_spans + pure_async_b
+    if dual_fabric:
+        panel_b_spans = sw_spans
+    else:
+        # Include async MMA (e.g. Hopper wgmma / Blackwell tcgen05) and background MEM spans on
+        # Panel (B) so chip-wide compute utilization renders in Tensor Core Blue instead of being
+        # hidden behind short Exposed Wait bars!
+        panel_b_spans = list(main_spans) + list(async_spans)
+    has_compute_b = any(sp["sem"] in ("mma", "gemm", "compute") for sp in panel_b_spans)
     sorted_spans = sorted(
         panel_b_spans,
         key=lambda s: (
-            0 if s["sem"] == "barrier" else 1,
-            _STAGE_DRAW_PRIORITY.get(s["sem"], 4),
+            0 if s.get("async_engine") == "mem" else (
+                1 if s["sem"] == "barrier" else (
+                    2 if s.get("async_engine") == "mma" else (
+                        _STAGE_DRAW_PRIORITY.get(s["sem"], 4) + 2
+                    )
+                )
+            ),
             float(s["dur"]),
         ),
     )
@@ -1760,6 +1803,11 @@ def render_swhw_overview_png(
     for sp in sorted_spans:
         row = sm_to_row.get(sp["sm"])
         if row is None:
+            continue
+        # Suppress sub-pixel (<0.45 px) wait ticks on Panel (B) when compute spans are present, so
+        # rapid ~0.08 us sync ticks don't expand to 1-pixel orange walls over healthy Tensor Core work
+        # (Panel C & Panel D still display every individual wait tick verbatim).
+        if (not dual_fabric) and has_compute_b and sp["sem"] == "wait" and (float(sp["dur"]) * scale_x) < 0.45:
             continue
         if sm_cta_slots:
             sub = sm_cta_slots.get((sp["sm"], sp["cta"]), 0)
@@ -1769,7 +1817,10 @@ def render_swhw_overview_png(
         x1 = max(x0 + 1, min(img_w, int(math.ceil(sp["end"] * scale_x))))
         if dual_fabric and sp.get("_frole") in ("inter_dispatch", "inter_combine", "intra_combine"):
             x1 = max(x1, min(img_w, x0 + 2))
-        img[row * n_sub + sub, x0:x1] = _hex_to_rgb(_span_color(sp))
+        col_hex = _span_color(sp)
+        if (not dual_fabric) and sp.get("async_engine") == "mem":
+            col_hex = "#80CBC4"  # soft teal-green background for async mem when layered under MMA
+        img[row * n_sub + sub, x0:x1] = _hex_to_rgb(col_hex)
 
     ax_sm.imshow(img, aspect="auto", interpolation="nearest", extent=[0.0, t_max + x_pad, n_sms - 0.5, -0.5])
     ax_sm.axvline(k_dur, color="#263238", linestyle="--", linewidth=1.0, alpha=0.75)
@@ -1896,7 +1947,7 @@ def render_swhw_overview_png(
     yt_labels = [t.get_text() for t in ax_wp.get_yticklabels()]
     max_lbl = max((len(s) for s in yt_labels), default=10)
     left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
-    right_m = 0.845 if has_async_rep else 0.985
+    right_m = (0.815 if len(active_async_engines) >= 2 else 0.845) if has_async_rep else 0.985
     if has_zoom:
         top_m = 0.862 if has_hw else 0.870
     else:
@@ -1921,6 +1972,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--zoom-cta", type=int, default=None, help="Override Panel (D) micro-zoom CTA id")
     ap.add_argument("--zoom-window", default=None, help="Override Panel (D) micro-zoom window 't0,t1' in us")
     ap.add_argument("--dpi", type=int, default=220)
+    ap.add_argument("--allow-no-hw", action="store_true", help="Debug-only escape hatch: allow rendering without Panel (A) hardware utilization curves")
     args = ap.parse_args(argv)
     zw = None
     if args.zoom_window:
@@ -1930,6 +1982,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     out = render_swhw_overview_png(
         args.trace, args.out, title=args.title, subtitle=args.subtitle,
         focus_sm=args.sm, zoom_cta=args.zoom_cta, zoom_window=zw, dpi=args.dpi,
+        require_hw_curves=not args.allow_no_hw,
     )
     print(f"RENDERED {out} ({out.stat().st_size} bytes)")
     return 0

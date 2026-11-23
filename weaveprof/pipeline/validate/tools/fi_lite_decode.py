@@ -1138,6 +1138,8 @@ def main():
     ap.add_argument("--title", default=None, help="PNG 标题（可选）")
     ap.add_argument("--sm", type=int, default=None, help="Panel (C) 展示的物理 SM/CU 编号")
     ap.add_argument("--dpi", type=int, default=220, help="PNG DPI（默认 220）")
+    ap.add_argument("--allow-no-hw", action="store_true",
+                    help="仅离线调试使用：允许在缺少同次硬件利用率曲线（nsys / rocprof-sys）时渲染无 (A) 栏 PNG；默认严格拒绝")
     ap.add_argument("--write-gz", action="store_true",
                     help="显式允许写出调试用 .perfetto.json.gz（默认 PNG-only 策略禁止写出 .gz）")
     ap.add_argument("--summary")
@@ -1218,7 +1220,10 @@ def main():
         sys.exit(2)
     if png_out:
         from weaveprof.viz import render_swhw_overview_png
-        rendered = render_swhw_overview_png(tr, png_out, title=a.title, focus_sm=a.sm, dpi=a.dpi)
+        rendered = render_swhw_overview_png(
+            tr, png_out, title=a.title, focus_sm=a.sm, dpi=a.dpi,
+            require_hw_curves=not a.allow_no_hw,
+        )
         print("写出 PNG", rendered)
     if trace_out:
         if allow_gz and not trace_out.endswith(".gz") and trace_out.endswith(".perfetto.json"):
