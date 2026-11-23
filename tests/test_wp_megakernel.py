@@ -1219,8 +1219,8 @@ class HygieneTest(unittest.TestCase):
         self.assertAlmostEqual(cwi["avg_d_tma"], 1.8, places=3)
         self.assertEqual(cwi["residence_p50_ns"], 3000)
         self.assertEqual(cwi["residence_mean_ns"], 3000.0)
-        self.assertIn("0:11", tr["otherData"]["cross_warp_inflight_ctas"])
-        segs = tr["otherData"]["cross_warp_inflight_ctas"]["0:11"]["segments_us"]
+        self.assertIn("0", tr["otherData"]["cross_warp_inflight_ctas"])
+        segs = tr["otherData"]["cross_warp_inflight_ctas"]["0"]["segments_us"]
         self.assertEqual([dp for _, _, dp in segs], [1, 2, 3, 2, 1])
         # Verify viz._parse_trace surfaces deduplicated CTA-level depth onto producer warp W00 (peak depth=3)
         from weaveprof import viz
@@ -1229,6 +1229,38 @@ class HygieneTest(unittest.TestCase):
         _, p_avg, p_max = viz._compute_depth_segments(prod_ivs)
         self.assertEqual(p_max, 3)
         self.assertAlmostEqual(p_avg, 1.8, places=2)
+        # Also verify multi-event CTA-wide union (e.g. FA3 TMA K + TMA V concurrent in flight -> combined max_d=4, per_event max=2)
+        E_K, E_V = 11, 12
+        slots_kv = {
+            0: [(t0, OPEN | 0, 0),
+                (t0 + 1000, E_K, 0), (t0 + 1100, E_V, 0), (t0 + 2000, E_K, 1), (t0 + 2100, E_V, 1),
+                (t0 + 8000, CLOSE, 0)],
+            1: [(t0, OPEN | 1, 0),
+                (t0 + 4000, END | E_K, 0), (t0 + 4500, END | E_V, 0), (t0 + 5000, END | E_K, 1), (t0 + 5500, END | E_V, 1),
+                (t0 + 8000, CLOSE, 0)],
+            2: [(t0, OPEN | 1, 0),
+                (t0 + 4200, END | E_K, 0), (t0 + 4700, END | E_V, 0), (t0 + 5200, END | E_K, 1), (t0 + 5700, END | E_V, 1),
+                (t0 + 8000, CLOSE, 0)],
+        }
+        blob_kv = WPD.build_dump_bytes(slots_kv, n_slots=3, cap=16, wpc=3, meta={"arch": "sm_90a", "gran": 0, "kernel": "fa3_kv"})
+        with tempfile.TemporaryDirectory() as td:
+            p2 = Path(td) / "kv.wp02.bin"
+            p2.write_bytes(blob_kv)
+            d2 = WPD.read_dump(str(p2))
+        names_kv = {
+            "events": {"11": "tma_k", "12": "tma_v"}, "semantics": {"11": "load", "12": "load"},
+            "roles": {"0": "tma_producer", "1": "math_consumer"},
+            "cross_warp": {
+                "11": {"id": "tma_k", "begin_role": 0, "end_role": 1},
+                "12": {"id": "tma_v", "begin_role": 0, "end_role": 1},
+            },
+            "group": "sm", "pair": "stack",
+        }
+        _, summ_kv = WPD.decode(d2, names_kv)
+        self.assertEqual(summ_kv["errors"], {})
+        self.assertEqual(summ_kv["cross_warp_inflight"]["max_d_tma"], 4)
+        self.assertEqual(summ_kv["cross_warp_inflight"]["per_event"]["11"]["max_depth"], 2)
+        self.assertEqual(summ_kv["cross_warp_inflight"]["per_event"]["12"]["max_depth"], 2)
 
 
 if __name__ == "__main__":

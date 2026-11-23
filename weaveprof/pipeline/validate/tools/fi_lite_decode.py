@@ -777,23 +777,32 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
     cross_inflight_cta_segs = {}
     if cross_cta_intervals:
         by_ev_ctas = defaultdict(list)
+        by_cta_all = defaultdict(list)
+        by_cta_prod_lane = {}
         all_durs_ns = []
-        all_max_d = []
-        all_avg_d = []
         for (cta_id, ev_id), ivs in sorted(cross_cta_intervals.items()):
-            segs_ns, avg_d, max_d = _sweep_depth_ns([(a, b) for a, b, _ in ivs])
+            _, ev_avg_d, ev_max_d = _sweep_depth_ns([(a, b) for a, b, _ in ivs])
             durs = [int(b - a) for a, b, _ in ivs]
             all_durs_ns.extend(durs)
-            all_max_d.append(max_d)
-            if avg_d > 0.0:
-                all_avg_d.append(avg_d)
-            by_ev_ctas[ev_id].append((cta_id, max_d, avg_d, durs))
+            by_ev_ctas[ev_id].append((cta_id, ev_max_d, ev_avg_d, durs))
+            by_cta_all[cta_id].extend((a, b) for a, b, _ in ivs)
             prod_lane = cross_cta_prod_lane.get((cta_id, ev_id))
-            # Store compact relative-us depth segments per CTA for optional CTA-level async rail rendering
-            cross_inflight_cta_segs[f"{cta_id}:{ev_id}"] = {
-                "cta": cta_id, "event_id": ev_id, "sm": cta_sm.get(cta_id),
+            if prod_lane is not None:
+                prev = by_cta_prod_lane.get(cta_id)
+                by_cta_prod_lane[cta_id] = prod_lane if prev is None else min(prev, prod_lane)
+        # Sweep CTA-wide union of all cross-warp TMA/async transfers (e.g., K + V simultaneously in flight on W00)
+        cta_max_d_list = []
+        cta_avg_d_list = []
+        for cta_id, ivs_all in sorted(by_cta_all.items()):
+            segs_ns, avg_d, max_d = _sweep_depth_ns(ivs_all)
+            cta_max_d_list.append(max_d)
+            if avg_d > 0.0:
+                cta_avg_d_list.append(avg_d)
+            prod_lane = by_cta_prod_lane.get(cta_id)
+            cross_inflight_cta_segs[str(cta_id)] = {
+                "cta": cta_id, "sm": cta_sm.get(cta_id),
                 "producer_warp": (prod_lane % wpc) if prod_lane is not None else None,
-                "max_depth": max_d, "avg_depth": round(avg_d, 3), "n_transfers": len(ivs),
+                "max_depth": max_d, "avg_depth": round(avg_d, 3), "n_transfers": len(ivs_all),
                 "segments_us": [[round(us(s0), 3), round(us(s1), 3), dp] for s0, s1, dp in segs_ns],
             }
         per_event = {}
@@ -814,13 +823,13 @@ def decode(d, names, group_override=None, sm_bar=True, semantic_kb=None,
                 "residence_p90_ns": ev_durs[min(len(ev_durs) - 1, int(len(ev_durs) * 0.9))] if ev_durs else 0,
             }
         all_durs_ns.sort()
-        all_max_d.sort()
+        cta_max_d_list.sort()
         cross_inflight_summary = {
-            "ctas_measured": len({c for (c, _) in cross_cta_intervals}),
+            "ctas_measured": len(by_cta_all),
             "n_transfers": len(all_durs_ns),
-            "max_d_tma": all_max_d[-1] if all_max_d else 0,
-            "p50_max_d_tma": all_max_d[len(all_max_d) // 2] if all_max_d else 0,
-            "avg_d_tma": round(sum(all_avg_d) / len(all_avg_d), 3) if all_avg_d else 0.0,
+            "max_d_tma": cta_max_d_list[-1] if cta_max_d_list else 0,
+            "p50_max_d_tma": cta_max_d_list[len(cta_max_d_list) // 2] if cta_max_d_list else 0,
+            "avg_d_tma": round(sum(cta_avg_d_list) / len(cta_avg_d_list), 3) if cta_avg_d_list else 0.0,
             "residence_p50_ns": all_durs_ns[len(all_durs_ns) // 2] if all_durs_ns else 0,
             "residence_mean_ns": round(sum(all_durs_ns) / len(all_durs_ns), 1) if all_durs_ns else 0.0,
             "residence_p90_ns": all_durs_ns[min(len(all_durs_ns) - 1, int(len(all_durs_ns) * 0.9))] if all_durs_ns else 0,
