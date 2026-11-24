@@ -1,0 +1,20 @@
+{
+ "case": "h20_pingpong_v1",
+ "entry_source": "matmul-pingpong-v1.cu",
+ "card": "h20",
+ "arch": "sm_90a",
+ "total_sms": 78,
+ "limit": 0.1,
+ "overview_title": "matmul-pingpong-v1.cu (this-sm90) - CUTLASS-style ping-pong TMA + WGMMA fp16 GEMM, 4096^3, NVIDIA H20",
+ "provenance": "mail-19 (8x H20, CUDA 13.3, nsys 2026.1), 2026-11-24, WP_LEVEL=2 WP_TIMER=1 -DWP_CTX_REG, cross-warp TMA + slotted async WGMMA",
+ "inputs_sha256": {
+  "capture.fi02.bin": "c468f6663bf50004180ea6cee96935c024d73bcc3c499a7b4514e2d552a2f7a6",
+  "nsys.sqlite(full)": "e7511587006d853ca69f5e01927ac104ae73aebfef2b22f048161f8cd7665433",
+  "runtime.json(original)": "f14fea8808ddc0059956dbc0e0702c4525fa67f2647d6b505d7b055ddc0f330e"
+ },
+ "sizes": {
+  "dump_bytes": 24574280,
+  "sqlite_full_bytes": 36487168,
+  "sqlite_trimmed_bytes": 921600
+ }
+}

@@ -1,0 +1,20 @@
+{
+ "case": "h20_v6_persistent",
+ "entry_source": "matmul-v6.cu",
+ "card": "h20",
+ "arch": "sm_90a",
+ "total_sms": 78,
+ "limit": 0.1,
+ "overview_title": "matmul-v6.cu (this-sm90-h20) - persistent TMA multicast + 2x WGMMA m64n256 bf16 GEMM, 4096^3, NVIDIA H20",
+ "provenance": "mail-19 (8x H20, CUDA 13.3, nsys 2026.1), 2026-11-24, WP_LEVEL=2 WP_TIMER=1 -DWP_CTX_REG, persistent 39 clusters x 2",
+ "inputs_sha256": {
+  "capture.fi02.bin": "579fa1cbd696096fb8c6216c16921375137f64e6e2e4e6fa18fd3bab19f460c8",
+  "nsys.sqlite(full)": "943317d8c707c474effe2d45558cf733bcf9d0e32384b5ec42f0fabfdac68ea6",
+  "runtime.json(original)": "533577d9383358f164cbe0d050b43dda516050a7a8b193f8c92ef0546a7f36ab"
+ },
+ "sizes": {
+  "dump_bytes": 23099711,
+  "sqlite_full_bytes": 38674432,
+  "sqlite_trimmed_bytes": 933888
+ }
+}
