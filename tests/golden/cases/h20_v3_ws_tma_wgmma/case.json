@@ -1,0 +1,20 @@
+{
+ "case": "h20_v3_ws_tma_wgmma",
+ "entry_source": "matmul-v3.cu",
+ "card": "h20",
+ "arch": "sm_90a",
+ "total_sms": 78,
+ "limit": 0.1,
+ "overview_title": "matmul-v3.cu (this-sm90) - warp-specialized TMA + WGMMA bf16 GEMM, 2048x2048x4096, NVIDIA H20",
+ "provenance": "mail-19 (8x H20, CUDA 13.3, nsys 2026.1), 2026-11-24, WP_LEVEL=2 WP_TIMER=1 default ctx, layout v3 r6, explicit WP_OPEN/WP_CLOSE",
+ "inputs_sha256": {
+  "capture.fi02.bin": "bd1179570aab1c929cc982d348b1025707e32b29bd31a7b4ae5f500786bf0c30",
+  "nsys.sqlite(full)": "d947f9ee6eb8cb5e281f0878abf5cba0a64c108d07384a6ff940298bbaa4023c",
+  "runtime.json(original)": "53ac35e354a1fc04b9295637fcbb8b879995878d787d8421de6685cbea178491"
+ },
+ "sizes": {
+  "dump_bytes": 24707232,
+  "sqlite_full_bytes": 37158912,
+  "sqlite_trimmed_bytes": 786432
+ }
+}

@@ -1,0 +1,307 @@
+{
+ "aka_plugin_tools": {
+  "analyze": {
+   "command": [
+    "{python}",
+    "-B",
+    "{plugin_root}/weaveprof/aka_adapter.py",
+    "analyze"
+   ],
+   "input_schema_sha": "6d67a81efa187004"
+  },
+  "compare-rounds": {
+   "command": [
+    "{python}",
+    "-B",
+    "{plugin_root}/weaveprof/aka_adapter.py",
+    "compare-rounds"
+   ],
+   "input_schema_sha": "e9ba4e1f4f8f7c1c"
+  },
+  "megakernel-audit": {
+   "command": [
+    "{python}",
+    "-B",
+    "{plugin_root}/weaveprof/aka_adapter.py",
+    "megakernel-audit"
+   ],
+   "input_schema_sha": "812a9c1e4913e549"
+  },
+  "plan-context": {
+   "command": [
+    "{python}",
+    "-B",
+    "{plugin_root}/weaveprof/aka_adapter.py",
+    "plan-context"
+   ],
+   "input_schema_sha": "da11ad9724afae7a"
+  },
+  "profile": {
+   "command": [
+    "{python}",
+    "-B",
+    "{plugin_root}/weaveprof/aka_adapter.py",
+    "profile"
+   ],
+   "input_schema_sha": "0fc5f689817d0070"
+  },
+  "verify-seal": {
+   "command": [
+    "{python}",
+    "-B",
+    "{plugin_root}/weaveprof/aka_adapter.py",
+    "verify-seal"
+   ],
+   "input_schema_sha": "a566e91f5e3ee862"
+  }
+ },
+ "mcp_tools": {
+  "weaveprof_analyze": "6d67a81efa187004",
+  "weaveprof_compare_rounds": "e9ba4e1f4f8f7c1c",
+  "weaveprof_megakernel_audit": "265dc6d4f0c50651",
+  "weaveprof_plan_context": "da11ad9724afae7a",
+  "weaveprof_profile": "d54eef0332fcc343",
+  "weaveprof_status": "99334726611ccf58",
+  "weaveprof_verify_seal": "a566e91f5e3ee862"
+ },
+ "python_api": [
+  "AutoProfService",
+  "CAPABILITY_KEY",
+  "HarnessPolicy",
+  "PLUGIN_NAME",
+  "PolicyViolation",
+  "VerificationError",
+  "WpSoController",
+  "analyze_megakernel_skew",
+  "analyze_sw_hw_causality",
+  "apply_atrex_plugin",
+  "build_agent_report",
+  "build_minimal_include_overlay",
+  "calibrate_hw_series",
+  "check_candidate_static_coverage",
+  "compare_optimization_rounds",
+  "detect_kernel_stage_requirements",
+  "doctor",
+  "extract_nsys_sqlite_fast",
+  "get_lock_provider",
+  "gpu_critical_region",
+  "guard_exec",
+  "identify",
+  "install_agent_workspace",
+  "list_lock_providers",
+  "locate",
+  "locate_or_remap_0token",
+  "plan_context_and_search_space",
+  "profile",
+  "profile_for_agent",
+  "register_lock_provider",
+  "run_compiler_feedback_selection",
+  "run_megakernel_audit",
+  "run_rsi_placement_search",
+  "select_compiler_feedback_arm",
+  "unregister_lock_provider",
+  "validate",
+  "verify",
+  "verify_compiler_spill_gate",
+  "verify_seal",
+  "verify_semantic_body_and_stubs",
+  "verify_sw_hw_coverage",
+  "wrap"
+ ],
+ "recorder_cuda_cpp": {
+  "host_functions": [
+   "wp_alloc",
+   "wp_attach",
+   "wp_attach_library",
+   "wp_dump",
+   "wp_free",
+   "wp_host_dump",
+   "wp_host_init",
+   "wp_init",
+   "wp_reset"
+  ],
+  "macros": [
+   "WP_B()",
+   "WP_BG()",
+   "WP_BG_PRED()",
+   "WP_B_PRED()",
+   "WP_CLOSE()",
+   "WP_CTX_REG",
+   "WP_CTX_REG_NOINLINE",
+   "WP_CTX_SMEM",
+   "WP_DEFINE_HOST_API",
+   "WP_DEVICE_SCOPE()",
+   "WP_DEVICE_SCOPE_BY()",
+   "WP_E()",
+   "WP_EG()",
+   "WP_EG_PRED()",
+   "WP_E_PRED()",
+   "WP_GRAN",
+   "WP_GROUPS",
+   "WP_GROUP_ON()",
+   "WP_KERNEL_SCOPE()",
+   "WP_KERNEL_SCOPE_BY()",
+   "WP_LEVEL",
+   "WP_M()",
+   "WP_MAX_WARPS_PER_CTA",
+   "WP_MG()",
+   "WP_MG_PRED()",
+   "WP_M_PRED()",
+   "WP_OPEN()",
+   "WP_OPEN_BY()",
+   "WP_ROLE_SWITCH()",
+   "WP_SMEM_DECL()",
+   "WP_SMEM_SLOT()",
+   "WP_SYNC_CURSOR_IN()",
+   "WP_SYNC_CURSOR_OUT()",
+   "WP_SYNC_IN()",
+   "WP_SYNC_OUT()",
+   "WP_TIMER",
+   "WP_TRANS_PRED()"
+  ]
+ },
+ "recorder_cutedsl": {
+  "wp_cute.py": [
+   "FiBuffer",
+   "fi_attach",
+   "fi_get_attached",
+   "open_perfetto",
+   "wp_available",
+   "write_names"
+  ]
+ },
+ "recorder_hip_cpp": {
+  "host_functions": [
+   "wp_alloc",
+   "wp_attach",
+   "wp_dump",
+   "wp_free",
+   "wp_host_dump",
+   "wp_host_init",
+   "wp_init",
+   "wp_reset"
+  ],
+  "macros": [
+   "WP_B()",
+   "WP_BG()",
+   "WP_BG_PRED()",
+   "WP_B_PRED()",
+   "WP_CLOSE()",
+   "WP_DEFINE_HOST_API",
+   "WP_DEVICE_SCOPE()",
+   "WP_DEVICE_SCOPE_BY()",
+   "WP_E()",
+   "WP_EG()",
+   "WP_EG_PRED()",
+   "WP_E_PRED()",
+   "WP_GRAN",
+   "WP_GROUPS",
+   "WP_GROUP_ON()",
+   "WP_KERNEL_SCOPE()",
+   "WP_KERNEL_SCOPE_BY()",
+   "WP_LEVEL",
+   "WP_M()",
+   "WP_MG()",
+   "WP_MG_PRED()",
+   "WP_M_PRED()",
+   "WP_OPEN()",
+   "WP_OPEN_BY()",
+   "WP_SYNC_CURSOR_IN()",
+   "WP_SYNC_CURSOR_OUT()",
+   "WP_SYNC_IN()",
+   "WP_SYNC_OUT()",
+   "WP_TIMER",
+   "WP_TRANS_PRED()"
+  ]
+ },
+ "recorder_triton": {
+  "wp_triton.py": [
+   "FiAsmBackend",
+   "FiBuffer",
+   "FiCfg",
+   "RecordGatePlan",
+   "cap_for",
+   "default_timer_for_device",
+   "fi_attach",
+   "fi_get_attached",
+   "record_gate_status",
+   "resolve_arch",
+   "wp_available",
+   "wp_cfg",
+   "write_names"
+  ],
+  "wp_triton_amd.py": [
+   "FiBuffer",
+   "FiPackedBuffer",
+   "fi_attach",
+   "fi_get_attached",
+   "wp_available",
+   "wp_buffer",
+   "wp_open_by",
+   "write_names"
+  ]
+ },
+ "run_megakernel_audit_signature": [
+  "workspace",
+  "bench_cmd=None",
+  "entry_source=None",
+  "inst_files=None",
+  "inst_dir=None",
+  "dump_path=None",
+  "names=None",
+  "runtime_metrics=None",
+  "nsys_sqlite=None",
+  "capture_nsys=False",
+  "nsys_cmd=None",
+  "nsys_freq_hz=200000",
+  "nsys_gpu_device=None",
+  "nsys_capture_range='cudaProfilerApi'",
+  "render_overview_png=True",
+  "write_perfetto_gz=False",
+  "overview_title=None",
+  "overview_subtitle=None",
+  "overview_sm=None",
+  "card='auto'",
+  "arch=None",
+  "total_sms=None",
+  "limit=0.1",
+  "out_dir=None",
+  "gpu_id='auto'",
+  "use_l0_cache=True",
+  "prev_causal_report=None",
+  "build_cmd=None",
+  "policy=None",
+  "round_number=None"
+ ],
+ "run_py_commands": [
+  "agent-status",
+  "auto-gemm",
+  "auto-profile",
+  "capture",
+  "check",
+  "deliver",
+  "fast",
+  "gemm-probe",
+  "guard-exec",
+  "install-agent",
+  "instrument",
+  "mcp-server",
+  "probe-inject",
+  "probe-place",
+  "probe-reuse",
+  "scan",
+  "template",
+  "validate"
+ ],
+ "weaveprof_cli_commands": [
+  "causal",
+  "doctor",
+  "identify",
+  "locate",
+  "profile",
+  "render",
+  "seal-check",
+  "validate",
+  "verify"
+ ]
+}

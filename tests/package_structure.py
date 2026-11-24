@@ -332,7 +332,7 @@ def _check_source_hygiene(fails: list[str]) -> None:
         fails.append("duplicated/stale path fragments: {}".format(duplicate_paths[:10]))
     if old_names:
         fails.append("old skill name in public files: {}".format(old_names))
-    top = {item.name for item in PKG.iterdir()} - {".git", ".gitignore", ".gitattributes"}
+    top = {item.name for item in PKG.iterdir()} - {".git", ".gitignore", ".gitattributes", ".github"}
     extra = sorted(top - ALLOWED_TOP)
     missing = sorted(REQUIRED_TOP - top)
     if extra:

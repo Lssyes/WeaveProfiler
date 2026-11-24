@@ -1,0 +1,24 @@
+{
+  "events": {"1": "load", "2": "wait", "3": "wait", "4": "mma", "5": "store", "7": "wait", "8": "wait"},
+  "labels": {
+    "1": "TMA Load A+B k-tile (issue -> landed, multicast B)",
+    "2": "Exposed Wait: empty stage (producer)",
+    "3": "Exposed Wait: full stage (consumer)",
+    "4": "WGMMA m64n128k16 x4 async (issue -> retired)",
+    "5": "Epilogue Store C (fp16, 128x128 tile)",
+    "7": "Exposed Wait: ping-pong turn before mainloop",
+    "8": "Exposed Wait: ping-pong turn before epilogue"
+  },
+  "fabrics": {"1": "on_chip", "2": "on_chip", "3": "on_chip", "4": "on_chip", "5": "on_chip", "7": "on_chip", "8": "on_chip"},
+  "roles": {"0": "Producer (TMA issue)", "1": "Consumer WG1/WG2 (ping-pong WGMMA)", "3": "Producer WG idle"},
+  "aux": {"1": "k_seq", "2": "k_seq", "3": "k_seq", "4": "k_seq", "5": "tile_seq", "7": "tile_seq", "8": "tile_seq"},
+  "cross_warp": {"1": {"id": "tma_load", "begin_role": 0, "end_role": 1}},
+  "slotted_events": {
+    "1": {"id": "tma_load", "slot": "k_seq", "cross_warp": true},
+    "4": {"id": "wgmma_async", "slot": "k_seq", "cross_warp": false}
+  },
+  "async_engines": {"1": "mem", "4": "mma"},
+  "label_aux": true,
+  "group": "role",
+  "pair": "stack"
+}

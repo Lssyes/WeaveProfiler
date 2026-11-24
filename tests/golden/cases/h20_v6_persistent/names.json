@@ -1,0 +1,20 @@
+{
+  "events": {"1": "load", "2": "wait", "3": "wait", "4": "mma", "5": "store", "6": "wait"},
+  "labels": {
+    "1": "TMA Load A + multicast B k-tile (issue -> landed)",
+    "2": "Exposed Wait: empty stage (producer)",
+    "3": "Exposed Wait: full stage (consumer)",
+    "4": "WGMMA m64n256k16 x4 (sync wait_group 0)",
+    "5": "Epilogue Store C (fp32, 64x256 per WG)",
+    "6": "Exposed Wait: cluster_sync (tile boundary)"
+  },
+  "fabrics": {"1": "on_chip", "2": "on_chip", "3": "on_chip", "4": "on_chip", "5": "on_chip", "6": "on_chip"},
+  "roles": {"0": "Producer (TMA issue)", "1": "Math WG1/WG2 (WGMMA)", "2": "Producer WG idle"},
+  "aux": {"1": "k_tile", "2": "k_tile", "3": "k_tile", "4": "k_tile", "5": "tile_idx", "6": "tile_idx"},
+  "cross_warp": {"1": {"id": "tma_load", "begin_role": 0, "end_role": 1}},
+  "slotted_events": {"1": {"id": "tma_load", "slot": "k", "cross_warp": true}},
+  "async_engines": {"1": "mem"},
+  "label_aux": true,
+  "group": "role",
+  "pair": "stack"
+}
