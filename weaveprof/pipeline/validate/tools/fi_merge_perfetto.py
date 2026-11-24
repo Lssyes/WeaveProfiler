@@ -7,8 +7,19 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
+import statistics
+
+_H20_NAME_RE = re.compile(r"(?i)\bH20\b")
+_H20_TENSOR_SCALE = 4.0
+_H20_RAW_CEILING = 29.0
+
+
+class _HwWindow(tuple):
+    """4-tuple (start, end, name, samples) carrying optional profiled ``gpu_name`` metadata."""
+    gpu_name: str | None = None
 
 
 def _select(rows, instance):
@@ -17,13 +28,70 @@ def _select(rows, instance):
     return rows[0 if instance is None else int(instance)]
 
 
+def _nsys_gpu_name(db: sqlite3.Connection, tables: set[str], dev_id: int | None) -> str | None:
+    if "TARGET_INFO_GPU" not in tables:
+        return None
+    try:
+        cols = {r[1] for r in db.execute('PRAGMA table_info("TARGET_INFO_GPU")')}
+        if "name" not in cols:
+            return None
+        row = None
+        if dev_id is not None and "id" in cols:
+            row = db.execute('SELECT name FROM "TARGET_INFO_GPU" WHERE id = ? LIMIT 1', (int(dev_id),)).fetchone()
+        if row is None:
+            names = db.execute('SELECT DISTINCT name FROM "TARGET_INFO_GPU"').fetchall()
+            row = names[0] if len(names) == 1 else None
+        return str(row[0]) if row and row[0] else None
+    except sqlite3.Error:
+        return None
+
+
+def _resolve_h20_tensor_scale(in_win: list[float], gpu_name: str | None, card: str | None) -> dict:
+    card_s = str(card or "").strip()
+    if gpu_name:
+        source = f"nsys TARGET_INFO_GPU name {gpu_name!r}"
+        is_h20 = bool(_H20_NAME_RE.search(str(gpu_name)))
+    else:
+        source = f"card={card_s or 'auto'!r} (no GPU name in the nsys report)"
+        is_h20 = bool(_H20_NAME_RE.search(card_s))
+    factor = _H20_TENSOR_SCALE if is_h20 else 1.0
+    info = {
+        "scale": 1.0,
+        "applied": False,
+        "card_factor": factor,
+        "source": source,
+        "raw_mean_pct": round(statistics.fmean(in_win), 3) if in_win else None,
+        "raw_max_pct": max(in_win) if in_win else None,
+        "raw_ceiling_pct": _H20_RAW_CEILING if is_h20 else 101.0,
+    }
+    if not in_win:
+        info["reason"] = "no Tensor Active samples"
+    elif factor <= 1.0:
+        info["reason"] = "card is not die-normalized (no correction needed)"
+    elif max(in_win) > _H20_RAW_CEILING:
+        info["reason"] = f"raw max {max(in_win):g}% exceeds the {_H20_RAW_CEILING:g}% die-normalization ceiling; left raw"
+    else:
+        info.update(
+            scale=factor,
+            applied=True,
+            reason=(
+                "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is "
+                f"1/{factor:g} of it, so values are multiplied by {factor:g}"
+            ),
+        )
+    return info
+
+
 def _nsys(path, kernel, instance):
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
-        rows = list(db.execute(
-            "SELECT k.start,k.end,s.value FROM CUPTI_ACTIVITY_KIND_KERNEL k "
-            "JOIN StringIds s ON s.id=k.demangledName WHERE instr(s.value,?) > 0 ORDER BY k.start", (kernel,)))
-        start, end, name = _select(rows, instance)
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
+        kcols = {r[1] for r in db.execute('PRAGMA table_info("CUPTI_ACTIVITY_KIND_KERNEL")')}
+        dev_expr = "k.deviceId" if "deviceId" in kcols else "NULL"
+        rows = list(db.execute(
+            f"SELECT k.start,k.end,s.value,{dev_expr} FROM CUPTI_ACTIVITY_KIND_KERNEL k "
+            "JOIN StringIds s ON s.id=k.demangledName WHERE instr(s.value,?) > 0 ORDER BY k.start", (kernel,)))
+        start, end, name, dev_id = _select(rows, instance)
+        gpu_name = _nsys_gpu_name(db, tables, dev_id)
         samples = []
         if {"GPU_METRICS", "TARGET_INFO_GPU_METRICS"} <= tables:
             cols = {r[1] for r in db.execute("PRAGMA table_info(TARGET_INFO_GPU_METRICS)")}
@@ -32,7 +100,9 @@ def _nsys(path, kernel, instance):
                 f"SELECT m.timestamp,i.metricName,m.value FROM GPU_METRICS m "
                 f"JOIN TARGET_INFO_GPU_METRICS i {join_clause} "
                 f"WHERE m.timestamp BETWEEN ? AND ? ORDER BY m.timestamp", (start, end)))
-        return int(start), int(end), str(name), [(int(t), str(n), float(v)) for t, n, v in samples]
+        win = _HwWindow((int(start), int(end), str(name), [(int(t), str(n), float(v)) for t, n, v in samples]))
+        win.gpu_name = gpu_name
+        return win
 
 
 def _pm_json(path, kernel):
@@ -286,11 +356,30 @@ def align(trace, summary, window, runtime=None):
 
     # Hardware & Activity Counter Process (pid = 90000)
     hw_pid = 90000
+    gpu_name = getattr(window, "gpu_name", None) or runtime.get("gpu_name")
+    meta_doc = (trace.get("otherData") or {}).get("meta")
+    card_hint = runtime.get("card") or (meta_doc.get("card") if isinstance(meta_doc, dict) else None)
+    raw_tc_in_win = [
+        float(val) for ts, mname, val in samples
+        if ("tensor active" in mname.lower() or "tensor pipe" in mname.lower())
+        and int(start) <= int(ts) <= int(end)
+    ]
+    tensor_scale_info = _resolve_h20_tensor_scale(raw_tc_in_win, gpu_name, card_hint) if not amd else {
+        "scale": 1.0, "applied": False, "card_factor": 1.0, "source": "amd", "reason": "amd platform",
+    }
+    tc_scale = float(tensor_scale_info["scale"]) if tensor_scale_info.get("applied") else 1.0
+    disp_args = dict(kind="dispatch")
+    if gpu_name:
+        disp_args["gpu_name"] = gpu_name
+    if tensor_scale_info.get("applied"):
+        disp_args["tensor_active_scale"] = tc_scale
+        disp_args["tensor_active_raw_max_pct"] = tensor_scale_info.get("raw_max_pct")
+        disp_args["tensor_active_raw_mean_pct"] = tensor_scale_info.get("raw_mean_pct")
     clean_events.extend([
         dict(ph="M", pid=hw_pid, tid=0, name="process_name", args=dict(name="Hardware & Activity Curves")),
         dict(ph="M", pid=hw_pid, tid=0, name="process_sort_index", args=dict(sort_index=-100)),
         dict(ph="X", pid=hw_pid, tid=0, ts_ns=int(start), ts=int(start) / 1000.0,
-             dur=dur_ns / 1000.0, name=kernel, cat="hardware", args=dict(kind="dispatch")),
+             dur=dur_ns / 1000.0, name=kernel, cat="hardware", args=disp_args),
     ])
 
     # Normalize & aggregate raw NSYS GPU_METRICS (e.g. sum DRAM Read + Write bandwidth) + emit raw curves
@@ -300,8 +389,12 @@ def align(trace, summary, window, runtime=None):
     has_sm_hw = False
     for ts, mname, val in samples:
         low = mname.lower()
-        clean_events.append(dict(ph="C", pid=hw_pid, tid=1, ts_ns=int(ts), ts=int(ts) / 1000.0,
-                                 name=mname, args=dict(value=float(val))))
+        is_raw_tc = ("tensor active" in low or "tensor pipe" in low)
+        # When H20 x4 die-normalization correction is active, emit ONLY the scaled Tensor curve below
+        # so viz._parse_trace adopts the corrected x4 curve & label cleanly.
+        if not (tensor_scale_info.get("applied") and is_raw_tc):
+            clean_events.append(dict(ph="C", pid=hw_pid, tid=1, ts_ns=int(ts), ts=int(ts) / 1000.0,
+                                     name=mname, args=dict(value=float(val))))
         pmu_by_ts[int(ts)][mname] = float(val)
         if any(k in low for k in ("tensor active", "compute util", "mfma", "hmma", "math pipe")):
             has_compute_hw = True
@@ -312,6 +405,11 @@ def align(trace, summary, window, runtime=None):
 
     # Synthesize combined NSYS PMU DRAM Read+Write curve & Tensor Core curve if raw NSYS metrics exist
     if pmu_by_ts and not amd:
+        tc_emit_name = (
+            "tensor_active [Tensor Active x4 (H20 die-normalization corrected)]"
+            if tensor_scale_info.get("applied")
+            else "Compute Util — Tensor Core (%) [NSYS PMU]"
+        )
         for ts in sorted(pmu_by_ts):
             row = pmu_by_ts[ts]
             rd_vals = [v for k, v in row.items() if "dram read" in k.lower()]
@@ -341,8 +439,8 @@ def align(trace, summary, window, runtime=None):
             tc_vals = [v for k, v in row.items() if "tensor active" in k.lower() or "tensor pipe" in k.lower()]
             if tc_vals:
                 clean_events.append(dict(ph="C", pid=hw_pid, tid=1, ts_ns=ts, ts=ts / 1000.0,
-                                         name="Compute Util — Tensor Core (%) [NSYS PMU]",
-                                         args=dict(value=min(100.0, max(tc_vals)))))
+                                         name=tc_emit_name,
+                                         args=dict(value=min(100.0, max(tc_vals) * tc_scale))))
                 has_compute_hw = True
             sm_vals = [v for k, v in row.items() if "sms active" in k.lower()]
             if sm_vals:
@@ -424,6 +522,7 @@ def align(trace, summary, window, runtime=None):
         has_compute_curve=has_compute_hw,
         has_memory_curve=has_mem_hw,
         has_sm_curve=has_sm_hw,
+        tensor_active_scale=tensor_scale_info,
     )
     out_trace["otherData"] = other
     return out_trace

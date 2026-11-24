@@ -1402,6 +1402,42 @@ class HygieneTest(unittest.TestCase):
         self.assertEqual(summ_kv["cross_warp_inflight"]["per_event"]["11"]["max_depth"], 2)
         self.assertEqual(summ_kv["cross_warp_inflight"]["per_event"]["12"]["max_depth"], 2)
 
+    def test_fi_merge_perfetto_applies_h20_tensor_active_x4(self):
+        import importlib.util
+        from weaveprof import viz
+        fmp_path = ROOT / "weaveprof/pipeline/validate/tools/fi_merge_perfetto.py"
+        spec = importlib.util.spec_from_file_location("fi_merge_perfetto_t", fmp_path)
+        fmp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fmp)
+        with tempfile.TemporaryDirectory() as td:
+            td_p = Path(td)
+            db = make_nsys_sqlite(td_p / "capture.sqlite")
+            conn = sqlite3.connect(str(db))
+            conn.executescript(
+                "UPDATE GPU_METRICS SET value = 24 WHERE metricId = 2;"
+                "CREATE TABLE TARGET_INFO_GPU (id INTEGER, name TEXT, chipName TEXT);"
+                "INSERT INTO TARGET_INFO_GPU VALUES (0, 'NVIDIA H20', 'GH100');"
+                "INSERT INTO TARGET_INFO_GPU VALUES (1, 'NVIDIA H100 80GB HBM3', 'GH100');"
+            )
+            conn.commit()
+            conn.close()
+            win = fmp.hardware_window(td_p, {"kernel_name": "sparse_mla", "capture_instance": -1})
+            self.assertEqual(len(win), 4)
+            self.assertEqual(getattr(win, "gpu_name", None), "NVIDIA H20")
+            tr = {"traceEvents": [], "otherData": {}}
+            summ = {"observation_start_ns": BASE_NS, "observation_end_ns": BASE_NS + 600_000, "first_open_ns": BASE_NS, "wpc": 4}
+            al_h20 = fmp.align(tr, summ, win)
+            self.assertTrue(al_h20["otherData"]["alignment"]["tensor_active_scale"]["applied"])
+            self.assertEqual(al_h20["otherData"]["alignment"]["tensor_active_scale"]["scale"], 4.0)
+            p_h20 = viz._parse_trace(al_h20)
+            self.assertEqual(max(v for _, v in p_h20["hw_curves"]["tensor_active"]), 96.0)
+            self.assertIn("x4", p_h20["hw_labels"]["tensor_active"])
+            # Full GH100 (H100) must NOT be scaled even if card="h20" is passed
+            al_h100 = fmp.align(tr, summ, tuple(win), runtime={"gpu_name": "NVIDIA H100 80GB HBM3", "card": "h20"})
+            self.assertFalse(al_h100["otherData"]["alignment"]["tensor_active_scale"]["applied"])
+            p_h100 = viz._parse_trace(al_h100)
+            self.assertEqual(max(v for _, v in p_h100["hw_curves"]["tensor_active"]), 24.0)
+
 
 if __name__ == "__main__":
     unittest.main()
