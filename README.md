@@ -44,8 +44,8 @@
 - **三层系统护栏**：工作区外独立 MCP 进程与代理不可见密钥的 `HMAC-SHA256` 封签（`~/.cache/weaveprof/sessions/`）、`PreToolUse` / `PostToolUse` / `Stop` 生命周期钩子，以及可选 Linux `bubblewrap` OS 只读沙箱，从系统机制上杜绝绕过校验、残留探针或篡改门限。
 
 ### 2.2 跨 Warp 与单 Warp 异步流水线配对追踪
-- **跨 Warp 生产者–消费者配对（1-to-$N$ 最早到达去重）**：在 Hopper FA3、FlashMLA 等由单生产者 Warp 向多计算 Warp 广播数据的 `mbarrier` 环形流水线中，基于全卡统一纳秒时钟按 `(CTA, event, slot)` 匹配同代发射与等待退出，以最早消费者到达时刻 $\min_w t_{\text{wait\_exit}}$ 作为保守完成上界，经全 CTA 扫描线精确计算真实的跨 Warp TMA 在途深度（杜绝 1-to-$N$ 扇出重复计数与慢消费者虚高）。
-- **单 Warp 多引擎 FIFO 深度还原**：在每条物理 Warp/Wave 主轨上显式框定 `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` 的 **Exposed Wait**，并在独立的 `MEM` 与 `MMA` 副轨上维护双序号计数器（每次提交开区间 `seq_in++`，每次等待 `N` 按序闭合 `seq_out < seq_in - N`），在 NVIDIA（`cp.async` / `wgmma` / `tcgen05`）与 AMD CDNA3（`WP_VMEM_COMMIT` / `WP_VMEM_WAIT` / `v_mfma`）上统一还原逐拍在途深度 $d = \texttt{seq\_in} - \texttt{seq\_out}$。
+- **跨 Warp 生产者–消费者配对（1-to-$N$ 最早到达去重）**：在 Hopper FA3、FlashMLA 等由单生产者 Warp 向多计算 Warp 广播数据的 `mbarrier` 环形流水线中，基于全卡统一纳秒时钟按 `(CTA, event, slot)` 匹配同代发射与等待退出，以最早消费者到达时刻 $\min_w t_{\text{exit}}(w)$ 作为保守完成上界，经全 CTA 扫描线精确计算真实的跨 Warp TMA 在途深度（杜绝 1-to-$N$ 扇出重复计数与慢消费者虚高）。
+- **单 Warp 多引擎 FIFO 深度还原**：在每条物理 Warp/Wave 主轨上显式框定 `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` 的 **Exposed Wait**，并在独立的 `MEM` 与 `MMA` 副轨上维护双序号计数器（每次提交开区间 `seq_in++`，每次等待 `N` 按序闭合 `seq_out < seq_in - N`），在 NVIDIA（`cp.async` / `wgmma` / `tcgen05`）与 AMD CDNA3（`WP_VMEM_COMMIT` / `WP_VMEM_WAIT` / `v_mfma`）上统一还原逐拍在途深度 $dd = seq_in - seq_out。
 
 ### 2.3 极小状态低扰动流式记录与免改签名接入
 - **无锁分片流式写 + 单寄存器状态压缩**：每个 `(CTA, 物理 Warp/Wave)` 独占连续缓冲切片，仅由 `lane 0` 以绕过缓存的 16 字节向量写指令（NVIDIA `st.global.cs.v4.u32`、AMD `buffer_store_dwordx4` / `global_store_dwordx4 ... nt`）顺序追加，热路径**零原子操作、零跨 Warp 同步**。默认模式 `WP_CTX_REG` 将可变状态（禁用/溢出位 + 16 位槽号 + 15 位游标）压缩进**单个 32-bit 寄存器（`0 B` 共享内存）**，在 `setmaxnreg` 核上自动前移至配额缩减前初始化，并为零寄存器余量核提供 `16 B` 静态共享内存回退（`WP_CTX_SMEM`）。

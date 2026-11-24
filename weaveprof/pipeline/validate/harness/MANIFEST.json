@@ -1,8 +1,8 @@
 {
   "file_count": 337,
   "files": {
-    "README.md": "48b6ea68f1c1ef4f29b81bdb64ddbd8389ea2bd6d543a4d16360f6c66be4daff",
-    "README_EN.md": "7f85462862581a14843581bfd29e1b3ace7182cad62fa6292074cdba313b07a6",
+    "README.md": "d3cc28c0dfcac6f62d9e5dbd6321e265fea1a2518ab0294f7275534c1b7414df",
+    "README_EN.md": "fd1c46a92ecbf0d207f646dd125004aea8c3d5a5fd3ba0fdc3629d6f9cc8c4bb",
     "SKILL.md": "80dfae06555a02cc54e9f8e41104f100d67759b75810da4ab0bd7b3614a3af0a",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
