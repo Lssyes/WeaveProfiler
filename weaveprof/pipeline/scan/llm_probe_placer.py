@@ -53,11 +53,22 @@ from weaveprof.contract import (
 )
 
 PROBE_SPEC_SCHEMA = "weaveprofiler.probe-spec/v1"
-BAILIAN_BASE_URL = "https://ws-3o1qb69p061drz4g.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+PUBLIC_BAILIAN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+CODING_BAILIAN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1/chat/completions"
+MAAS_BAILIAN_BASE_URL = "https://ws-3o1qb69p061drz4g.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+BAILIAN_BASE_URL = PUBLIC_BAILIAN_BASE_URL
 
 SUPPORTED_MODELS = (
+    "auto",
+    "qwen-max",
+    "qwen-plus",
+    "qwen3.5-plus",
+    "qwen3-coder-plus",
     "qwen4-max",
+    "deepseek-v3",
+    "deepseek-r1",
     "deepseek-v4.1-flash-1017",
+    "kimi-k2.5",
     "kimi-k3.1-pro",
 )
 
@@ -199,29 +210,44 @@ def resolve_route(card: str, arch: Optional[str], language: str) -> Dict[str, An
     return info
 
 
-def get_llm_endpoint_url() -> str:
-    """Resolve OpenAI-compatible chat/completions endpoint (`OPENAI_BASE_URL` or default Bailian)."""
-    configured = (os.environ.get("OPENAI_BASE_URL") or "").strip()
-    if configured:
-        url = configured.rstrip("/")
-        if url.endswith("/chat/completions"):
-            return url
-        if url.endswith("/v1") or url.endswith("/compatible-mode/v1"):
-            return url + "/chat/completions"
-        return url + "/v1/chat/completions"
-    return BAILIAN_BASE_URL
+def _normalize_chat_endpoint(raw_url: str) -> str:
+    url = raw_url.strip().rstrip("/")
+    if url.endswith("/chat/completions"):
+        return url
+    if url.endswith("/v1") or url.endswith("/compatible-mode/v1"):
+        return url + "/chat/completions"
+    return url + "/v1/chat/completions"
 
 
-def get_bailian_api_key() -> str:
+def _discover_qwen_settings_base_url() -> Optional[str]:
+    cfg_path = Path.home() / ".qwen" / "settings.json"
+    if not cfg_path.is_file():
+        return None
+    try:
+        doc = json.loads(cfg_path.read_text(encoding="utf-8"))
+        providers = (doc.get("modelProviders") or {}).get("openai") or []
+        for entry in providers:
+            if isinstance(entry, Mapping) and entry.get("baseUrl"):
+                return _normalize_chat_endpoint(str(entry["baseUrl"]))
+    except Exception:
+        return None
+    return None
+
+
+def find_api_key(explicit_api_key: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """Return `(api_key, source_label)` without printing or persisting secret values."""
+    if explicit_api_key and str(explicit_api_key).strip():
+        return str(explicit_api_key).strip(), "explicit_arg"
+    has_openai_url = bool((os.environ.get("OPENAI_BASE_URL") or "").strip())
     env_order = (
-        ("OPENAI_API_KEY", "DASHSCOPE_API_KEY", "BAILIAN_API_KEY")
-        if (os.environ.get("OPENAI_BASE_URL") or "").strip()
-        else ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "OPENAI_API_KEY")
+        ("OPENAI_API_KEY", "BAILIAN_API_KEY", "DASHSCOPE_API_KEY")
+        if has_openai_url
+        else ("BAILIAN_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY")
     )
     for name in env_order:
         val = os.environ.get(name)
         if val and val.strip():
-            return val.strip()
+            return val.strip(), name
     if os.name == "nt":
         import winreg
         try:
@@ -230,18 +256,96 @@ def get_bailian_api_key() -> str:
                     try:
                         val, _ = winreg.QueryValueEx(key, name)
                         if val and str(val).strip():
-                            return str(val).strip()
+                            return str(val).strip(), f"HKCU:{name}"
                     except FileNotFoundError:
                         pass
         except OSError:
             pass
-    raise RuntimeError("No API key found in environment (OPENAI_API_KEY / DASHSCOPE_API_KEY / BAILIAN_API_KEY)")
+    return None, None
+
+
+def resolve_bailian_config(
+    *,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resolve Alibaba Cloud Bailian (DashScope / Coding Plan / MaaS) or OpenAI-compatible config."""
+    key_val, key_src = find_api_key(api_key)
+    explicit_url = (base_url or "").strip()
+    env_bailian_url = (os.environ.get("BAILIAN_BASE_URL") or os.environ.get("DASHSCOPE_BASE_URL") or "").strip()
+    env_openai_url = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+
+    if explicit_url:
+        endpoint = _normalize_chat_endpoint(explicit_url)
+        mode = "custom_explicit"
+    elif env_bailian_url:
+        endpoint = _normalize_chat_endpoint(env_bailian_url)
+        mode = "bailian_custom_env"
+    elif env_openai_url:
+        endpoint = _normalize_chat_endpoint(env_openai_url)
+        mode = "openai_compatible"
+    elif key_val and key_val.startswith("sk-sp-"):
+        endpoint = CODING_BAILIAN_BASE_URL
+        mode = "bailian_coding_plan"
+    elif key_val and key_val.startswith("sk-ws-"):
+        endpoint = _discover_qwen_settings_base_url() or MAAS_BAILIAN_BASE_URL
+        mode = "bailian_maas_workspace"
+    else:
+        endpoint = PUBLIC_BAILIAN_BASE_URL
+        mode = "bailian_dashscope"
+
+    req_model = (model or "").strip()
+    env_model = (
+        os.environ.get("BAILIAN_MODEL")
+        or os.environ.get("DASHSCOPE_MODEL")
+        or os.environ.get("WEAVEPROF_MODEL")
+        or ""
+    ).strip()
+    if not req_model or req_model.lower() == "auto":
+        if env_model:
+            resolved_model = env_model
+        elif "maas.aliyuncs.com" in endpoint:
+            resolved_model = "qwen4-max"
+        elif "coding.dashscope.aliyuncs.com" in endpoint:
+            resolved_model = "qwen3.5-plus"
+        else:
+            resolved_model = "qwen-max"
+    elif req_model == "qwen4-max" and "dashscope.aliyuncs.com" in endpoint and "maas.aliyuncs.com" not in endpoint:
+        # Seamless fallback when default `qwen4-max` is called against public DashScope / Coding Plan
+        resolved_model = "qwen3.5-plus" if "coding.dashscope.aliyuncs.com" in endpoint else "qwen-max"
+    else:
+        resolved_model = req_model
+
+    return {
+        "api_key": key_val,
+        "api_key_source": key_src,
+        "endpoint_url": endpoint,
+        "endpoint_mode": mode,
+        "model": resolved_model,
+    }
+
+
+def get_llm_endpoint_url(base_url: Optional[str] = None, api_key: Optional[str] = None) -> str:
+    """Resolve OpenAI-compatible chat/completions endpoint (`BAILIAN_BASE_URL` / `DASHSCOPE_BASE_URL` / `OPENAI_BASE_URL` or auto Bailian)."""
+    return resolve_bailian_config(api_key=api_key, base_url=base_url)["endpoint_url"]
+
+
+def get_bailian_api_key(explicit_api_key: Optional[str] = None) -> str:
+    key_val, _ = find_api_key(explicit_api_key)
+    if key_val:
+        return key_val
+    raise RuntimeError(
+        "No API key found (pass api_key=... / --api-key, or set BAILIAN_API_KEY / DASHSCOPE_API_KEY / OPENAI_API_KEY)"
+    )
 
 
 def call_bailian_llm(
     model: str,
     messages: List[Dict[str, str]],
     *,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
     reasoning_effort: str = "max",
     max_tokens: int = 32768,
     temperature: Optional[float] = None,
@@ -250,38 +354,46 @@ def call_bailian_llm(
     retries: int = 5,
     stream: bool = True,
 ) -> Dict[str, Any]:
-    """Call Aliyun Bailian MaaS directly (bypassing local proxy) with SSE streaming & token telemetry."""
-    api_key = get_bailian_api_key()
-    endpoint_url = get_llm_endpoint_url()
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-    }
-    if reasoning_effort and endpoint_url == BAILIAN_BASE_URL:
-        payload["reasoning_effort"] = reasoning_effort
-    elif reasoning_effort and os.environ.get("WEAVEPROF_SEND_REASONING_EFFORT", "1") != "0":
-        payload["reasoning_effort"] = reasoning_effort
-    if stream:
-        payload["stream"] = True
-        payload["stream_options"] = {"include_usage": True}
-    if temperature is not None:
-        payload["temperature"] = temperature
-    if response_format is not None:
-        payload["response_format"] = response_format
+    """Call Alibaba Cloud Bailian (DashScope / Coding Plan / MaaS) or OpenAI-compatible API with SSE streaming."""
+    cfg = resolve_bailian_config(api_key=api_key, base_url=base_url, model=model)
+    resolved_key = cfg["api_key"]
+    if not resolved_key:
+        raise RuntimeError(
+            "No API key found (pass api_key=... / --api-key, or set BAILIAN_API_KEY / DASHSCOPE_API_KEY / OPENAI_API_KEY)"
+        )
+    endpoint_url = cfg["endpoint_url"]
+    resolved_model = cfg["model"]
+    send_effort = bool(reasoning_effort) and os.environ.get("WEAVEPROF_SEND_REASONING_EFFORT", "1") != "0"
+    if "dashscope.aliyuncs.com" in endpoint_url and "maas.aliyuncs.com" not in endpoint_url:
+        # Public DashScope standard Qwen models do not take `reasoning_effort="max"` unless explicitly enabled
+        send_effort = os.environ.get("WEAVEPROF_SEND_REASONING_EFFORT", "0") == "1"
 
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     last_err: Optional[Exception] = None
 
     for attempt in range(retries):
+        payload: Dict[str, Any] = {
+            "model": resolved_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        if send_effort and reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
+        if stream:
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if response_format is not None:
+            payload["response_format"] = response_format
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         t0 = time.perf_counter()
         try:
             req = urllib.request.Request(
                 endpoint_url,
                 data=body,
                 headers={
-                    "Authorization": f"Bearer {api_key}",
+                    "Authorization": f"Bearer {resolved_key}",
                     "Content-Type": "application/json",
                 },
             )
@@ -330,8 +442,9 @@ def call_bailian_llm(
             comp_details = usage.get("completion_tokens_details") or {}
             return {
                 "ok": True,
-                "model": model,
-                "reasoning_effort": reasoning_effort,
+                "model": resolved_model,
+                "endpoint_mode": cfg["endpoint_mode"],
+                "reasoning_effort": reasoning_effort if send_effort else None,
                 "elapsed_s": round(elapsed_s, 4),
                 "content": content,
                 "reasoning_content": reasoning_content,
@@ -355,12 +468,15 @@ def call_bailian_llm(
                 except Exception:
                     err_body = ""
                 last_err = RuntimeError(f"HTTP {exc.code}: {err_body[:600]}")
+                if exc.code in (400, 422) and send_effort and "reasoning_effort" in err_body:
+                    send_effort = False
+                    continue
             if attempt + 1 < retries:
                 is_rate_limit = ("429" in str(last_err)) or ("Throttling" in str(last_err))
                 base_wait = (4.0 * (2 ** attempt)) if is_rate_limit else (2.0 * (attempt + 1))
-                jitter = (hash((model, attempt, time.time_ns())) % 1000) / 1000.0
+                jitter = (hash((resolved_model, attempt, time.time_ns())) % 1000) / 1000.0
                 time.sleep(min(30.0, base_wait + jitter))
-    raise RuntimeError(f"Bailian call failed for {model}: {last_err}")
+    raise RuntimeError(f"Bailian call failed for {resolved_model} ({endpoint_url}): {last_err}")
 
 
 def retrieve_route_kb(
@@ -1140,7 +1256,9 @@ def place_probes(
     card: str,
     arch: Optional[str] = None,
     language: Optional[str] = None,
-    model: str = "qwen4-max",
+    model: str = "auto",
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
     reasoning_effort: str = "max",
     ablation_mode: str = "full_closed_loop",
     diagnostics: Optional[Sequence[Mapping[str, Any]]] = None,
@@ -1163,7 +1281,11 @@ def place_probes(
     source_text = source_path.read_text(encoding="utf-8")
     det_lang = detect_language(source_path, source_text, explicit=language)
     route = resolve_route(card, arch, det_lang)
-    caller = llm_caller or call_bailian_llm
+    if llm_caller is not None:
+        caller = llm_caller
+    else:
+        def caller(m: str, msgs: List[Dict[str, str]], **kw: Any) -> Dict[str, Any]:
+            return call_bailian_llm(m, msgs, api_key=api_key, base_url=base_url, **kw)
 
     kb_ctx = retrieve_route_kb(route["language"], route["card"], route["arch"], source_text)
 
@@ -1175,8 +1297,8 @@ def place_probes(
         )
         llm_res = caller(model, messages, reasoning_effort=reasoning_effort)
         telemetry = {
-            "model": model,
-            "reasoning_effort": reasoning_effort,
+            "model": llm_res.get("model") or model,
+            "reasoning_effort": llm_res.get("reasoning_effort", reasoning_effort),
             "ablation_mode": ablation_mode,
             "round": round_index,
             "elapsed_s": llm_res["elapsed_s"],
@@ -1207,8 +1329,8 @@ def place_probes(
     )
     llm_res = caller(model, messages, reasoning_effort=reasoning_effort)
     telemetry = {
-        "model": model,
-        "reasoning_effort": reasoning_effort,
+        "model": llm_res.get("model") or model,
+        "reasoning_effort": llm_res.get("reasoning_effort", reasoning_effort),
         "ablation_mode": ablation_mode,
         "round": round_index,
         "elapsed_s": llm_res["elapsed_s"],
@@ -1293,9 +1415,9 @@ def _offline_probe_spec(text, lang):
     return {"roles": {"worker": "all"}, "probes": probes, "kernel_name": name}
 
 
-def identify_source(source_path, *, model="qwen4-max", card="auto", offline_heuristic=False,
+def identify_source(source_path, *, model="auto", card="auto", offline_heuristic=False,
                     previous=None, feedback=None, llm_caller=None, prefer_llm_on_feedback=False,
-                    reasoning_effort=None):
+                    reasoning_effort=None, api_key=None, base_url=None):
     """Identify or revise a placement. Cache policy is owned by the public API."""
     source_path = Path(source_path).expanduser().resolve()
     raw = source_path.read_bytes()
@@ -1319,6 +1441,7 @@ def identify_source(source_path, *, model="qwen4-max", card="auto", offline_heur
     else:
         eff = reasoning_effort or "max"
         data = place_probes(source_path, card=route["card"], language=language, model=model,
+                            api_key=api_key, base_url=base_url,
                             reasoning_effort=eff, prev_spec=previous, diagnostics=feedback,
                             llm_caller=llm_caller)
         spec = compact_probe_spec(data["probe_spec"])
@@ -1495,10 +1618,12 @@ def evaluate_probe_predictions(
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="§3.1 Read-Only Semantic Probe Placement -> JSON Probe Spec")
     ap.add_argument("--source", required=True, help="Path to kernel source file")
-    ap.add_argument("--card", required=True, choices=("h20", "b300", "mi308x"))
-    ap.add_argument("--arch", help="Explicit architecture (e.g. sm_90a, sm_103a, gfx942)")
+    ap.add_argument("--card", default="auto", choices=("auto", "h20", "b300", "mi308x", "sm86"))
+    ap.add_argument("--arch", help="Explicit architecture (e.g. sm_90a, sm_103a, sm_86, gfx942)")
     ap.add_argument("--language", help="Optional explicit language (cuda_cpp, hip_cpp, triton, cutedsl)")
-    ap.add_argument("--model", default="qwen4-max", help="Evaluated LLM (" + ", ".join(SUPPORTED_MODELS) + ")")
+    ap.add_argument("--model", default="auto", help="Bailian / OpenAI-compatible model (" + ", ".join(SUPPORTED_MODELS) + ")")
+    ap.add_argument("--api-key", help="Alibaba Cloud Bailian (DashScope) or OpenAI-compatible API key")
+    ap.add_argument("--base-url", help="Optional Bailian / OpenAI-compatible base URL")
     ap.add_argument("--reasoning-effort", default="max")
     ap.add_argument("--mode", default="open_loop", choices=ABLATION_MODES)
     ap.add_argument("--diagnostics-json", help="Optional diagnostics JSON file from previous verification round")
@@ -1523,6 +1648,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         arch=args.arch,
         language=args.language,
         model=args.model,
+        api_key=args.api_key,
+        base_url=args.base_url,
         reasoning_effort=args.reasoning_effort,
         ablation_mode=args.mode,
         diagnostics=diag,

@@ -1007,6 +1007,44 @@ class QwenAndAgyProtocolTests(_WorkspaceCase):
             cmds = [h["command"] for g in qcfg["hooks"][ev] for h in g["hooks"]]
             self.assertTrue(any("--global-guard" in c and ev in c for c in cmds), (ev, cmds))
 
+    def test_bailian_api_key_routing_and_doctor(self) -> None:
+        from unittest import mock
+        from weaveprof.pipeline.scan.llm_probe_placer import (
+            CODING_BAILIAN_BASE_URL,
+            PUBLIC_BAILIAN_BASE_URL,
+            resolve_bailian_config,
+        )
+        import weaveprof as wp
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            # 1. Public Bailian / DashScope `sk-...` key auto-routes to dashscope.aliyuncs.com + qwen-max
+            c_pub = resolve_bailian_config(api_key="sk-1234567890abcdef", model="auto")
+            self.assertEqual(c_pub["endpoint_mode"], "bailian_dashscope")
+            self.assertEqual(c_pub["endpoint_url"], PUBLIC_BAILIAN_BASE_URL)
+            self.assertEqual(c_pub["model"], "qwen-max")
+
+            # 2. Bailian Coding Plan `sk-sp-...` key auto-routes to coding.dashscope.aliyuncs.com + qwen3.5-plus
+            c_sp = resolve_bailian_config(api_key="sk-sp-abcdef123456", model="auto")
+            self.assertEqual(c_sp["endpoint_mode"], "bailian_coding_plan")
+            self.assertEqual(c_sp["endpoint_url"], CODING_BAILIAN_BASE_URL)
+            self.assertEqual(c_sp["model"], "qwen3.5-plus")
+
+            # 3. Explicit `/v1` base_url auto-expands to `/v1/chat/completions`
+            c_custom = resolve_bailian_config(
+                api_key="sk-custom",
+                base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                model="qwen-plus",
+            )
+            self.assertEqual(c_custom["endpoint_url"], "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions")
+            self.assertEqual(c_custom["model"], "qwen-plus")
+
+        # 4. wp.doctor(check_gpu=False) exposes Bailian endpoint metadata without leaking secret keys
+        doc = wp.doctor(check_gpu=False)
+        self.assertIn("llm", doc)
+        self.assertIn("endpoint_mode", doc["llm"])
+        self.assertIn("endpoint_url", doc["llm"])
+        self.assertIn("default_model", doc["llm"])
+
 
 if __name__ == "__main__":
     unittest.main()

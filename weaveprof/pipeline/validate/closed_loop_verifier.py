@@ -394,8 +394,10 @@ def run_closed_loop_profile(
     card: str,
     arch: Optional[str] = None,
     language: Optional[str] = None,
-    model: str = "qwen4-max",
+    model: str = "auto",
     reasoning_effort: str = "max",
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
     max_rounds: int = 3,
     prev_source_path: Optional[Path] = None,
     prev_spec_path: Optional[Path] = None,
@@ -459,6 +461,8 @@ def run_closed_loop_profile(
                 prev_spec=current_spec,
                 round_index=rnd,
                 llm_caller=llm_caller,
+                api_key=api_key,
+                base_url=base_url,
             )
             current_spec = pl_res["probe_spec"]
             rnd_llm_s = float(pl_res["telemetry"]["elapsed_s"])
@@ -639,11 +643,13 @@ def run_closed_loop_profile(
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="§3.1–§3.3 Closed-Loop Probe Placement, Injection & Verification")
     ap.add_argument("--source", required=True, help="Uninstrumented kernel source file")
-    ap.add_argument("--card", required=True, choices=("h20", "b300", "mi308x"))
-    ap.add_argument("--arch", help="Explicit architecture (sm_90a, sm_100a, sm_103a, gfx942)")
+    ap.add_argument("--card", required=True, choices=("h20", "b300", "mi308x", "sm86", "auto"))
+    ap.add_argument("--arch", help="Explicit architecture (sm_90a, sm_100a, sm_103a, sm_86, gfx942)")
     ap.add_argument("--language", help="Optional explicit language (cuda_cpp, hip_cpp, triton, cutedsl)")
-    ap.add_argument("--model", default="qwen4-max", help="Evaluated LLM (qwen4-max, deepseek-v4.1-flash-1017, glm-5.3)")
+    ap.add_argument("--model", default="auto", help="Bailian / OpenAI-compatible model (auto, qwen-max, qwen3.5-plus, qwen4-max, ...)")
     ap.add_argument("--reasoning-effort", default="max")
+    ap.add_argument("--api-key", help="Explicit Alibaba Cloud Bailian / DashScope / OpenAI-compatible API key")
+    ap.add_argument("--base-url", help="Explicit OpenAI-compatible chat completions endpoint or /v1 base URL")
     ap.add_argument("--max-rounds", type=int, default=3)
     ap.add_argument("--prev-source", help="Previous source path for §3.2 (2c) Incremental Probe Reuse")
     ap.add_argument("--prev-spec", help="Previous verified probe_spec.json for Incremental Probe Reuse")
@@ -662,6 +668,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         language=args.language,
         model=args.model,
         reasoning_effort=args.reasoning_effort,
+        api_key=args.api_key,
+        base_url=args.base_url,
         max_rounds=args.max_rounds,
         prev_source_path=Path(args.prev_source) if args.prev_source else None,
         prev_spec_path=Path(args.prev_spec) if args.prev_spec else None,

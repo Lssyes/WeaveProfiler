@@ -2,117 +2,134 @@
 
 [简体中文](README.md) | English
 
-> **See what every SM and warp is doing microsecond by microsecond — an automated intra-kernel GPU profiler built for RSI (Recursive Self-Improvement) and Megakernel development.**
+> **See what every SM/CU and warp/wave is doing microsecond by microsecond — an automated intra-kernel GPU profiling framework built for modern asynchronous pipelines and agent-driven Recursive Self-Improvement (RSI).**
 
-WeaveProfiler combines **automated low-overhead in-kernel instrumentation** with **same-run 200 kHz hardware utilization curves** into one **four-panel PNG view**, packaged natively as **`Skill + MCP + Hook`** for Claude Code, Qwen Code, OpenAI Codex CLI, and Antigravity. Across CUDA C++, HIP C++, CuTeDSL, and Triton, it profiles inside an isolated temporary copy without touching production source files or function signatures.
-
----
-
-## 1. Why RSI Needs WeaveProfiler
-
-In **RSI (Recursive Self-Improvement)** workflows, AI agents iteratively write kernels, diagnose bottlenecks, rewrite microarchitecture, and re-verify to evolve high-performance **Megakernels** (MegaMoE, FlashAttention, persistent GEMM). End-to-end latency alone forces agents to guess blindly—effective RSI requires a profiler that exposes both code semantics and microsecond timing automatically.
-
-Previous options force a trade-off:
-
-- **Automatic vendor profilers (`nsys`, `rocprof-sys`)**: automated, but only show chip-wide aggregate hardware curves—when utilization dips, you cannot tell which SM, warp role, async copy, or barrier stalled. (`ncu` relies on multi-pass replay without a time axis and breaks on persistent or multi-GPU kernels.)
-- **Manual in-kernel instrumentation**: captures code-level stages, but is tedious, error-prone, easily triggers register spills or scheduler distortion, struggles to pair async pipelines (`cp.async`, TMA, `wgmma`, `tcgen05`), and cannot run inside an automated optimization loop.
-
-**WeaveProfiler brings both together:**
-
-1. **Automated in-kernel instrumentation aligned with same-run hardware curves**: injects atomic-free, signature-preserving probes in an isolated copy (plus a PTX-level automatic async pass for NVIDIA Triton that extracts compiler-hidden `cp.async`/`wgmma` in-flight depth and exposed waits with zero Python K-loop edits), rigidly aligned with same-run 200 kHz hardware utilization curves in one **four-panel PNG**.
-2. **Four deterministic blocking checks**: disassembly/zero-spill, bitwise output equality, event completeness, and `<= 10%` steady-state overhead—auto-coarsening hot probes on failure so distorted timings never mislead optimization.
-3. **`Skill + MCP + Hook` native to RSI frameworks**: uses your active AI coding agent directly to read source, plan probes, and read the four-panel view; local MCP handles isolated verification and cross-round comparison; hooks enforce profile-before-edit, clean production source, and PNG-only delivery.
+**WeaveProfiler** aligns **closed-loop automated intra-kernel software instrumentation** with **same-run hardware utilization counters** in a single static four-panel timeline image (`overview.png`). It supports two native entry modes: (1) **`Skill + MCP + Hook`** integration directly inside AI coding agents (`Claude Code`, `Qwen Code`, `OpenAI Codex CLI`, `Antigravity` — no extra API key needed); and (2) **Direct API Key** execution via CLI or Python SDK with automatic endpoint routing for **Alibaba Cloud Bailian (`DashScope` / `Coding Plan` / `MaaS`)** and any OpenAI-compatible provider. Across **CUDA C++, HIP C++, Triton (NVIDIA PTX & AMD AMDGCN), and CuTeDSL**, all probe injection and verification run in isolated scratch copies with zero edits to production code or function signatures.
 
 ---
 
-## 2. How to Read the Four-Panel Aligned View
+## 1. Background & Three Challenges: Why Modern GPU Kernels and RSI Need WeaveProfiler
 
-WeaveProfiler defaults to PNG-only delivery (`overview.png`) instead of heavy `.perfetto.json.gz` dumps. Panels (A)–(C) share one locked microsecond (`µs`) axis, and Panel (D) automatically appends when full-kernel event spacing is denser than `28 px`:
+Modern LLM training and inference kernels increasingly rely on **persistent fused megakernels** (MegaMoE, FlashAttention-3, FlashMLA, Gated Delta Networks), where warps within each CTA take on specialized **roles** (data loading, matrix compute, inter-GPU communication) connected by multi-stage **asynchronous hardware pipelines** (NVIDIA `cp.async` / TMA / `wgmma` / `tcgen05`, AMD CDNA3 `buffer_load` + `s_waitcnt vmcnt` + `MFMA`). Performance hinges on role overlap: **in-flight pipeline depth ($d$)** determines whether memory/communication latency is hidden, while **Exposed Wait** pinpoints stalls on the critical path. As kernel engineering shifts toward **agent-driven Recursive Self-Improvement (RSI)** with no human in the loop, intra-kernel profiling must become both fine-grained and fully automated.
 
-- **(A) Hardware Utilization Curves**: Same-run chip-wide metrics (0–100%, 200 kHz `nsys` on NVIDIA, `rocprof-sys` on AMD): Compute (Tensor / MFMA), summed HBM Read+Write bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` are never summed or merged; `xGMI` on AMD), optional inter-node RDMA, and active SM/CU %. **Fails closed if real same-run hardware curves are missing.**
-- **(B) All-SM / All-CU Waterfall**: Every physical core on the vertical axis, exposing wave steps, tail stragglers, and load skew.
-- **(C) Single-SM / Single-CU Per-Warp / Per-Wave Timeline**: Each warp separates cleanly into stacked rows—an **upper main execution row (`Softmax` / scalar ALU / amber hatched `Exposed Wait` / `Store`, or synchronous MMA) + 0/1/2 on-demand async engine depth rows below (`MEM` green depth strip + dark-green issue pins `▼`; async `GEMM/WGMMA/tcgen05` blue depth strip + dark-blue issue pins `▼`)**—so async GEMM in-flight depth (`1/2/3/4/5+` 5-shade band) and its overlap with following `Softmax` / epilogue stages appear on separate aligned rows.
-- **(D) Deterministic Single-CTA Micro-Zoom**: Auto-triggered on dense timelines; isolates the complete CTA with highest `Exposed Wait` ratio (or steady-state p50 CTA when wait-free; caps >48 iterations to a 32-iteration window around the worst bubble; supports `--zoom-cta` / `--zoom-window`), highlighting the exact window in dashed magenta across Panels (A)–(C).
+Existing profilers and naive LLM code edits fall short due to three fundamental challenges:
+
+1. **Free-form LLM code edits silently corrupt traces without trace-level verification**: Vendor hardware profilers (`nsys`, `rocprofv3`) treat launches as black boxes without warp/stage attribution. Asking an LLM agent to directly edit source code for instrumentation—even with compile and output checks—frequently produces unpaired spans across branches, missing warp roles, buffer truncation, or severe hot-loop slowdowns; if verification scripts live inside a writable workspace, unconstrained agents may even tamper with `#pragma unroll` / `__launch_bounds__` or relax check thresholds to pass.
+2. **Asynchronous hardware & compiler pipelines are mismeasured as synchronous stubs**: Source-level or high-level IR probes close immediately after non-blocking issue, missing compiler-generated commit/wait boundaries (such as Triton's lowered `commit_group` / `wait_group` or AMDGCN's `s_waitcnt vmcnt(N)`). This underestimates true in-flight residency by `30×–120×`, reports $d=0$ concurrency, and dumps real wait stalls into downstream compute stages.
+3. **Heavy recorder state triggers register spills or shared-memory occupancy cliffs**: Production fused kernels run close to register-file and shared-memory ceilings. Multi-register contexts (4–10 live registers) push tight kernels into local-memory `STL/LDL` spills, while kilobyte-scale shared-memory ring buffers (`0.5–4 KB/CTA`) trigger occupancy cliffs (e.g., `2 → 1 CTA/SM`) or silently overwrite events upon wrap-around.
+
+---
+
+## 2. Key Observation & Three Core Mechanisms
+
+> **Key Observation**: Only **stage identification** requires semantic understanding from an LLM, whereas probe injection, asynchronous issue-to-wait pairing, and trace validation can all be executed by **deterministic rules**—and because asynchronous engines retire operations in FIFO issue order, runtime probe state fits in a **single 32-bit register** (`0 B` shared memory).
+
+```text
+Protected Source (Read-Only) ──► Read-Only Stage Identification (Coding Agent or Bailian/OpenAI API) ──► probe.json
+                                                                                                            │
+                                                                                                            ▼
+                 Out-of-Workspace Deterministic Harness (C++/CuTe Injection · NVIDIA PTX / AMD AMDGCN Auto-Async Pass)
+                                                                                                            │
+                                                                                                            ▼
+                           Same-Run HW Sampling (200 kHz nsys / rocprof-sys) + Four Fail-Closed Checks
+                             ├── Any check fails ──► return offending probes & trace in feedback.json -> auto-coarsen
+                             └── All checks pass ──► render aligned 4-panel overview.png + sign HMAC-SHA256 seal
+```
+
+WeaveProfiler realizes this observation through three mechanisms backed by system-level guardrails:
+
+### 2.1 Closed-Loop Automated Instrumentation & System Guardrails
+- **Read-only stage identification + deterministic injection**: The LLM analyzes kernel source strictly read-only to emit role predicates and stage line boundaries (`probe.json`). Deterministic harness code injects probes into an isolated copy—at the source level for CUDA/HIP/CuTeDSL, via an automatic **PTX dual-async pass** (`triton_ptx_async.py`) for NVIDIA Triton, and via an automatic **AMDGCN async pass** (`triton_amdgcn_async.py`, preserving live scalar `SCC` flags and streaming via `vscnt` without perturbing `vmcnt`) for AMD ROCm Triton, requiring zero Python K-loop edits.
+- **Four fail-closed validation checks**: (1) **Assembly & resource check** (core instruction order and loop unrolling preserved, $\Delta_{\text{spill}} \le 0\text{ B}$, $\Delta_{\text{smem}} \le 0\text{ B}$); (2) **Output check** (bitwise-identical or strict numerical equivalence to unmodified baseline); (3) **Event completeness & coverage check** (every `begin` paired with `end`, zero overflow/drops, 100% physical warp/wave64 coverage); (4) **Bidirectional steady-state overhead check** ($|t_{\text{inst}}/t_{\text{base}} - 1| \le 10\%$, rejecting both $>+10\%$ slowdowns and $<-10\%$ schedule-perturbing speedups).
+- **Three system-level guardrails**: Out-of-workspace MCP service signing `HMAC-SHA256` seals with a secret hidden from the agent (`~/.cache/weaveprof/sessions/`), `PreToolUse` / `PostToolUse` / `Stop` lifecycle hooks, and optional Linux `bubblewrap` read-only mounts.
+
+### 2.2 Within- & Cross-Warp Asynchronous Pipeline Tracing
+- **Cross-warp producer–consumer pairing (1-to-$N$ earliest-arrival deduplication)**: For warp-specialized `mbarrier` rings (e.g., Hopper FA3 and FlashMLA), producer issues and consumer wait exits are paired by `(CTA, event, slot)` on a chip-wide nanosecond clock. Taking the earliest consumer arrival ($\min_w t_{\text{wait\_exit}}$) per generation avoids 1-to-$N$ fan-out double-counting and slow-consumer inflation, yielding exact CTA-wide in-flight TMA depth via sweep-line analysis.
+- **Within-warp multi-engine FIFO depth**: Explicit `Exposed Wait` spans bracket `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` on each warp's main row, while dual sequence counters (`seq_in++` at commit, retiring `seq_out < seq_in - N` at wait) reconstruct exact per-cycle in-flight depth $d = \texttt{seq\_in} - \texttt{seq\_out}$ across NVIDIA (`cp.async`, `wgmma`, `tcgen05`) and AMD CDNA3 (`WP_VMEM_COMMIT` / `WP_VMEM_WAIT`, `v_mfma`).
+
+### 2.3 Minimal-State Low-Overhead Recording & Zero-Signature Binding
+- **Lock-free per-warp slices + 1-register context (`WP_CTX_REG`)**: Lane 0 of each `(CTA, physical warp/wave)` appends 16-byte cache-streaming records (`st.global.cs.v4.u32` on NVIDIA; `buffer_store_dwordx4` / `global_store_dwordx4 ... nt` on AMD) with **zero atomics and zero cross-warp sync**. `WP_CTX_REG` packs mutable state (disabled/overflow bit + 16-bit slot + 15-bit cursor) into **one 32-bit register and `0 B` SMEM** (hoisted before `setmaxnreg`), with an optional `16 B` static SMEM fallback (`WP_CTX_SMEM`) for zero-headroom single-module kernels.
+- **Dual-anchor cycle timing, boundary fusion & out-of-band binding**: Low-latency `%clock64` / `s_memtime` reads inside hot loops are calibrated via per-warp `%globaltimer` / `s_memrealtime` open/close anchors; adjacent stage `end`/`begin` pairs fuse into a single clock read; device descriptors (`cudaMemcpyToSymbol` / `hipMemcpyToSymbol`) and per-warp progress slots carry cursors across multi-header `__device__` helpers without changing any C++ signature.
+
+---
+
+## 3. Reading the Four-Panel Aligned View (`overview.png`)
+
+WeaveProfiler outputs one static high-resolution PNG readable directly by both engineers and multimodal LLMs. Panels (A)–(C) share a locked microsecond (`µs`) axis, and Panel (D) opens automatically when full-kernel stages are dense:
+
+- **(A) Same-Run Hardware Utilization Curves (Fail-Closed)**: Chip-wide Compute (Tensor / Matrix Core MFMA), summed HBM R+W bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` plotted independently; `xGMI` on AMD), and active SM/CU %. Refuses to render if real same-run hardware curves are absent.
+- **(B) All-SM / All-CU Stage Waterfall**: Every physical SM/CU on the vertical axis, exposing wave boundaries, load skew, and tail stragglers.
+- **(C) Single-SM / Single-CU Per-Warp / Per-Wave Timeline**: Each physical warp splits into an **upper main track** (stages + amber-hatched `Exposed Wait` + `Store`) and **lower async engine depth strips** (`MEM` green & `MMA/WGMMA/tcgen05` blue 5-shade heat bands + issue pins `▼`).
+- **(D) Deterministic Single-CTA Micro-Zoom**: Zooms into the complete CTA with highest `Exposed Wait` ratio (marked in dashed magenta across Panels A–C), revealing individual issue pins, ramp-up, overlap, and drain steps.
 
 ![NVIDIA H20 Triton num_stages=5 PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_triton_s5_4panel.png)
 
-> Captured on **NVIDIA H20 (`sm_90a`) `4096×4096×2048` Triton `num_stages=5` GEMM** (zero Python K-loop edits; automatic PTX extraction of both `cp.async` and `wgmma` async tracks; **`+5.46%`** steady-state overhead, `122.42 TFLOPS` = `93.7%` cuBLAS, `max_diff=0.0`, same-run 200 kHz `nsys`): Panels (A)–(B) lock 13 HBM wave pulses and the 10-SM tail drop to exact wave boundaries; Panels (C)–(D) expose both `MEM` (`max d=8` with `8→6→4→2→0` drain) and `WGMMA` (`max d=2`) pipelines alongside per-iteration `Exposed Wait`.
+> **NVIDIA H20 (`sm_90a`) `4096×4096×2048` Triton `num_stages=5` GEMM**: Zero Python K-loop edits; automatic PTX extraction of `cp.async` (**peak `d = 8`**, showing `1→8` ramp and `8→6→4→2→0` drain) and `wgmma` (**`d = 2`**) alongside `Exposed Wait` at **`+5.46%`** overhead, `max_diff = 0.0`, locked to 200 kHz `nsys`.
 
 ---
 
-## 3. Architecture & Core Design
+## 4. Cross-Platform Gallery & Optimization Case Studies Guided by `(In-Flight Depth d + Exposed Wait)`
 
-```text
-Protected source (read-only) ──► AI Coding Agent (reads source via Skill, plans probes / isolated edits)
-                                        │
-                                        ▼  (calls local MCP verifier tools)
-                             Local Verifier (isolated copy -> compile base & inst -> GPU run -> 4 checks)
-                               ├── Any check fails ──► return diagnostics & hotspots -> hoist/coarsen
-                               └── All 4 pass ───────► align HW curves -> render 4-panel PNG -> sign seal
-```
+### 4.1 Direct Silicon Speedups Guided by `(In-Flight Depth d + Exposed Wait)`
 
-- **Uses your AI coding agent directly**: Under the default `Skill + MCP + Hook` workflow, WeaveProfiler uses your active coding agent directly to read source, decide probe placement, and interpret the four-panel PNG—no separate LLM API key needed. (Optional headless batch mode `wp.identify` / `weaveprof_profile` accepts an OpenAI-compatible endpoint or an offline local `probe.json`.)
-- **Low-perturbation in-kernel recorders**:
-  - Pre-partitioned per-`(CTA, physical warp/wave)` slices with `lane 0` sequential 16-byte streaming stores (`st.global.cs.v4.u32` on NVIDIA; `global_store_dwordx4 ... nt` on AMD)—**zero atomics on the hot path**.
-  - CUDA C++ defaults to a single 32-bit register context (`0 B` SMEM, up to `32,767` records/lane) with automatic fallback to static SMEM or `__noinline__` on register pressure; HIP C++ caches each wave's cursor in a per-wave slot so `__device__` helpers append seamlessly without signature edits.
-  - Supports both global wall clocks (`%globaltimer` / `s_memrealtime`) and dual-anchor cycle counters (`%clock64` / `s_memtime`), plus adjacent boundary fusion.
-- **Zero-signature integration**: CUDA/HIP bind via translation-unit device symbols (`cudaMemcpyToSymbol` / `hipMemcpyToSymbol`); Triton/CuTeDSL use transparent launcher proxies (stripping `@triton.autotune` on the instrumented copy to pin the baseline winning config); NVIDIA Triton includes the PTX-level automatic async pass (`triton_ptx_async.py`).
-- **Four blocking checks**: ① **Assembly & resources** (core instruction fidelity, `delta_spill_bytes <= 0`, `extra_smem_bytes <= 0`); ② **Output equality** (bitwise identical to unmodified baseline); ③ **Event completeness & coverage** (zero unpaired events/overflows, full physical warp coverage by default, no coarse wrapper collapse); ④ **Steady-state overhead** (`|t_inst / t_base - 1| <= 10%` after warmup; both slowdowns and scheduling-perturbation speedups beyond `±10%` fail).
-- **Out-of-workspace safeguards**: Clean backups, HMAC seals, and keys live outside the workspace under `~/.cache/weaveprof/sessions/`; lifecycle hooks (`PreToolUse` / `PostToolUse` / `Stop`) enforce profile-before-edit, clean production source, and PNG-only delivery.
+Jointly observing `(d, Exposed Wait %)` distinguishes **under-pipelined memory stalls** (increase depth), **split compute synchronization bottlenecks** (fuse `wgmma` waits instead of crossing SMEM cliffs), and **over-pipelined register/SMEM pressure** (trade redundant depth for larger tiles/higher occupancy):
 
----
+| Platform | Workload & Shape | Before `(d, Exposed Wait)` | Diagnosis & Guided Optimization | After `(d, Exposed Wait)` | Verified Speedup (`max_diff=0`) |
+| --- | --- | :---: | --- | :---: | :---: |
+| **8×NVIDIA H20** (`sm_90a`) | DeepGEMM MegaMoE (Qwen3.5-397B, `EP=8, S=1024`) | `65 µs` launch gap + sync `Scatter` stall | Persistent dynamic-queue fusion + async `Scatter` offload to idle `Disp` warps | Comm overlapped with FP8 Tensor Core (`27.9% → 41.8%`) | `613.2 → 416.4 µs` (**`1.47×`**) |
+| **NVIDIA H20** (`sm_90a`) | Upstream `vLLM fused_moe` (DeepSeek-V3 `M=128, E=256, H=7168, I=2048`) | `s=3` default: `steady d=2.3 (max 4)`, **`Wait = 33.6%`** | HBM latency exposed with spare SMEM headroom → deepen pipeline to `num_stages=5` | `steady d=6.3 (max 8)`, **`Wait = 5.0%`** (`6.8×` drop) | `10,242.5 → 8,724.5 µs` (**`1.17×`** vs default / **`1.29×`** vs `s=1`) |
+| **NVIDIA H20** (`sm_90a`) | Upstream `vLLM FLA FlashKDA` (`chunk_fwd_h`, `T=4096`) | `s=2` default: `max d=5`, **`Wait = 27.5%`** (4 split `wgmma` waits) | Naive `s=3` (`d=10`, `133 KB` SMEM) hits `2→1 CTA/SM` cliff (`0.59×`); fuse `K=128` `RS-WGMMA` (`wgmma_waits: 4→2`) | Keeps `2 CTAs/SM` (`73.7 KB` SMEM), halves sync barriers | `286.2 → 265.3 µs` (**`1.08×`**) |
+| **NVIDIA B300** (`sm_103a`) | Blackwell Gather-GEMM (`4096×4096×2048` & `8192×8192×4096`) | `s=2`: `steady d=1.9 (max 2)`, **`Wait = 37.4% / 53.4%`** | Advance to `s=3` (`s=4` `131 KB` SMEM drops occupancy to `0.72×`) | `steady d=2.5 (max 4)`, **`Wait = 4.6% / 16.6%`** (`8.1×` drop) | `102.7 → 80.9 µs` (**`1.27×`**, **`1.63×`** vs `s=1`; **`1,071.7 TFLOPS`** @ 8K) |
+| **AMD MI308X** (`gfx942`) | CDNA3 Async VMEM + MFMA GEMM (`4096×4096×2688`) | `s=1` sync: `d=0` (blocking `vmcnt(0)`) | 4-stage `global_load_dwordx4` + `s_waitcnt vmcnt(8)` register–LDS pipeline | `steady d=2.1 (max 3)`, **`Wait = 1.7%`** | `1,572.9 → 810.0 µs` (**`1.94×`**, `111.3 TFLOPS`) |
+| **RTX 3050** (`sm_86`) | Ampere CUDA C++ `cp.async` + WMMA GEMM (`2048×2048×1280`) | `6-stage (64×128)`: `steady d=4.0 (max 5)`, **`Wait = 19.8%`** | Redundant depth on small tile → retarget SMEM to `3-stage (128×128)` for 2× data reuse | `steady d=1.1 (max 2)`, **`Wait = 16.6%`**, MMA share `79.7%` | `1,170.2 → 1,005.6 µs` (**`1.16×`**, `88.2%` cuBLAS) |
 
-## 4. Silicon Case Studies (NVIDIA H20, 200 kHz `nsys`)
+### 4.2 8×H20 Production DeepGEMM MegaMoE (`1.47×` Speedup)
 
-### 4.1 8×H20 Production DeepGEMM MegaMoE (`1.47×` Speedup)
-
-On an 8×H20 NVLink node running **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8, S=1024, E=512`), the aligned timeline pinpointed two root bottlenecks: ① split `GEMM1`/`GEMM2` launches + static expert assignment creating a ~`65 µs` inter-kernel idle gap; ② synchronous `Scatter` stalling compute warpgroups during `GEMM2` while `Disp` warps sat idle. Fusing into a persistent dynamic-queue megakernel and offloading async `Scatter` to `Disp` achieved a `1.47×` speedup (full walkthrough in [h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)):
+Aligned timelines on an 8×H20 NVLink node running **Qwen3.5-397B DeepGEMM MegaMoE** (`EP=8, S=1024, E=512`) exposed a `~65 µs` inter-kernel gap and synchronous `Scatter` stalls while `Disp` warps idled; fusing into a persistent dynamic-queue megakernel with async `Scatter` offload yielded **`1.47×`** speedup (see [h20_megamoe_optimization.md](docs/case_studies/h20_megamoe_optimization.md)):
 
 ![8×H20 DeepGEMM MegaMoE Before/After Aligned SW+HW View](docs/images/case_h20_megamoe_1p47x.png)
 
-| Variant | Latency | FP8 Tensor Core (Avg / Peak) | HBM BW (Avg / Peak) |
-| --- | ---: | ---: | ---: |
-| Original split-kernel (a) | `613.2 µs` | `27.9%` / `37.1%` | `36.4%` / `47.6%` |
-| Fused persistent + async Scatter (b) | **`416.4 µs` (`1.47×`)** | `41.8%` / `62.6%` | `55.7%` / `81.5%` |
+### 4.3 AMD Instinct MI308X (`gfx942`, 80 CUs) 4-Stage Async VMEM (`vmcnt` FIFO, `d=3`) + MFMA Four-Panel View
 
-### 4.2 Deep-Stage Async Pipeline Four-Panel View (RTX 3050 `sm_86` CUDA C++ 6-Stage `cp.async`)
+On AMD CDNA3 GPUs, vector memory loads (`global_load_dwordx4` / `buffer_load_dwordx4`) execute asynchronously and retire in FIFO order via `s_waitcnt vmcnt(N)`, overlapping directly with `v_mfma_*` Matrix Core pipelines. WeaveProfiler supports both **HIP C++ async macros** (`WP_VMEM_COMMIT` / `WP_VMEM_WAIT`) and **ROCm Triton AMDGCN auto-async instrumentation** (`triton_amdgcn_async.py`). Below is a live 80-CU MI308X capture at **`+5.23%`** overhead (`810.4 → 852.8 µs`), **`max_diff = 0.0`**, `0 B` spill, and **`0.37%`** `rocprof-sys` SW–HW delta, showing all 4 `wave64` tracks' `vmcnt` issue pins `▼`, in-flight depth (`steady d = 2.1, max 3`), `Exposed Wait (1.8%)`, and `3→2→1→0` tail drain:
 
-Captured with same-run 200 kHz `nsys` GPU metrics on a `2048×2048×1280` 6-stage circular-buffer `cp.async` + WMMA GEMM on NVIDIA Ampere (`sm_86`): 32 HBM bandwidth pulses (peaking at `93.0%`) in Panel (A) align exactly with the 32 CTA wave boundaries across all 16 physical SMs in Panel (B), while Panel (D) isolates one CTA to reveal the full `0→1→2→3→4→5` prefetch ramp-up and `5→4→3→2→1→0` drain staircase across 5 depth shades (fine-grained 5-probe/iter showcase):
+![AMD Instinct MI308X gfx942 4-Stage Async VMEM vmcnt FIFO + MFMA Four-Panel View](docs/images/case_mi308x_async_4panel.png)
 
-![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async Four-Panel Aligned View](docs/images/case_sm86_cuda_s6_4panel.png)
+### 4.4 Zero-Signature Four-Panel Captures on Open-Source H20 Kernels
 
-> **Desktop GPU Forensic Case Study (Windows RTX 3050 WDDM, Full K-Loop PTX Auto-Async `8192³` Triton GEMM, full write-up in [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md))**:
-> - **Cold-start local DRAM (GDDR6) ramp (`0–25 ms`)**: The orange `HBM/DRAM BW %` curve in Panel (A) climbs from `~25–30%` to `~70%` (peak `98.0%`) while `Tensor Active %` holds steady at `~38–41%`, exposing **insufficient pre-capture warmup** (laptop DVFS clock stabilization + cold TLB / `2 MB` L2 across a `384 MB` working set).
-> - **WDDM preemption cliffs (`t ≈ 30–33 ms`) & Panel (D) full K-loop micro-zoom**: Panel (A)'s vertical `Active SMs → 0%` cliffs align to the microsecond with stretched async/wait spans on SM1–3/6/11/15 in Panel (B), while Panel (D) zooms into steady-state `CTA 2056` showing all 4 warps' `cp.async` in-flight depth (`d=2.1, max 4`), blue `Tensor Core MMA` clusters, and `3.6–3.9%` `Exposed Wait` (`0` overflow across all `16,384` lanes, `SW-HW Δ = 1.07%`).
+Measured on unmodified open-source repositories at long-sequence production shapes (`max_diff = 0.0`, `0` overflow, 100% physical warp coverage):
 
-![RTX 3050 sm_86 8192³ Triton GEMM Cold-Start DRAM Ramp and WDDM Preemption](docs/images/case_sm86_wddm_preemption.png)
-
-### 4.3 Zero-Signature Four-Panel Profiling of Open-Source Kernels (NVIDIA H20, 200.3 kHz `nsys`)
-
-Closed-loop profiling on unmodified open-source libraries at production long-sequence shapes with zero signature edits, `max_diff=0.0`, zero buffer overflows, and 100% physical warp coverage:
-
-| Open-Source Kernel | Frontend & Shape (H20 `sm_90a`) | Warp Coverage | Steady-State Overhead & Highlights |
-| --- | --- | :---: | --- |
-| **FlashInfer 0.6.8 Hopper FA3** (3 headers) | CUDA C++, `B=5, H=16, S=4096, D=128` | 12 / 12 | **`+0.15%`** (`2,618 → 2,622 µs`), SW–HW delta `0.08%`; Panel (D) splits every math warp into two aligned rows—`Online Softmax / Wait` on top and async `WGMMA QK+PV` in-flight depth (`d=1/2`) overlapping Softmax below |
-| **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`) | CUDA C++, `B=64, H=128, KV=2048` | 8 / 8 | **`+9.96%`** (`356 → 392 µs`), **`0 B` spill**, SW–HW delta `0.49%`; auto-selects full 2-wave `SM 2`, showing `WG0`'s green `cp.async` in-flight count (`d=1/2`) + `kOScaleReady` wait + blue `PV1` WGMMA alongside `WG1`'s 2-row `Softmax / WGMMA` split |
-| **vLLM FLA FlashKDA** (`chunk_delta_h.py`) | Triton 3.6 PTX Auto-Async, `B=1, T=4096, H=64, D=128` | 4 / 4 | **`+8.14%`** (`306 → 331 µs`, zero Python K-loop edits), **`0 B` spill**, SW–HW delta `0.39%`; Panel (D) exposes both 5-shade green `cp.async` ramps, blue `WGMMA` sub-track, and `~65%` per-chunk `Exposed Wait` |
+- **FlashInfer 0.6.8 Hopper FA3** (3 headers, CUDA C++, `B=5, H=16, S=4096, D=128`, 12/12 warps): **`+0.15%`** overhead (`2,618 → 2,622 µs`), `0.08%` SW–HW delta, deduplicated 1-to-8 cross-warp TMA depth `max_d_tma = 4` (2 K + 2 V) and dual-row `Softmax` / async `WGMMA (d=1/2)` overlap.
+- **FlashInfer 0.6.8 Hopper FlashMLA** (`mla_hopper.cuh`, `B=64, H=128, KV=2048`, 8/8 warps): **`+9.96%`** overhead, `0 B` spill, `0.49%` SW–HW delta.
+- **vLLM FLA FlashKDA** (`chunk_delta_h.py`, Triton 3.6 PTX Auto-Async, `B=1, T=4096, H=64, D=128`, 4/4 warps): **`+8.14%`** overhead, `0 B` spill, `0.39%` SW–HW delta, zero Python K-loop edits.
 
 ![FlashInfer 0.6.8 Hopper FA3 H20 S=4096 Four-Panel Aligned View](docs/images/case_h20_flashinfer_fa3.png)
 ![FlashInfer 0.6.8 Hopper FlashMLA H20 KV=2048 Four-Panel Aligned View](docs/images/case_h20_flashmla.png)
 ![vLLM FLA FlashKDA H20 T=4096 Triton PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_flashkda.png)
 
+### 4.5 Desktop Ampere (RTX 3050 `sm_86`) 6-Stage `cp.async` & Windows WDDM Preemption Forensics
+
+For local Ampere desktop/laptop development:
+- **6-Stage `cp.async` + WMMA GEMM (`2048×2048×1280`)**: **`+0.70%`** steady-state overhead (`1,178.6 → 1,186.8 µs`, `0 B` spill, `max_diff = 0.0`) under Scheme A head/tail retention + interior coarsening, preserving the full `0→1→2→3→4→5` ramp and `5→4→3→2→1→0` drain in Panel (D).
+- **Windows WDDM Preemption Forensics (`8192³` Triton PTX Auto-Async GEMM, see [sm86_wddm_preemption.md](docs/case_studies/sm86_wddm_preemption.md))**: Captures both the `0–25 ms` cold-start GDDR6 ramp and `t ≈ 30–33 ms` OS graphics preemption cliffs.
+
+![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async Low-Overhead Four-Panel View](docs/images/case_sm86_cuda_s6_4panel.png)
+![RTX 3050 sm_86 8192³ Triton GEMM Cold-Start DRAM Ramp and WDDM Preemption](docs/images/case_sm86_wddm_preemption.png)
+
 ---
 
-## 5. Quick Start & Support Matrix
+## 5. Dual-Mode Quick Start & Support Matrix
 
-| Dimension | Support |
+| Dimension | Coverage |
 | --- | --- |
-| GPUs | NVIDIA H20 (`sm_90`/`sm_90a`), B300 (`sm_100a`/`sm_103a`), Ampere (`sm_86`), AMD MI308X (`gfx942`) |
-| Languages | CUDA C++, HIP C++, CuTeDSL (NVIDIA), Triton (NVIDIA PTX & AMD CDNA3) |
-| Coding Agents | Native Claude Code, Qwen Code (`qwen`), OpenAI Codex CLI, Antigravity (`agy`) |
-| Prerequisites | Python 3.10+, `nvcc`/`nsys` or `hipcc`/`rocprof-sys`, `matplotlib`; uses your active coding agent directly (no extra API key) |
+| **GPUs** | NVIDIA Hopper H20 (`sm_90`/`sm_90a`), Blackwell B300 (`sm_100a`/`sm_103a`), Ampere (`sm_86`), AMD Instinct MI308X (`gfx942`) |
+| **Frontends** | CUDA C++, HIP C++, Triton (NVIDIA PTX Dual-Async & AMD AMDGCN Async), CuTeDSL |
+| **Dual Entry Modes** | **Mode 1**: AI Coding Agents (`Claude Code`, `Qwen Code`, `OpenAI Codex CLI`, `Antigravity` via `Skill + MCP + Hook`, no extra key required); **Mode 2**: Direct **Alibaba Cloud Bailian (`DashScope` / `Coding Plan` / `MaaS`)** or any OpenAI-compatible API Key via CLI / Python SDK |
+| **Prerequisites** | Python 3.10+, `nvcc` + `nsys` (NVIDIA) or `hipcc` + `rocprof-sys` (AMD), `matplotlib` |
 
-Wire into your kernel repo in two commands (`--protect` locks files until the first passing baseline seal unlocks optimization):
+### Mode 1: AI Coding Agents (`Skill + MCP + Hook`, No Extra API Key Needed)
+
+Install into any kernel repository in two commands (`--protect` locks production files until the initial baseline seal passes):
 
 ```bash
 git clone https://github.com/ziyuhuang123/WeaveProfiler.git
@@ -122,15 +139,38 @@ python3 -B WeaveProfiler/run.py install-agent \
   --card h20   # h20 | b300 | mi308x | sm86
 ```
 
-Headless CLI wrapper (optional Linux `bubblewrap` read-only mounts) and offline verification:
+### Mode 2: Direct API Key (Alibaba Cloud Bailian / DashScope or OpenAI-Compatible)
+
+Automatically routes Bailian standard keys (`DASHSCOPE_API_KEY` / `BAILIAN_API_KEY`, `sk-...` → `dashscope.aliyuncs.com`), Bailian Coding Plan keys (`sk-sp-...` → `coding.dashscope.aliyuncs.com`), Bailian MaaS workspace keys (`sk-ws-...`), or custom `OPENAI_BASE_URL` + `OPENAI_API_KEY`:
+
+```bash
+export DASHSCOPE_API_KEY="sk-..."   # or BAILIAN_API_KEY, or pass --api-key directly
+
+python3 -B WeaveProfiler/run.py identify kernel.cu -o probe.json   --card h20 --model qwen-max
+python3 -B WeaveProfiler/run.py profile  kernel.cu -o overview.png --card h20 -- python3 bench.py
+python3 -B WeaveProfiler/run.py doctor
+```
+
+```python
+import weaveprof as wp
+
+spec = wp.identify("kernel.cu", out="probe.json", card="h20", api_key="sk-...", model="qwen-max")
+with wp.profile("kernel.cu", out="overview.png", card="h20", api_key="sk-..."):
+    run_kernel()
+```
+
+### Guarded Batch Execution & Offline Tests
 
 ```bash
 python3 -B WeaveProfiler/run.py guard-exec --workspace /path/to/your_kernel_repo \
-  -- codex exec "Profile this kernel and diagnose cross-SM load imbalance"
+  -- codex exec "Profile exposed waits and cross-SM load skew in this kernel"
 
-# Offline checks (no GPU required)
+# Offline structural & unit tests (no GPU required)
 python3 -B WeaveProfiler/tests/package_structure.py
-python3 -B -m unittest WeaveProfiler/tests/test_wp_megakernel.py WeaveProfiler/tests/test_mcp_hook_installer.py
+python3 -B -m unittest \
+  WeaveProfiler/tests/test_wp_megakernel.py \
+  WeaveProfiler/tests/test_mcp_hook_installer.py \
+  WeaveProfiler/tests/test_triton_amdgcn_async.py
 ```
 
-**Key MCP Tools & Known Bounds**: Primary MCP tools are `weaveprof_megakernel_audit` (isolated run + 4 checks + 4-panel PNG + seal), `weaveprof_status`, `weaveprof_analyze`, `weaveprof_compare_rounds`, and `weaveprof_verify_seal`. Known bounds: CUDA single-register mode caps lanes at `32,767` records; AMD `rocprof-sys` PM counters are per-dispatch aggregates. See [SKILL.md](SKILL.md) for full CLI, recorder switches, and platform specs.
+**Core MCP Tools & Known Bounds**: Primary MCP tools are `weaveprof_megakernel_audit` (isolated injection + 4 checks + 4-panel PNG + HMAC seal), `weaveprof_status`, `weaveprof_analyze`, `weaveprof_compare_rounds`, and `weaveprof_verify_seal`. Known bounds: CUDA `WP_CTX_REG` caps per-lane capacity at `32,767` records; AMD `rocprof-sys` PM counters are per-dispatch aggregates. See [SKILL.md](SKILL.md) for full recorder macros, compiler flags, and platform details.

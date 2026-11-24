@@ -29,6 +29,8 @@ CARDS = ("h20", "b300", "mi308x", "sm86")
 
 
 def _load(relative: str, name: str):
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
     path = ROOT / relative
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -36,6 +38,13 @@ def _load(relative: str, name: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _cli(argv: Sequence[str]) -> int:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from weaveprof import cli as _wp_cli
+    return _wp_cli.main(list(argv))
 
 
 def _run_python(relative: str, argv: Sequence[str], *, cwd: Optional[Path] = None) -> int:
@@ -439,6 +448,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "probe-inject": _probe_inject, "auto-profile": _auto_profile,
                 "install-agent": _install_agent, "guard-exec": _guard_exec,
                 "agent-status": _agent_status, "mcp-server": _mcp_server,
+                "identify": lambda a: _cli(["identify", *a]),
+                "locate": lambda a: _cli(["locate", *a]),
+                "profile": lambda a: _cli(["profile", *a]),
+                "verify": lambda a: _cli(["verify", *a]),
+                "doctor": lambda a: _cli(["doctor", *a]),
+                "causal": lambda a: _cli(["causal", *a]),
+                "render": lambda a: _cli(["render", *a]),
+                "seal-check": lambda a: _cli(["seal-check", *a]),
                 "template": _template}
     handler = handlers.get(command)
     if handler is None:

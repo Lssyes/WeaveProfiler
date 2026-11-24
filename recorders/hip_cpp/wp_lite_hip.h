@@ -232,6 +232,33 @@ __device__ __forceinline__ void fi_trans_pred(FiCtx& c, bool pred, uint32_t end_
 __device__ __forceinline__ void fi_record_now(FiCtx& c, uint32_t tag, uint32_t aux) {
     fi_record_pred(c, true, tag, aux);
 }
+__device__ __forceinline__ void fi_record_pred_ts(FiCtx& c, bool pred, uint32_t tag, uint32_t aux, uint64_t t) {
+#if defined(__AMDGCN__) && defined(__clang__)
+    const uint32_t valid = (pred && (c.p != nullptr)) ? 1u : 0u;
+    const uint32_t do_st = ((valid != 0u) && (c.n < c.cap)) ? 1u : 0u;
+    const uint32_t do_inc = ((valid != 0u) && (c.n <= c.cap)) ? 1u : 0u;
+    FiRec* const dst = c.p + c.n;
+    const fi_hip_u32x4_ vec = {(uint32_t)t, (uint32_t)(t >> 32), tag, aux};
+    uint64_t saved_exec = 0ull, st_mask = 0ull;
+    asm volatile(
+        "v_cmp_ne_u32_e64 %[m], %[flag], 0\n\t"
+        "s_and_saveexec_b64 %[sv], %[m]\n\t"
+        "s_nop 0\n\t"
+        "global_store_dwordx4 %[addr], %[v], off nt\n\t"
+        "s_mov_b64 exec, %[sv]"
+        : [sv] "=&s"(saved_exec), [m] "=&s"(st_mask)
+        : [flag] "v"(do_st), [addr] "v"(dst), [v] "v"(vec)
+        : "scc");
+    c.n += do_inc;
+#else
+    if (!pred || c.p == nullptr) return;
+    if (c.n < c.cap) {
+        FiRec r{t, tag, aux};
+        c.p[c.n] = r;
+    }
+    if (c.n <= c.cap) c.n++;
+#endif
+}
 __device__ __forceinline__ FiCtx fi_open(bool recorder, uint32_t role) {
     FiCtx c;
     c.p = nullptr;
@@ -411,6 +438,42 @@ using WpScope = FiScope;
 #define WP_B_PRED(pred, id, aux) FI_B_PRED(pred, id, aux)
 #define WP_E_PRED(pred, id, aux) FI_E_PRED(pred, id, aux)
 #define WP_M_PRED(pred, id, aux) FI_M_PRED(pred, id, aux)
+
+// CDNA2/CDNA3 (`gfx90a`/`gfx942`) hardware-counted VMEM async FIFO helpers (`vmcnt` + `s_waitcnt vmcnt(N)`).
+// Note: `global_store_dwordx4` on CDNA3 uses `vscnt` (store counter), and `s_memtime`/`s_memrealtime` use `lgkmcnt`,
+// so WeaveProfiler record stores NEVER perturb `vmcnt`!
+#if FI_LEVEL >= 2
+#define WP_VMEM_COMMIT_PRED(pred, ev_load, seq_in) do { \
+    if (FI_GROUP_ON(0)) fi_record_pred(fi_ctx_, (bool)(pred), (uint32_t)(ev_load) & FI_TAG_IDMASK, (uint32_t)(seq_in)); \
+    (seq_in) += (pred) ? 1u : 0u; \
+} while (0)
+#define WP_VMEM_WAIT_PRED(pred, keep_groups, insts_per_group, do_sync, ev_load, ev_wait, seq_in, seq_out) do { \
+    if (FI_GROUP_ON(0)) fi_record_pred(fi_ctx_, (bool)(pred), (uint32_t)(ev_wait) & FI_TAG_IDMASK, (uint32_t)(seq_out)); \
+    asm volatile("s_waitcnt vmcnt(%0)" :: "n"((keep_groups) * (insts_per_group))); \
+    if (do_sync) __syncthreads(); \
+    const uint64_t wp_t_done_ = fi_now(); \
+    if (FI_GROUP_ON(0)) fi_record_pred_ts(fi_ctx_, (bool)(pred), ((uint32_t)(ev_wait) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(seq_out), wp_t_done_); \
+    if (pred) { \
+        const int32_t wp_tgt_ = (int32_t)(seq_in) - (int32_t)(keep_groups); \
+        while ((int32_t)(seq_out) < wp_tgt_) { \
+            if (FI_GROUP_ON(0)) fi_record_pred_ts(fi_ctx_, true, ((uint32_t)(ev_load) & FI_TAG_IDMASK) | FI_TAG_END, (uint32_t)(seq_out), wp_t_done_); \
+            ++(seq_out); \
+        } \
+    } \
+} while (0)
+#else
+#define WP_VMEM_COMMIT_PRED(pred, ev_load, seq_in) do { (void)(pred); (void)(seq_in); } while (0)
+#define WP_VMEM_WAIT_PRED(pred, keep_groups, insts_per_group, do_sync, ev_load, ev_wait, seq_in, seq_out) do { \
+    (void)(pred); (void)(seq_in); (void)(seq_out); \
+    asm volatile("s_waitcnt vmcnt(%0)" :: "n"((keep_groups) * (insts_per_group))); \
+    if (do_sync) __syncthreads(); \
+} while (0)
+#endif
+#define WP_VMEM_COMMIT(ev_load, seq_in) WP_VMEM_COMMIT_PRED(true, ev_load, seq_in)
+#define WP_VMEM_WAIT(keep_groups, insts_per_group, ev_load, ev_wait, seq_in, seq_out) \
+    WP_VMEM_WAIT_PRED(true, keep_groups, insts_per_group, false, ev_load, ev_wait, seq_in, seq_out)
+#define WP_VMEM_WAIT_SYNC(keep_groups, insts_per_group, ev_load, ev_wait, seq_in, seq_out) \
+    WP_VMEM_WAIT_PRED(true, keep_groups, insts_per_group, true, ev_load, ev_wait, seq_in, seq_out)
 
 // ---------------- host 侧 ----------------
 // n_ctas：grid 的 CTA 总数；warps_per_cta：FI_GRAN=0 时按 wave64 上取整（threads/64），FI_GRAN=1 时忽略输入并强制为 1；

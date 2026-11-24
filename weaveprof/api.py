@@ -52,8 +52,8 @@ def _bind(doc, source, card="auto"):
     return doc
 
 
-def identify(source, out=None, *, feedback=None, model="qwen4-max", card="auto",
-             offline_heuristic=False, llm_caller=None):
+def identify(source, out=None, *, feedback=None, model="auto", card="auto",
+             offline_heuristic=False, llm_caller=None, api_key=None, base_url=None):
     source = Path(source).resolve(strict=True)
     cache = cache_root(source) / digest(source) / "probe.json"
     safe_products(source, out, feedback if isinstance(feedback, (str, Path)) else None)
@@ -69,7 +69,8 @@ def identify(source, out=None, *, feedback=None, model="qwen4-max", card="auto",
     else:
         placer = implementation("weaveprof.pipeline.scan.llm_probe_placer")
         doc = placer.identify_source(source, model=model, card=card, offline_heuristic=offline_heuristic,
-                                     previous=prior, feedback=feedback, llm_caller=llm_caller)
+                                     previous=prior, feedback=feedback, llm_caller=llm_caller,
+                                     api_key=api_key, base_url=base_url)
         doc = _bind(doc, source, card)
         write_json(cache, doc)
     if out:
@@ -84,7 +85,7 @@ class _Session(ContextDecorator):
     def __init__(self, source, limit, out, probe, feedback, model, max_rounds, card,
                  verify_only=False, verify_json=None, preview_png=None, *,
                  policy=None, gpu_id="auto", bench_cmd=None, llm_refine_first=False,
-                 llm_caller=None):
+                 llm_caller=None, api_key=None, base_url=None):
         self.source = Path(source).resolve(strict=True)
         self.limit, self.out = float(limit), Path(out).resolve()
         self.policy = policy if isinstance(policy, HarnessPolicy) else HarnessPolicy()
@@ -93,6 +94,8 @@ class _Session(ContextDecorator):
         self.bench_cmd = list(bench_cmd) if bench_cmd else None
         self.llm_refine_first = bool(llm_refine_first)
         self.llm_caller = llm_caller
+        self.api_key = api_key
+        self.base_url = base_url
         self.feedback_path = Path(feedback or (self.out.parent / "feedback.json")).resolve()
         self.verify_path = Path(verify_json or (self.out.parent / "verify.json")).resolve()
         self.preview_path = (
@@ -118,7 +121,7 @@ class _Session(ContextDecorator):
             self.spec = _bind(read_json(probe), self.source, card)
         else:
             self.spec = identify(self.source, out=self.probe_path, card=card, model=model,
-                                 llm_caller=self.llm_caller)
+                                 llm_caller=self.llm_caller, api_key=self.api_key, base_url=self.base_url)
         self.source_text = self.source.read_bytes().decode("utf-8")
         self.prepared = None
         self.result = None
@@ -309,6 +312,7 @@ class _Session(ContextDecorator):
                         model=self.model, card=self.card,
                         prefer_llm_on_feedback=self.llm_refine_first,
                         llm_caller=self.llm_caller,
+                        api_key=self.api_key, base_url=self.base_url,
                     )
                 next_fp = probe_fingerprint(revised, self.source_text)
                 if next_fp == probe_fp:
@@ -351,12 +355,14 @@ class _Session(ContextDecorator):
 
 
 def profile(source, *, limit=0.10, out="overview.png", probe=None, feedback=None,
-            verify_json=None, preview_png=None, model="qwen4-max", max_rounds=3, card="auto",
-            bench=None, policy=None, gpu_id="auto", llm_refine_first=False, llm_caller=None):
+            verify_json=None, preview_png=None, model="auto", max_rounds=3, card="auto",
+            bench=None, policy=None, gpu_id="auto", llm_refine_first=False, llm_caller=None,
+            api_key=None, base_url=None):
     session = _Session(source, limit, out, probe, feedback, model, max_rounds, card,
                        verify_only=False, verify_json=verify_json, preview_png=preview_png,
                        policy=policy, gpu_id=gpu_id, bench_cmd=bench,
-                       llm_refine_first=llm_refine_first, llm_caller=llm_caller)
+                       llm_refine_first=llm_refine_first, llm_caller=llm_caller,
+                       api_key=api_key, base_url=base_url)
     if bench is None:
         return session
     return session.execute(lambda prepared: run_benchmark(
@@ -534,20 +540,25 @@ def profile_for_agent(
     bench,
     limit=0.10,
     out="overview.png",
+    run_dir=None,
     probe=None,
     feedback=None,
     verify_json=None,
     preview_png=None,
-    model="qwen4-max",
+    model="auto",
     max_rounds=3,
     card="auto",
     policy=None,
     gpu_id="auto",
     llm_refine_first=False,
     llm_caller=None,
+    api_key=None,
+    base_url=None,
     arch=None,
 ):
     """Run closed-loop profiling and return a compact, seal-verified report for an agent."""
+    if run_dir and (not out or str(out) == "overview.png"):
+        out = str(Path(run_dir) / "overview.png")
     try:
         res = profile(
             source,
@@ -565,6 +576,8 @@ def profile_for_agent(
             gpu_id=gpu_id,
             llm_refine_first=llm_refine_first,
             llm_caller=llm_caller,
+            api_key=api_key,
+            base_url=base_url,
         )
         report = build_agent_report(res, arch=arch)
         report["trace_path"] = str(Path(out).resolve()) if Path(out).is_file() else report.get("trace_path")
@@ -708,26 +721,8 @@ def doctor(*, check_gpu=True):
             gpus["amd"] = _run_probe(cmd)
 
     # Check LLM endpoint & key availability without leaking secret values.
-    openai_url = (os.environ.get("OPENAI_BASE_URL") or "").strip()
-    key_source = None
-    for k in ("OPENAI_API_KEY", "DASHSCOPE_API_KEY", "BAILIAN_API_KEY"):
-        if (os.environ.get(k) or "").strip():
-            key_source = k
-            break
-    if key_source is None and os.name == "nt":
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as regk:
-                for k in ("OPENAI_API_KEY", "DASHSCOPE_API_KEY", "BAILIAN_API_KEY"):
-                    try:
-                        val, _ = winreg.QueryValueEx(regk, k)
-                        if val and str(val).strip():
-                            key_source = f"HKCU:{k}"
-                            break
-                    except FileNotFoundError:
-                        pass
-        except OSError:
-            pass
+    placer = implementation("weaveprof.pipeline.scan.llm_probe_placer")
+    llm_cfg = placer.resolve_bailian_config()
 
     lock_dir = Path(
         os.environ.get("WEAVEPROF_LOCK_DIR")
@@ -750,10 +745,12 @@ def doctor(*, check_gpu=True):
         "tools": tools,
         "gpus": gpus,
         "llm": {
-            "endpoint_mode": "openai_compatible" if openai_url else "bailian_default",
-            "openai_base_url_set": bool(openai_url),
-            "api_key_detected": key_source is not None,
-            "api_key_source": key_source,
+            "endpoint_mode": llm_cfg["endpoint_mode"],
+            "endpoint_url": llm_cfg["endpoint_url"],
+            "default_model": llm_cfg["model"],
+            "openai_base_url_set": bool((os.environ.get("OPENAI_BASE_URL") or "").strip()),
+            "api_key_detected": llm_cfg["api_key"] is not None,
+            "api_key_source": llm_cfg["api_key_source"],
         },
         "krex_lock": {
             "active_provider": os.environ.get("WEAVEPROF_LOCK_PROVIDER") or "local_file",

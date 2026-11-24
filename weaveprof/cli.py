@@ -22,7 +22,9 @@ def main(argv=None):
         sub.add_argument("-o", "--out", required=is_id, default="overview.png")
         sub.add_argument("--feedback")
         if not is_ver:
-            sub.add_argument("--model", default="qwen4-max")
+            sub.add_argument("--model", default="auto", help="Alibaba Cloud Bailian / OpenAI-compatible model (default: auto -> qwen-max / qwen3.5-plus / qwen4-max)")
+            sub.add_argument("--api-key", dest="api_key", default=None, help="Alibaba Cloud Bailian (DashScope) or OpenAI-compatible API key")
+            sub.add_argument("--base-url", dest="base_url", default=None, help="Optional Bailian / OpenAI-compatible base URL")
             sub.add_argument("--card", default="auto")
         if is_id:
             sub.add_argument("--offline-heuristic", action="store_true")
