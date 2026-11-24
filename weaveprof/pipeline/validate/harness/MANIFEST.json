@@ -1,8 +1,8 @@
 {
-  "file_count": 336,
+  "file_count": 337,
   "files": {
-    "README.md": "91bc53e325784a5cbf330e400e439f52efcc45351cbc49eec497fe1fb61d5193",
-    "README_EN.md": "848a51c029a1856ecf35b92eee886e055cd543ad052fa2aa47f9724d08ff2479",
+    "README.md": "48b6ea68f1c1ef4f29b81bdb64ddbd8389ea2bd6d543a4d16360f6c66be4daff",
+    "README_EN.md": "7f85462862581a14843581bfd29e1b3ace7182cad62fa6292074cdba313b07a6",
     "SKILL.md": "80dfae06555a02cc54e9f8e41104f100d67759b75810da4ab0bd7b3614a3af0a",
     "configs/agents/openai.yaml": "5f187c0cf4409a861b6d0cdf716b6d49b7db13ca49e1c6516d9dc882066f5d84",
     "configs/cards/b300.json": "331b397af5495b30d91293d36d016abc3d072089e333c5cf489b466911118ccf",
@@ -66,6 +66,7 @@
     "docs/images/case_h20_megamoe_1p47x.png": "c3ee9f84f7bedc2db314af7079c4f09a18dfd692414fff0979da1038de5f347a",
     "docs/images/case_h20_triton_s5_4panel.png": "02de52d201f80ed31e9fb2bc92656845e31997cc034dfb1917df0f66ff9b8894",
     "docs/images/case_mi308x_async_4panel.png": "a0bf952170de17b97194944d0e5d153b88b1025536e77897765da6796fd996ec",
+    "docs/images/case_mi308x_ep16_megamoe_4panel.png": "97ad2b5a039945392617ac2e21a53d36a2825b0bbf5a53e91a3e8f8f783b98a7",
     "docs/images/case_sm86_cuda_s6_4panel.png": "036238e8df7141e34e04f49ca9d4e4c45629f3ca99c9de4e07c2839b5dd5c5a4",
     "docs/images/case_sm86_wddm_preemption.png": "1e4c914525c308f680c65eed67be265902b740011b364ec02db9a514e6a33829",
     "docs/l20d_achievable_peak_rebase.md": "473520bd45ce533a5db2c6f9450754a71c06f0c3ba38a4805e51a0ac273bcf5f",
@@ -335,11 +336,11 @@
     "weaveprof/pipeline/validate/validate_run.py": "2b785579616c820a5444f77484630fb0e11e8ee1ba9be4f591f7d2d2a1f0d9cd",
     "weaveprof/preview.py": "37306ff0d288ed8482cf79447579911d7976d5b6cdb1b14b55eed60cea08b941",
     "weaveprof/replay.py": "3d6c39de92302bc222bfa69f6b7bd4b7b4dcd94aaa12a20042d4edd39d4d35df",
-    "weaveprof/viz.py": "88acb2bc844ba6c95c8a5ea3b3ea3534a34b05284290069bc69de8f4227f728b",
+    "weaveprof/viz.py": "3748ed0c95e93c48758e74ed02c9610a7bf9f9864e3c79a7ce7620838d280505",
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
-  "generated_at_utc": "2026-11-24T06:07:08.533074Z",
-  "root_sha256": "41a303599ad720c91bd13060e07c63e902a30bf61cbed3a6cfeaa8c9a75dd4c1",
+  "generated_at_utc": "2026-11-24T09:42:41.012422Z",
+  "root_sha256": "5b5015a0c0357ebd65da0968005c44d012a1e676d25e24472b11db09db91df93",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }

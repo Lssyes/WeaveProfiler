@@ -932,7 +932,10 @@ def _compute_panel_c_role_labels(
         if "compute" in rl or "math" in rl:
             out.append(f"W{w:02d} (Compute / Combine)")
         elif "comm" in rl or "dispatch" in rl or "scatter" in rl:
-            suffix = "Comm / Scatter -> Streaming Reduce" if w in streaming_warps else "Comm / Scatter"
+            if is_amd:
+                suffix = "Comm / Dispatch & Async Scatter"
+            else:
+                suffix = "Comm / Scatter -> Streaming Reduce" if w in streaming_warps else "Comm / Scatter"
             out.append(f"W{w:02d} ({suffix})")
         else:
             out.append(f"W{w:02d} ({r})")

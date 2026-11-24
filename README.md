@@ -121,7 +121,7 @@ WeaveProfiler 输出的 `(在途深度 d, Exposed Wait %)` 直接给出可执行
 
 在双节点 16×MI308X（`2×8 GPUs`，机内 `287.2 GB/s` 全双工 xGMI + 跨机 RDMA）上剖析持久化单核 **MegaMoE（Qwen3.8-Max, `EP=16, S=16384, E=512, K=10`）**：
 - **Panel (A) 出口限规 SKU 算力口径校准与全双工 xGMI 拆分**：MI308X 在密集 MFMA 负载下将着色器主频动态控制在 `~1.38 GHz` 以满足 `398.7 TFLOPS` FP8 物理上限（`GRBM_GUI_ACTIVE` 直接记录真实周期，稠密 `376.7 TFLOPS` GEMM 下原始 MFMA 管线占空比即达 **`82.9%`**，详见 [amd_mi308x.md](docs/amd_mi308x.md)）；图中清晰分离了开场 `xGMI RX (In)` 入向峰值与 `t ≈ 3,550 µs` 起与计算并行拉升的 `xGMI TX (Out)` 出向曲线，并对 HCA 侧不可采的跨机 RDMA 计数器给出显式诚实注记（绝不补零）。
-- **Panel (B)–(D) 双色跨机/机内瀑布与 3 组 `GEMM1 ↔ GEMM2` 交错掩盖**：全卡 80 CUs（每 CU 双 CTA `4 Compute + 4 Comm/Scatter` 分波）将开场跨机/机内分发融合为单阶段，配合跨机 Top-K 路由去重预归约（单点带来 **`+15.1%`** 收益）与 3 组 `GEMM1 ↔ GEMM2` 交错流水，使 `W04–W07` 通信 Wave 在后半程 `MFMA` 管线满载（峰值 **`62.2%`**）的同时异步推进跨机 RDMA 与机内 xGMI 流式归约，端到端延迟由 `RCCL + AITER` 的 `17,204.0 µs` 降至 **`6,981.1 µs`（`2.46×` 加速，16 卡全元素 FP64 校验通过）**：
+- **Panel (B)–(D) 双色跨机/机内瀑布与 3 组 `GEMM1 ↔ GEMM2` 交错掩盖**：全卡 80 CUs（每 CU 双 CTA `4 Compute + 4 Comm / Dispatch & Async Scatter` 分波）将开场跨机/机内分发融合为单阶段，配合跨机 Top-K 路由去重预归约（单点带来 **`+15.1%`** 收益）与 3 组 `GEMM1 ↔ GEMM2` 交错流水，使 `W04–W07` 通信 Wave 在后半程 `MFMA` 管线满载（峰值 **`62.2%`**）的同时异步推进跨机 RDMA 与机内 xGMI 流式归约，端到端延迟由 `RCCL + AITER` 的 `17,204.0 µs` 降至 **`6,981.1 µs`（`2.46×` 加速，16 卡全元素 FP64 校验通过）**：
 
 ![2×8 AMD MI308X EP16 Qwen3.8-Max S=16384 跨机 RDMA 与机内全双工 xGMI 四联对齐图](docs/images/case_mi308x_ep16_megamoe_4panel.png)
 
