@@ -894,8 +894,75 @@ __device__ __forceinline__ void wp_reg_rec_pred(WpCtxReg& c, bool pred, uint32_t
 #endif
 }
 #endif
+__device__ __forceinline__ void wp_reg_trans(WpCtxReg& c, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
+#if defined(__CUDACC_RDC__)
+    if ((int32_t)c.state >= 0) c.state = wp_reg_trans_cold(c.state, end_tag, beg_tag, aux);
+#elif FI_TIMER == 1
+    asm volatile(
+        "{\n\t"
+        ".reg .pred %%p, %%pst;\n\t"
+        ".reg .u32 %%u0, %%u1, %%u2;\n\t"
+        ".reg .u64 %%p0, %%p1;\n\t"
+        "setp.lt.s32 %%p, %0, 0;\n\t"
+        "@%%p bra L_WPTR_SKIP_%=;\n\t"
+        "ld.const.u32 %%u1, [wp_fi_c + 24];\n\t"
+        "and.b32 %%u0, %0, 32767;\n\t"
+        "min.u32 %%u2, %%u1, 32767;\n\t"
+        "add.u32 %%u0, %%u0, 1;\n\t"
+        "setp.lt.u32 %%pst, %%u0, %%u2;\n\t"
+        "@!%%pst bra L_WPTR_OVF_%=;\n\t"
+        "sub.u32 %%u0, %%u0, 1;\n\t"
+        "shr.u32 %%u2, %0, 15;\n\t"
+        "mad.lo.u32 %%u0, %%u2, %%u1, %%u0;\n\t"
+        "ld.const.u64 %%p0, [wp_fi_c + 0];\n\t"
+        "mad.wide.u32 %%p0, %%u0, 16, %%p0;\n\t"
+        "mov.u64 %%p1, %%clock64;\n\t"
+        "mov.b64 {%%u0, %%u1}, %%p1;\n\t"
+        "st.global.cs.v4.u32 [%%p0], {%%u0, %%u1, %1, %3};\n\t"
+        "st.global.cs.v4.u32 [%%p0 + 16], {%%u0, %%u1, %2, %3};\n\t"
+        "add.u32 %0, %0, 2;\n\t"
+        "bra L_WPTR_SKIP_%=;\n\t"
+        "L_WPTR_OVF_%=:\n\t"
+        "or.b32 %0, %0, 2147483648;\n\t"
+        "L_WPTR_SKIP_%=:\n\t"
+        "}"
+        : "+r"(c.state)
+        : "r"(end_tag), "r"(beg_tag), "r"(aux));
+#else
+    asm volatile(
+        "{\n\t"
+        ".reg .pred %%p, %%pst;\n\t"
+        ".reg .u32 %%u0, %%u1, %%u2;\n\t"
+        ".reg .u64 %%p0, %%p1;\n\t"
+        "setp.lt.s32 %%p, %0, 0;\n\t"
+        "@%%p bra L_WPTR_SKIP_%=;\n\t"
+        "ld.const.u32 %%u1, [wp_fi_c + 24];\n\t"
+        "and.b32 %%u0, %0, 32767;\n\t"
+        "min.u32 %%u2, %%u1, 32767;\n\t"
+        "add.u32 %%u0, %%u0, 1;\n\t"
+        "setp.lt.u32 %%pst, %%u0, %%u2;\n\t"
+        "@!%%pst bra L_WPTR_OVF_%=;\n\t"
+        "sub.u32 %%u0, %%u0, 1;\n\t"
+        "shr.u32 %%u2, %0, 15;\n\t"
+        "mad.lo.u32 %%u0, %%u2, %%u1, %%u0;\n\t"
+        "ld.const.u64 %%p0, [wp_fi_c + 0];\n\t"
+        "mad.wide.u32 %%p0, %%u0, 16, %%p0;\n\t"
+        "mov.u64 %%p1, %%globaltimer;\n\t"
+        "mov.b64 {%%u0, %%u1}, %%p1;\n\t"
+        "st.global.cs.v4.u32 [%%p0], {%%u0, %%u1, %1, %3};\n\t"
+        "st.global.cs.v4.u32 [%%p0 + 16], {%%u0, %%u1, %2, %3};\n\t"
+        "add.u32 %0, %0, 2;\n\t"
+        "bra L_WPTR_SKIP_%=;\n\t"
+        "L_WPTR_OVF_%=:\n\t"
+        "or.b32 %0, %0, 2147483648;\n\t"
+        "L_WPTR_SKIP_%=:\n\t"
+        "}"
+        : "+r"(c.state)
+        : "r"(end_tag), "r"(beg_tag), "r"(aux));
+#endif
+}
 __device__ __forceinline__ void wp_reg_trans_pred(WpCtxReg& c, bool pred, uint32_t end_tag, uint32_t beg_tag, uint32_t aux) {
-    if ((int32_t)c.state >= 0 && pred) c.state = wp_reg_trans_cold(c.state, end_tag, beg_tag, aux);
+    if (pred) wp_reg_trans(c, end_tag, beg_tag, aux);
 }
 #endif
 __device__ __forceinline__ void wp_reg_close(WpCtxReg& c) {
@@ -1074,6 +1141,7 @@ using WpScope = FiScope;
 #define WP_EG_PRED(pred, g, id, aux) FI_EG_PRED(pred, g, id, aux)
 #define WP_MG_PRED(pred, g, id, aux) FI_MG_PRED(pred, g, id, aux)
 #define WP_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux) FI_TRANS_PRED(pred, g_end, end_id, g_beg, beg_id, aux)
+#define WP_TRANS(end_id, beg_id, aux) FI_TRANS_PRED(true, 0, end_id, 0, beg_id, aux)
 
 // ---------------- host 侧 ----------------
 // n_ctas：grid 的 CTA 总数；warps_per_cta：每 CTA 线程数/32 上取整；cap：每泳道最多条数（OPEN/CLOSE 及锚点也占条数）。

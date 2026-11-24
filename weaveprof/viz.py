@@ -963,7 +963,10 @@ def _compute_depth_segments(intervals: Sequence[Tuple[float, float]]) -> Tuple[L
     for t, delta in events:
         dt = t - prev_t
         if dt > 1e-6 and cur > 0:
-            segs.append((prev_t, t, cur))
+            if segs and segs[-1][2] == cur and abs(segs[-1][1] - prev_t) <= 1e-5:
+                segs[-1] = (segs[-1][0], t, cur)
+            else:
+                segs.append((prev_t, t, cur))
             area += dt * cur
             active_dur += dt
         cur = max(0, cur + delta)
@@ -1421,11 +1424,32 @@ def _render_warp_panel(
                     avg_d = (sum(cta_avgs) / len(cta_avgs)) if cta_avgs else 0.0
 
                 smax = eng_scale_max.get(eng, max_d)
+                sub_h = y_bot - y_top
+                min_lbl_px = 18.0 if sub_h >= 0.22 else 22.0
                 for s0, s1, d in d_segs:
                     cx0, cx1 = max(x_lo, s0), min(x_hi, s1)
                     if cx1 > cx0:
                         bucket, _bcol = _depth_to_bucket_color(eng, d, smax)
                         depth_polys[(eng, bucket)].append([(cx0, y_top), (cx1, y_top), (cx1, y_bot), (cx0, y_bot)])
+                        seg_px = ((cx1 - cx0) / x_span) * 2200.0
+                        need_px = min_lbl_px + (7.0 if d >= 10 else 0.0)
+                        if (is_zoom or len(by_cta_ivs) <= 1) and seg_px >= need_px:
+                            rr_c, gg_c, bb_c = _hex_to_rgb(_bcol)
+                            lum = 0.299 * rr_c + 0.587 * gg_c + 0.114 * bb_c
+                            t_col = "#FFFFFF" if lum < 145.0 else "#0F172A"
+                            fs_d = 6.7 if sub_h >= 0.24 else 5.8
+                            ax.text(
+                                0.5 * (cx0 + cx1),
+                                0.5 * (y_top + y_bot),
+                                str(d),
+                                ha="center",
+                                va="center",
+                                fontsize=fs_d,
+                                fontweight="bold",
+                                color=t_col,
+                                zorder=4.9,
+                                clip_on=True,
+                            )
 
                 # Prominent Fixed-Pixel ▼ Async Issue Pins (with clean Adaptive LOD so emerald depth strip stays crisp!)
                 ts_all = dedup_issues.get((r, eng), [])
@@ -1683,7 +1707,8 @@ def render_swhw_overview_png(
     panel_d_h = max(2.15, min(4.2, row_h_unit * n_rep_rows + 0.90)) if has_zoom else 0.0
     panel_b_h = max(2.9, min(4.2, 0.036 * n_sms + 1.45))
     panel_a_h = 2.25 if has_hw else 0.0
-    fig_h = 2.25 + panel_a_h + panel_b_h + panel_c_h + panel_d_h
+    footer_hw_h = 0.62 if has_hw else 0.0
+    fig_h = 2.25 + panel_a_h + panel_b_h + panel_c_h + panel_d_h + footer_hw_h
     fig_w = 16.8 if has_async_rep else 16.0
 
     plt.rcParams.update({
@@ -1905,6 +1930,7 @@ def render_swhw_overview_png(
     x_lim = (0.0, t_max + x_pad)
 
     # ---- Panel (A): real same-run hardware utilization curves ----
+    hw_summary_items: List[Tuple[str, str, float, float]] = []
     if ax_hw is not None:
         ax_hw.set_facecolor("#FFFFFF")
         ax_hw.grid(True, axis="y", linestyle="-", linewidth=0.5, color="#ECEFF1", zorder=0)
@@ -1965,6 +1991,7 @@ def render_swhw_overview_png(
             peak_v = max(in_w)
             hw_max_val = max(hw_max_val, peak_v)
             chips.append((f"{short}  peak {peak_v:.1f}% · mean {mean_v:.1f}%", color))
+            hw_summary_items.append((short, color, peak_v, mean_v))
 
         y_top = 108.0 if hw_max_val <= 100.0 else max(108.0, hw_max_val * 1.08)
         ax_hw.set_ylim(-4, y_top)
@@ -2208,7 +2235,48 @@ def render_swhw_overview_png(
         top_m = min(0.862, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else min(0.870, 1.0 - 1.85 / fig_h) - extra_leg
     else:
         top_m = 0.855 if (has_hw and dual_fabric) else (min(0.805, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else 0.835)
-    fig.subplots_adjust(left=left_m, right=right_m, top=top_m, bottom=0.055 if has_zoom else 0.065)
+    bottom_m = (0.088 if has_zoom else 0.104) if hw_summary_items else (0.055 if has_zoom else 0.065)
+    fig.subplots_adjust(left=left_m, right=right_m, top=top_m, bottom=bottom_m)
+
+    # ---- Bottom Hardware Metrics Summary Box (Peak & Mean for every hardware metric) ----
+    if hw_summary_items:
+        from matplotlib.patches import FancyBboxPatch
+        box_x0 = left_m
+        box_x1 = 0.978
+        box_w = max(0.20, box_x1 - box_x0)
+        box_y0 = 0.011
+        box_h = 0.033 if has_zoom else 0.041
+        box_yc = box_y0 + 0.5 * box_h
+        fig.patches.append(FancyBboxPatch(
+            (box_x0, box_y0), box_w, box_h,
+            boxstyle="round,pad=0.003,rounding_size=0.006",
+            transform=fig.transFigure,
+            facecolor="#F8FAFC", edgecolor="#475569", linewidth=1.2, zorder=10,
+        ))
+        hdr_txt = f"Hardware Metrics Summary (0–{k_dur:,.1f} µs):"
+        hdr_x = box_x0 + 0.010
+        fig.text(
+            hdr_x, box_yc, hdr_txt,
+            ha="left", va="center", fontsize=8.5, fontweight="bold", color="#0F172A", zorder=11,
+        )
+        items_x0 = hdr_x + (0.195 if len(hdr_txt) <= 38 else 0.215)
+        avail_w = max(0.10, (box_x1 - 0.010) - items_x0)
+        n_hw_it = len(hw_summary_items)
+        slot_w = avail_w / max(1, n_hw_it)
+        sw_h = box_h * 0.42
+        sw_w = 0.0085
+        fs_hw = 8.1 if n_hw_it <= 4 else 7.4
+        for idx_h, (m_short, m_col, m_peak, m_mean) in enumerate(hw_summary_items):
+            ix = items_x0 + idx_h * slot_w
+            fig.patches.append(Rectangle(
+                (ix, box_yc - 0.5 * sw_h), sw_w, sw_h,
+                transform=fig.transFigure, facecolor=m_col, edgecolor="#1E293B", linewidth=0.5, zorder=11,
+            ))
+            fig.text(
+                ix + sw_w + 0.0045, box_yc,
+                f"{m_short}: Peak {m_peak:.1f}% · Mean {m_mean:.1f}%",
+                ha="left", va="center", fontsize=fs_hw, fontweight="bold", color="#1E293B", zorder=11,
+            )
 
     out_path = Path(out_png)
     out_path.parent.mkdir(parents=True, exist_ok=True)
