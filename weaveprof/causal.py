@@ -125,14 +125,25 @@ ARCH_PROFILES: Dict[str, Dict[str, Any]] = {
         "max_smem_bytes": 65536,
         "reg_file_per_sm": 65536,
         "max_regs_per_thread": 256,
+        # Unlike H20 (where nsys normalizes Tensor Active to full GH100 pipe width -> x4),
+        # export-regulated MI308X caps FP8 at 398.7 TFLOPS by throttling shader clock under
+        # dense MFMA load (~1.378 GHz vs 1.85 GHz max, 606.2T unthrottled CDNA3). Because
+        # GRBM_GUI_ACTIVE counts actual elapsed shader cycles, raw MFMA pipe duty cycle
+        # 100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE) already reaches ~82.9% at
+        # 376.7 TFLOPS (94.5% of 398.7T) and must keep tensor_active_scale = 1.0.
         "tensor_active_scale": 1.0,
         "tensor_raw_uncalibrated_ceiling": 101.0,
-        "tensor_saturated_pct": 80.0,
+        "tensor_saturated_pct": 75.0,
         "dram_saturated_pct": 70.0,
-        "nominal_hbm_tbps": 4.0,
-        "empirical_hbm_tbps": 3.40,
-        "empirical_tensor_ratio": 0.94,
-        "empirical_hbm_ratio": 0.85,
+        "unthrottled_cdna3_tflops_fp8": 606.2,
+        "nominal_tflops_fp8": 398.7,
+        "empirical_tflops_fp8": 376.7,
+        "empirical_shader_ghz_mfma": 1.378,
+        "nominal_tflops_bf16": 199.3,
+        "nominal_hbm_tbps": 5.30,
+        "empirical_hbm_tbps": 3.684,
+        "empirical_tensor_ratio": 0.85,
+        "empirical_hbm_ratio": 0.70,
     },
 }
 

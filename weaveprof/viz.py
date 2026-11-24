@@ -271,6 +271,10 @@ def _classify_hw_metric(name: str) -> Optional[str]:
         return "dram_read"
     if "dram write" in low or ("hbm" in low and "write" in low):
         return "dram_write"
+    if "communication_rx_util" in low or ("xgmi" in low and "rx" in low):
+        return "nvlink_rx_total"
+    if "communication_tx_util" in low or ("xgmi" in low and "tx" in low):
+        return "nvlink_tx_total"
     if "communication_util" in low or "xgmi" in low:
         return "intra_comm_direct"
     if "nvlink" in low:
@@ -298,16 +302,36 @@ def _pretty_hw_curve_label(raw_name: str, role: str, *, is_amd: bool, multi_node
     bracket = m.group(1).strip() if m else ""
     if role == "tensor_active":
         if bracket:
-            return f"Compute — {bracket}", "Compute"
-        return ("Compute — Matrix Core / MFMA %" if is_amd else "Tensor Active / MMA Pipe %"), "Compute"
+            b_clean = bracket
+            if is_amd:
+                b_clean = re.sub(
+                    r"%\s*of\s*606(?:\.\d+)?\s*T\b",
+                    "Pipe Active % (398.7T MI308X SKU)",
+                    b_clean,
+                    flags=re.I,
+                )
+            return f"Compute — {b_clean}", "Compute"
+        return ("Compute — Matrix Core / MFMA Pipe Active % (398.7T MI308X SKU)" if is_amd else "Tensor Active / MMA Pipe %"), "Compute"
     if role == "dram_bw":
         if bracket:
             return f"HBM — {bracket}", "HBM BW"
         return "HBM / DRAM Bandwidth (R+W) %", "HBM BW"
     if role == "nvlink_tx":
+        if is_amd:
+            prefix = "Intra-Node xGMI TX" if multi_node else "xGMI TX"
+            if bracket:
+                b_clean = re.sub(r"^(?:Intra-Node\s+)?xGMI\s*TX\s*(?:\(Out\))?\s*(?:—|-)?\s*", "", bracket, flags=re.I).strip()
+                return (f"{prefix} (Out) — {b_clean}" if b_clean else f"{prefix} (Out) %"), prefix
+            return f"{prefix} (Out) %", prefix
         prefix = "Intra-Node NVLink TX" if multi_node else "NVLink TX"
         return f"{prefix} (Egress User Data) %", prefix
     if role == "nvlink_rx":
+        if is_amd:
+            prefix = "Intra-Node xGMI RX" if multi_node else "xGMI RX"
+            if bracket:
+                b_clean = re.sub(r"^(?:Intra-Node\s+)?xGMI\s*RX\s*(?:\(In\))?\s*(?:—|-)?\s*", "", bracket, flags=re.I).strip()
+                return (f"{prefix} (In) — {b_clean}" if b_clean else f"{prefix} (In) %"), prefix
+            return f"{prefix} (In) %", prefix
         prefix = "Intra-Node NVLink RX" if multi_node else "NVLink RX"
         return f"{prefix} (Ingress User Data) %", prefix
     if role == "nvlink_bw":
@@ -2127,12 +2151,15 @@ def render_swhw_overview_png(
         ax_wp.set_xlabel("Full-kernel locked time (µs) — dashed magenta window zoomed in Panel (D)", fontsize=8.8, color="#455A64")
         # Isolate the single featured CTA in Panel (D) when a single CTA is selected, so concurrent
         # resident CTAs on the same SM never interleave their pins/stages in micro-zoom view!
-        if z_cta is not None:
-            z_main = [sp for sp in rep_main_sorted if int(sp["cta"]) == z_cta] or rep_main_sorted
+        if z_cta is not None and (zoom_cta is not None or not dual_fabric):
+            base_spans = rep_spans_for_lbl if dual_fabric else rep_main_sorted
+            z_main = [sp for sp in base_spans if int(sp["cta"]) == z_cta] or base_spans
             z_async = [sp for sp in rep_async_raw if int(sp["cta"]) == z_cta]
             z_marks = [mk for mk in rep_marks_raw if int(mk["cta"]) == z_cta]
         else:
-            z_main, z_async, z_marks = rep_main_sorted, rep_async_raw, rep_marks_raw
+            z_main = rep_spans_for_lbl if dual_fabric else rep_main_sorted
+            z_async = [] if dual_fabric else rep_async_raw
+            z_marks = [] if dual_fabric else rep_marks_raw
         _render_warp_panel(
             ax_zoom,
             rep_main=z_main,
@@ -2147,16 +2174,26 @@ def render_swhw_overview_png(
             x_lim=(z0, z1),
             k_dur=k_dur,
             is_zoom=True,
-            show_right_stats=True,
+            show_right_stats=has_async_rep,
         )
         ax_zoom.set_yticklabels(c_yticks, fontsize=yt_fs)
         ax_zoom.set_ylabel(f"{unit_nm} {rep_sm} zoom", fontsize=9.5, color="#263238")
         cta_lbl = f"CTA {z_cta} on {unit_nm} {rep_sm}" if z_cta is not None else f"{unit_nm} {rep_sm}"
+        zoom_detail_tail = (
+            "fine-grained compute & multi-fabric overlap detail"
+            if (dual_fabric and not has_async_rep)
+            else "every async issue pin (v) & stage depth"
+        )
+        zoom_xlabel_tail = (
+            "multi-role compute & inter/intra-node comm overlap detail"
+            if (dual_fabric and not has_async_rep)
+            else "isolated single-CTA async pipeline detail"
+        )
         ax_zoom.set_title(
-            f"(D) Deterministic Micro-Zoom: {cta_lbl} ({z0:.1f}–{z1:.1f} µs · {z_reason}) — every async issue pin (v) & stage depth",
+            f"(D) Deterministic Micro-Zoom: {cta_lbl} ({z0:.1f}–{z1:.1f} µs · {z_reason}) — {zoom_detail_tail}",
             fontsize=10.2, fontweight="bold", color="#880E4F", pad=6,
         )
-        ax_zoom.set_xlabel("Zoomed time (µs) — isolated single-CTA async pipeline detail", fontsize=9.5, color="#263238")
+        ax_zoom.set_xlabel(f"Zoomed time (µs) — {zoom_xlabel_tail}", fontsize=9.5, color="#263238")
     else:
         ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=9.5, color="#263238")
 

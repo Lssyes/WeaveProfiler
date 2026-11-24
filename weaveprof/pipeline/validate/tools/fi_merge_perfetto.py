@@ -83,7 +83,8 @@ def _resolve_h20_tensor_scale(in_win: list[float], gpu_name: str | None, card: s
 
 
 def _nsys(path, kernel, instance):
-    with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
+    import contextlib
+    with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
         kcols = {r[1] for r in db.execute('PRAGMA table_info("CUPTI_ACTIVITY_KIND_KERNEL")')}
         dev_expr = "k.deviceId" if "deviceId" in kcols else "NULL"

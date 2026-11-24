@@ -1438,6 +1438,44 @@ class HygieneTest(unittest.TestCase):
             p_h100 = viz._parse_trace(al_h100)
             self.assertEqual(max(v for _, v in p_h100["hw_curves"]["tensor_active"]), 24.0)
 
+    def test_mi308x_gfx942_profile_and_fullduplex_xgmi_viz(self):
+        from weaveprof import causal, viz
+        prof = causal.get_arch_profile("gfx942", "AMD Instinct MI308X")
+        self.assertEqual(prof["card"], "mi308x")
+        self.assertEqual(prof["tensor_active_scale"], 1.0)
+        self.assertAlmostEqual(prof["nominal_tflops_fp8"], 398.7, places=1)
+        self.assertAlmostEqual(prof["unthrottled_cdna3_tflops_fp8"], 606.2, places=1)
+        self.assertAlmostEqual(prof["empirical_hbm_tbps"], 3.684, places=3)
+
+        tr = {
+            "traceEvents": [
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 100.0, "name": "compute_util [FP8 Matrix Core % of 606.2T]", "args": {"value": 62.2}},
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 200.0, "name": "compute_util [FP8 Matrix Core % of 606.2T]", "args": {"value": 58.0}},
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 100.0, "name": "communication_rx_util [xGMI RX (In) — % of 287.2GB/s]", "args": {"value": 16.5}},
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 200.0, "name": "communication_rx_util [xGMI RX (In) — % of 287.2GB/s]", "args": {"value": 0.0}},
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 100.0, "name": "communication_tx_util [xGMI TX (Out) — % of 287.2GB/s]", "args": {"value": 0.0}},
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 200.0, "name": "communication_tx_util [xGMI TX (Out) — % of 287.2GB/s]", "args": {"value": 76.4}},
+                {"ph": "X", "pid": 100000, "tid": 1, "ts": 100.0, "dur": 100.0, "name": "Inter-Node RDMA Dispatch", "args": {"sm": 0, "cta": 0, "warp": 0, "wave": 0, "fabric": "inter_node_rdma"}},
+                {"ph": "X", "pid": 100000, "tid": 1, "ts": 200.0, "dur": 100.0, "name": "Intra-Node xGMI Combine", "args": {"sm": 0, "cta": 0, "warp": 0, "wave": 0, "fabric": "intra_node_xgmi"}},
+            ],
+            "otherData": {"meta": {"card": "mi308x", "arch": "gfx942", "world_size": 16}},
+        }
+        parsed = viz._parse_trace(tr)
+        # Do NOT scale MI308X MFMA % by 606.2/398.7; rewrite legacy 606.2T label cleanly
+        self.assertAlmostEqual(max(v for _, v in parsed["hw_curves"]["tensor_active"]), 62.2, places=1)
+        tc_pretty, _ = viz._pretty_hw_curve_label(parsed["hw_labels"]["tensor_active"], "tensor_active", is_amd=True, multi_node=True)
+        self.assertIn("398.7T MI308X SKU", tc_pretty)
+        self.assertNotIn("606.2T", tc_pretty)
+        # Keep xGMI RX (In) and xGMI TX (Out) as separate full-duplex curves!
+        self.assertIn("nvlink_rx", parsed["hw_curves"])
+        self.assertIn("nvlink_tx", parsed["hw_curves"])
+        self.assertAlmostEqual(max(v for _, v in parsed["hw_curves"]["nvlink_rx"]), 16.5, places=1)
+        self.assertAlmostEqual(max(v for _, v in parsed["hw_curves"]["nvlink_tx"]), 76.4, places=1)
+        rx_pretty, _ = viz._pretty_hw_curve_label(parsed["hw_labels"]["nvlink_rx"], "nvlink_rx", is_amd=True, multi_node=True)
+        tx_pretty, _ = viz._pretty_hw_curve_label(parsed["hw_labels"]["nvlink_tx"], "nvlink_tx", is_amd=True, multi_node=True)
+        self.assertIn("Intra-Node xGMI RX (In)", rx_pretty)
+        self.assertIn("Intra-Node xGMI TX (Out)", tx_pretty)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -166,6 +166,19 @@ derived value; stable semantic IDs 不变, 计算轨道可标 `compute_util [mat
 不是 primary source。旧 `configs/metrics/rocprof_gfx942_moe.json` 的 `_sum` 名称属于
 rocprofv3 explicit-PMC 词汇, 不能据此改写 same-run rocprof-sys raw track 名。
 
+### 8.1 MI308X 出口限规 SKU 算力口径辨析（为何不像 H20 那样乘常数因子，**measured**）
+
+需要严格区分 **NVIDIA H20 的硬件宽度缩减（需 `×4` 修正）** 与 **AMD MI308X 的动态限频机制（保持 `×1.0`，严禁乘 `606.2 / 398.7 = 1.52×`）**：
+
+1. **H20 (`sm_90a`) 为何必须 `×4`**：`nsys` 的 `Tensor Active [Throughput %]` 以完整 GH100 核心的每周期 Tensor 吞吐宽度为分母，而 H20 每 SM 的 Tensor 吞吐被硬件裁剪为满血 GH100 的 `1/4`，导致 100% 跑满的 H20 GEMM 原始读数封顶在 `25%`，因此必须乘以 `tensor_active_scale = 4.0`。
+2. **MI308X (`gfx942`, 80 CUs) 为何严禁乘 `1.52×`**：
+   - `rocminfo` 报告 `Max Clock Freq = 1850 MHz`，按未限频 CDNA3 理论公式计算为 `80 CU × 4 SIMD × 1024 FP8 FLOPs/clk × 1.85 GHz = 606.208 TFLOPS`；但出口合规版 MI308X 的官方物理稠密 FP8 峰值上限为 **`398.7 TFLOPS`**（BF16 为 **`199.3 TFLOPS`**）。
+   - 真机 80 µs 硬件 PMC 实测表明：MI308X 并非每周期屏蔽部分 MFMA 槽位，而是**在密集 MFMA 负载下由固件将实际着色器运行主频动态压制在 `1.373–1.380 GHz`**（由 `(GRBM_GUI_ACTIVE / 4) / dt_ns` 直接测得：`327,680 FLOPs/clk × 1.378 GHz = 451.5 TFLOPS` 原始管线时钟上限）。
+   - 因为 `100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE)` 的分母 **`GRBM_GUI_ACTIVE` 本身统计的就是降频后（`~1.38 GHz`）真实流逝的活跃着色器周期数**，频率缩减已经在分母中被自然消去！在 MI308X 真机上运行 `8192×4096×2048` 稠密 FP8 GEMM（实测 **`376.65 TFLOPS`**，已达 `398.7 TFLOPS` SKU 峰值的 **`94.5%`**）时，该公式原始读数直接达到 **`max = 82.90%`、`p95 = 76.29%`（中位数 `72.14%`）**。若错误乘上 `606.2 / 398.7 = 1.5205×`，读数将溢出至 **`126.1% > 100%`**。
+3. **图例与全双工 xGMI 规范**：
+   - Panel (A) 计算曲线应标注为 **`FP8 Matrix Core Pipe Active % (398.7T MI308X SKU)`**（表示当前 `~1.38 GHz` 真实运行主频下的 Matrix Core 管线周期占空比），绝不可误标为 `% of 606.2T`。
+   - 机内全双工 xGMI 硬件计数器（`communication_rx_util` 入向与 `communication_tx_util` 出向，单向理论带宽 `7 × 41.03 = 287.2 GB/s`）必须在 Panel (A) 中拆分为 **`Intra-Node xGMI RX (In)`** 与 **`Intra-Node xGMI TX (Out)`** 两条独立曲线，严禁做 `max()` 合并或相加。
+
 ## 9. Native Perfetto 导出与 Trace Processor 验收（capture -> validate）
 
 合并后的 Chrome JSON `.perfetto.json.gz` 只是中间调试格式, 用来检查合并结果或离线修复。
