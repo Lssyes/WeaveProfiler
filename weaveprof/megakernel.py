@@ -535,6 +535,111 @@ def _pick_table(tables: Sequence[str], name: str) -> Optional[str]:
     return next((t for t in sorted(tables) if t.startswith(name)), None)
 
 
+def _nsys_gpu_identity(conn: sqlite3.Connection, tables: Sequence[str], device_id: int) -> Tuple[Optional[str], Optional[str]]:
+    """Marketing name and chip of the GPU that ran the selected kernel (nsys ``TARGET_INFO_GPU``).
+
+    ``TARGET_INFO_GPU.id`` matches ``CUPTI_ACTIVITY_KIND_KERNEL.deviceId``. Returns ``(None, None)`` when the
+    table or columns are missing (older reports, synthetic fixtures).
+    """
+    info = "TARGET_INFO_GPU"  # exact name: a prefix match would hit TARGET_INFO_GPU_METRICS
+    if info not in tables:
+        return None, None
+    try:
+        cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{info}")')}
+        if "name" not in cols:
+            return None, None
+        chip_sel = "chipName" if "chipName" in cols else "NULL"
+        row = None
+        if "id" in cols:
+            row = conn.execute(f'SELECT name, {chip_sel} FROM "{info}" WHERE id = ? LIMIT 1', (int(device_id),)).fetchone()
+        if row is None:
+            names = conn.execute(f'SELECT DISTINCT name, {chip_sel} FROM "{info}"').fetchall()
+            row = names[0] if len(names) == 1 else None  # ambiguous mixed-GPU host: do not guess
+        if row is None:
+            return None, None
+        return (str(row[0]) if row[0] else None), (str(row[1]) if row[1] else None)
+    except sqlite3.Error:
+        return None, None
+
+
+# nsys normalizes "Tensor Active [Throughput %]" to the full GH100 die Tensor rate; H20 has 1/4 of it per SM,
+# so a saturated H20 reads ~25%. The factor and the raw ceiling come from causal.ARCH_PROFILES (single source).
+_H20_NAME_RE = re.compile(r"(?i)\bH20\b")
+
+
+def resolve_tensor_active_scale(
+    hw: Mapping[str, Any],
+    *,
+    arch: Optional[str] = None,
+    card: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Decide the Tensor Active de-normalization factor for one nsys capture.
+
+    Same rule as ``causal.calibrate_hw_series`` (factor ``tensor_active_scale``, applied only while the raw
+    in-window maximum stays at or below ``tensor_raw_uncalibrated_ceiling``), but the card is identified from the
+    GPU name nsys recorded for the profiled device whenever it is available. ``arch`` alone is never enough:
+    ``sm_90`` / ``sm_90a`` is also H100 / H200, whose Tensor Active is already relative to its own peak.
+    Without a recorded GPU name, only an explicit ``card`` naming H20 enables the correction.
+    """
+    curve = (hw.get("hw_series") or {}).get("tensor_active") or {}
+    dur = float((hw.get("kernel") or {}).get("duration_us") or 0.0)
+    pts = list(zip(curve.get("t_us") or [], curve.get("val") or []))
+    in_win = [float(v) for t, v in pts if dur <= 0.0 or 0.0 <= float(t) <= dur] or [float(v) for _, v in pts]
+    gpu_name = hw.get("gpu_name")
+    card_s = str(card or "").strip()
+    if gpu_name:
+        source = f"nsys TARGET_INFO_GPU name {gpu_name!r}"
+        is_h20 = bool(_H20_NAME_RE.search(str(gpu_name)))
+    else:
+        source = f"card={card_s or 'auto'!r} (no GPU name in the nsys report)"
+        is_h20 = bool(_H20_NAME_RE.search(card_s))
+    prof = get_arch_profile("sm_90a") if is_h20 else get_arch_profile(None, None)
+    factor = float(prof.get("tensor_active_scale") or 1.0)
+    ceiling = float(prof.get("tensor_raw_uncalibrated_ceiling") or 101.0)
+    info: Dict[str, Any] = {
+        "scale": 1.0,
+        "applied": False,
+        "card_factor": factor,
+        "source": source,
+        "raw_mean_pct": round(statistics.fmean(in_win), 3) if in_win else None,
+        "raw_max_pct": max(in_win) if in_win else None,
+        "raw_ceiling_pct": ceiling,
+    }
+    if not in_win:
+        info["reason"] = "no Tensor Active samples"
+    elif factor <= 1.0:
+        info["reason"] = "card is not die-normalized (no correction needed)"
+    elif max(in_win) > ceiling:
+        info["reason"] = f"raw max {max(in_win):g}% exceeds the {ceiling:g}% die-normalization ceiling; left raw"
+    else:
+        info.update(scale=factor, applied=True,
+                    reason=("nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is "
+                            f"1/{factor:g} of it, so values are multiplied by {factor:g} (causal.ARCH_PROFILES)"))
+    return info
+
+
+def _tensor_plateau_suspect(hw: Mapping[str, Any], scale_info: Mapping[str, Any]) -> Optional[str]:
+    """Advisory: an uncorrected Tensor Active pinned near 100/2^k while SMs Active reaches 100 (die normalization)."""
+    if scale_info.get("applied"):
+        return None
+    series = hw.get("hw_series") or {}
+    dur = float((hw.get("kernel") or {}).get("duration_us") or 0.0)
+
+    def _in_win(key: str) -> List[float]:
+        c = series.get(key) or {}
+        return [float(v) for t, v in zip(c.get("t_us") or [], c.get("val") or []) if dur <= 0.0 or 0.0 <= float(t) <= dur]
+
+    tv, sv = _in_win("tensor_active"), _in_win("sm_active")
+    if len(tv) < 10 or not sv or max(sv) < 99.0:
+        return None
+    vmax = max(tv)
+    for plateau in (25.0, 50.0):
+        if abs(vmax - plateau) <= 1.5 and sum(1 for v in tv if v >= vmax - 1.0) >= 0.2 * len(tv):
+            return (f"TENSOR_ACTIVE_PLATEAU_UNCORRECTED (advisory): Tensor Active pinned at ~{plateau:g}% while SMs "
+                    f"Active reaches 100% and no die-normalization factor was applied ({scale_info.get('source')})")
+    return None
+
+
 def extract_nsys_sqlite_fast(
     sqlite_path: Path | str,
     kernel_substr: str = "",
@@ -712,6 +817,7 @@ def extract_nsys_sqlite_fast(
         durs = sorted(b - a for a, b, _, _ in candidates)
         med = durs[(len(durs) - 1) // 2]
         start_ns, end_ns, dev_id, kname = max((l for l in candidates if l[1] - l[0] == med), key=lambda l: l[0])
+        gpu_name, gpu_chip = _nsys_gpu_identity(conn, tables, dev_id)
 
         hw_series: Dict[str, Dict[str, Any]] = {}
         interval_us: Optional[float] = None
@@ -778,6 +884,8 @@ def extract_nsys_sqlite_fast(
             "launches": len(launches),
             "warm_selection": "median_of_warm_launches" if len(launches) > 1 else "single_launch",
         },
+        "gpu_name": gpu_name,
+        "gpu_chip": gpu_chip,
         "hw_series": hw_series,
         "in_window_samples": in_window,
         "sample_interval_us": _r(interval_us),
@@ -1174,8 +1282,12 @@ _HW_METRIC_ORDER = (
 )
 
 
-def _hw_counter_events(hw: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Build topmost Rendering Contract R6 hardware timeline events (pid=1, sort_index=-1000)."""
+def _hw_counter_events(hw: Mapping[str, Any], tensor_scale: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Build topmost Rendering Contract R6 hardware timeline events (pid=1, sort_index=-1000).
+
+    ``tensor_scale`` is the result of :func:`resolve_tensor_active_scale`; when it is applied, the Tensor Active
+    counter is written corrected (e.g. x4 on H20) and the raw statistics go into the nsys kernel-window args.
+    """
     pid = _HW_PID
     series = hw.get("hw_series") or {}
     kernel = hw.get("kernel") or {}
@@ -1196,19 +1308,35 @@ def _hw_counter_events(hw: Mapping[str, Any]) -> List[Dict[str, Any]]:
             k_args["sample_freq_hz"] = hw["sample_freq_hz"]
         if hw.get("in_window_samples") is not None:
             k_args["in_window_samples"] = hw["in_window_samples"]
+        if hw.get("gpu_name"):
+            k_args["gpu_name"] = hw["gpu_name"]
+        if tensor_scale:
+            # Raw nsys statistics stay auditable next to the corrected curve.
+            k_args["tensor_active_scale"] = float(tensor_scale.get("scale") or 1.0)
+            k_args["tensor_active_raw_mean_pct"] = tensor_scale.get("raw_mean_pct")
+            k_args["tensor_active_raw_max_pct"] = tensor_scale.get("raw_max_pct")
+            k_args["tensor_active_scale_reason"] = tensor_scale.get("reason")
         tev.append({
             "ph": "X", "pid": pid, "tid": 1, "ts": 0.0, "dur": float(kernel["duration_us"]),
             "name": str(kernel.get("name") or "kernel")[:120], "cat": "nsys_kernel", "args": k_args,
         })
+    t_scale = float(tensor_scale.get("scale") or 1.0) if tensor_scale and tensor_scale.get("applied") else 1.0
     ordered_keys = [k for k in _HW_METRIC_ORDER if k in series] + [k for k in series if k not in _HW_METRIC_ORDER]
     for key in ordered_keys:
         curve = series[key]
         label = str(curve.get("metric_name") or key)
+        scale = 1.0
+        if key == "tensor_active" and t_scale != 1.0:
+            # Only the corrected curve is emitted: viz merges every "tensor" counter with a per-timestamp max and
+            # labels the lane with the first name it sees, so emitting raw + corrected would mislabel the lane.
+            # "<role> [<text>]" makes viz._pretty_hw_curve_label use the bracket text as the legend.
+            scale = t_scale
+            label = f"tensor_active [Tensor Active x{t_scale:g} (H20 die-normalization corrected)]"
         for t, v in zip(curve.get("t_us") or [], curve.get("val") or []):
             tf = float(t)
             if tf < 0.0:
                 continue  # Perfetto rejects negative timestamps
-            tev.append({"ph": "C", "pid": pid, "ts": tf, "name": label, "args": {"pct": float(v)}})
+            tev.append({"ph": "C", "pid": pid, "ts": tf, "name": label, "args": {"pct": min(100.0, float(v) * scale)}})
     return tev
 
 
@@ -1218,6 +1346,7 @@ def _merge_hw_trace(
     *,
     summary: Optional[Mapping[str, Any]] = None,
     names: Optional[Mapping[str, Any]] = None,
+    tensor_scale: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Shift software PIDs by +100 and prepend topmost nsys hardware timeline events."""
     trace_doc = dict(trace)
@@ -1262,8 +1391,10 @@ def _merge_hw_trace(
                     args_m["sort_index"] = int(args_m["sort_index"]) + _SW_PID_SHIFT
                 ev["args"] = args_m
         sw_events.append(ev)
-    trace_doc["traceEvents"] = _hw_counter_events(hw) + sw_events
+    trace_doc["traceEvents"] = _hw_counter_events(hw, tensor_scale) + sw_events
     other["nsys_hw"] = {k: v for k, v in hw.items() if k != "hw_series"}
+    if tensor_scale:
+        other["nsys_hw"]["tensor_active_scale"] = dict(tensor_scale)
     trace_doc["otherData"] = other
     return trace_doc
 
@@ -1418,22 +1549,28 @@ def _compact_skew(skew: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _compact_hw_quartiles(hw: Mapping[str, Any]) -> Dict[str, List[float]]:
-    """4-quartile hardware utilization trajectory [Q1, Q2, Q3, Q4] for text-only LLMs."""
+    """4-quartile hardware utilization trajectory [Q1, Q2, Q3, Q4] for text-only LLMs.
+
+    Tensor Active uses the same correction as the overview PNG (``hw["tensor_active_scale"]``).
+    """
     series = hw.get("hw_series") or {}
     dur = float((hw.get("kernel") or {}).get("duration_us") or 0.0)
     if not series or dur <= 0.0:
         return {}
+    ts_info = hw.get("tensor_active_scale") or {}
+    t_scale = float(ts_info.get("scale") or 1.0) if ts_info.get("applied") else 1.0
     out: Dict[str, List[float]] = {}
     for key in ("tensor_active", "sm_active", "warp_issue", "dram_read", "dram_write"):
         curve = series.get(key)
         if not curve:
             continue
+        scale = t_scale if key == "tensor_active" else 1.0
         bins: List[List[float]] = [[], [], [], []]
         for t, v in zip(curve.get("t_us") or [], curve.get("val") or []):
             tf = float(t)
             if 0.0 <= tf <= dur:
                 idx = min(3, max(0, int(4.0 * tf / dur)))
-                bins[idx].append(float(v))
+                bins[idx].append(min(100.0, float(v) * scale))
         if any(bins):
             out[key] = [round(statistics.fmean(b), 1) if b else 0.0 for b in bins]
     return out
@@ -1717,6 +1854,13 @@ def run_megakernel_audit(
     if nsys_sqlite:
         try:
             hw = extract_nsys_sqlite_fast(nsys_sqlite, kernel_substr=str(rm.get("kernel_name") or ""))
+            # nsys_hw.json keeps the raw curves; the decision travels with them so every consumer
+            # (overview PNG, hw_quartiles, causal bundle) applies the same factor.
+            hw["tensor_active_scale"] = resolve_tensor_active_scale(
+                hw, arch=arch or (summary.get("arch") if summary else None), card=card)
+            plateau = _tensor_plateau_suspect(hw, hw["tensor_active_scale"])
+            if plateau:
+                blockers.append(plateau[:200])
             hw_path = out / "nsys_hw.json"
             write_json(hw_path, hw)
         except (OSError, ValueError, sqlite3.Error) as exc:
@@ -1739,7 +1883,7 @@ def run_megakernel_audit(
         bundle: Dict[str, Any] = {
             "target": entry.name,
             "arch": arch or summary_arch,
-            "gpu": "" if str(card).lower() == "auto" else card,
+            "gpu": hw.get("gpu_name") or ("" if str(card).lower() == "auto" else card),
             "sms": sms or skew.get("total_sms"),
             "sw_span_us": float(summary.get("span_us") or 0.0),
             "per_sm_w0": _per_sm_w0(summary, trace),
@@ -1809,7 +1953,8 @@ def run_megakernel_audit(
         "overhead_ratio": g_overhead.get("overhead_ratio"), "source_sha256": source_sha,
         "fidelity_gates": gates, "region_lock": region_lock,
     })
-    trace_doc = _merge_hw_trace(trace, hw, summary=summary, names=names_doc)
+    trace_doc = _merge_hw_trace(trace, hw, summary=summary, names=names_doc,
+                                tensor_scale=hw.get("tensor_active_scale") if hw else None)
     wrote_gz = False
     if write_perfetto_gz:
         wp.write_json(trace_doc, str(trace_path))
@@ -1911,6 +2056,7 @@ def run_megakernel_audit(
         "megakernel_skew": _compact_skew(skew),
         "stage_summary": _compact_stages(summary) if summary else {},
         "hw_quartiles": _compact_hw_quartiles(hw) if hw else {},
+        "tensor_active_scale": (hw.get("tensor_active_scale") or {}).get("scale") if hw else None,
         "causal_opportunities": _compact_opportunities(causal),
         "structural_blockers": [str(b)[:140] for b in blockers][:6],
         "round_diff": round_diff,
@@ -1929,5 +2075,5 @@ def run_megakernel_audit(
 
 __all__ = [
     "MEGAKERNEL_SCHEMA", "SKEW_SCHEMA", "NSYS_FAST_SCHEMA", "WpSoController", "analyze_megakernel_skew",
-    "extract_nsys_sqlite_fast", "run_megakernel_audit", "load_wp_decode",
+    "extract_nsys_sqlite_fast", "run_megakernel_audit", "load_wp_decode", "resolve_tensor_active_scale",
 ]

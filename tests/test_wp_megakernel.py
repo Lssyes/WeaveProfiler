@@ -453,6 +453,112 @@ class NsysSqliteTest(_TmpCase):
         self.assertEqual(set(hw["hw_series"]), {"sm_active", "tensor_active"})
         self.assertLess(hw["elapsed_ms"], 200.0)
 
+    def test_fast_extract_reports_profiled_gpu_name(self):
+        db = make_nsys_sqlite(self.tmp / "named.sqlite")
+        self.assertIsNone(mk.extract_nsys_sqlite_fast(db, "sparse_mla")["gpu_name"])  # no TARGET_INFO_GPU table
+        conn = sqlite3.connect(str(db))
+        conn.executescript(
+            "CREATE TABLE TARGET_INFO_GPU (id INTEGER, name TEXT, chipName TEXT);"
+            "INSERT INTO TARGET_INFO_GPU VALUES (0, 'NVIDIA H20', 'GH100');"
+            "INSERT INTO TARGET_INFO_GPU VALUES (1, 'NVIDIA H100 80GB HBM3', 'GH100');"
+        )
+        conn.commit()
+        conn.close()
+        hw = mk.extract_nsys_sqlite_fast(db, "sparse_mla")  # fixture kernels run on deviceId 0
+        self.assertEqual((hw["gpu_name"], hw["gpu_chip"]), ("NVIDIA H20", "GH100"))
+
+
+def _tensor_hw(vals, *, gpu_name=None, sm_vals=None, dur_us=None):
+    """Synthetic extract_nsys_sqlite_fast() result: one sample every 5 us."""
+    t_us = [5.0 * i for i in range(len(vals))]
+    hw = {
+        "kernel": {"name": "gemm", "device": 0, "duration_us": dur_us if dur_us is not None else t_us[-1]},
+        "gpu_name": gpu_name,
+        "hw_series": {
+            "tensor_active": {"t_us": t_us, "val": [float(v) for v in vals], "metric_name": "Tensor Active [Throughput %]"},
+            "sm_active": {"t_us": t_us, "val": [float(v) for v in (sm_vals or [100.0] * len(vals))],
+                          "metric_name": "SMs Active [Throughput %]"},
+        },
+    }
+    return hw
+
+
+class TensorActiveScaleTest(unittest.TestCase):
+    """nsys Tensor Active on H20 is normalized to the full GH100 die (H20 = 1/4 per SM): the overview PNG,
+    hw_quartiles and the causal analysis must all use the same x4 correction (docs/l20d_achievable_peak_rebase.md)."""
+
+    H20_RAW = [20, 25, 25, 24, 25, 25, 25, 25, 22, 25, 25, 25]
+
+    def test_h20_by_recorded_gpu_name_is_corrected_x4(self):
+        info = mk.resolve_tensor_active_scale(_tensor_hw(self.H20_RAW, gpu_name="NVIDIA H20"))
+        self.assertTrue(info["applied"])
+        self.assertEqual(info["scale"], 4.0)
+        self.assertEqual(info["raw_max_pct"], 25.0)
+        self.assertIn("NVIDIA H20", info["source"])
+
+    def test_full_gh100_parts_are_never_scaled(self):
+        for name in ("NVIDIA H200", "NVIDIA H100 80GB HBM3", "NVIDIA H200 NVL"):
+            with self.subTest(name=name):
+                info = mk.resolve_tensor_active_scale(_tensor_hw([10, 12, 15], gpu_name=name), arch="sm_90a", card="h20")
+                self.assertFalse(info["applied"], name)
+                self.assertEqual(info["scale"], 1.0)
+
+    def test_raw_above_ceiling_is_left_raw(self):
+        info = mk.resolve_tensor_active_scale(_tensor_hw([30, 45, 60], gpu_name="NVIDIA H20"))
+        self.assertFalse(info["applied"])
+        self.assertIn("ceiling", info["reason"])
+
+    def test_without_gpu_name_only_explicit_h20_card_enables_correction(self):
+        self.assertTrue(mk.resolve_tensor_active_scale(_tensor_hw(self.H20_RAW), card="h20")["applied"])
+        # sm_90a alone is also H100/H200: never infer H20 from the architecture.
+        self.assertFalse(mk.resolve_tensor_active_scale(_tensor_hw(self.H20_RAW), arch="sm_90a", card="auto")["applied"])
+
+    def test_overview_trace_and_viz_use_corrected_curve(self):
+        from weaveprof import viz
+        hw = _tensor_hw(self.H20_RAW, gpu_name="NVIDIA H20")
+        hw["tensor_active_scale"] = mk.resolve_tensor_active_scale(hw)
+        ev = mk._hw_counter_events(hw, hw["tensor_active_scale"])
+        tensor = [e for e in ev if e.get("ph") == "C" and "tensor" in e["name"].lower()]
+        self.assertEqual([e["args"]["pct"] for e in tensor], [min(100.0, 4.0 * v) for v in self.H20_RAW])
+        self.assertEqual({e["name"] for e in tensor}, {"tensor_active [Tensor Active x4 (H20 die-normalization corrected)]"})
+        window = next(e for e in ev if e.get("cat") == "nsys_kernel")
+        self.assertEqual(window["args"]["tensor_active_scale"], 4.0)
+        self.assertEqual(window["args"]["tensor_active_raw_max_pct"], 25.0)
+        self.assertEqual(window["args"]["gpu_name"], "NVIDIA H20")
+        doc = mk._merge_hw_trace({"traceEvents": []}, hw, tensor_scale=hw["tensor_active_scale"])
+        self.assertTrue(doc["otherData"]["nsys_hw"]["tensor_active_scale"]["applied"])
+        parsed = viz._parse_trace(doc)
+        self.assertEqual(max(v for _, v in parsed["hw_curves"]["tensor_active"]), 100.0)
+        self.assertIn("x4", parsed["hw_labels"]["tensor_active"])
+        # Other curves are untouched.
+        self.assertEqual(max(v for _, v in parsed["hw_curves"]["sm_active"]), 100.0)
+
+    def test_uncorrected_cards_keep_raw_values_and_name(self):
+        hw = _tensor_hw([30, 45, 60], gpu_name="NVIDIA H100 80GB HBM3")
+        hw["tensor_active_scale"] = mk.resolve_tensor_active_scale(hw)
+        ev = mk._hw_counter_events(hw, hw["tensor_active_scale"])
+        tensor = [e for e in ev if e.get("ph") == "C" and "tensor" in e["name"].lower()]
+        self.assertEqual([e["args"]["pct"] for e in tensor], [30.0, 45.0, 60.0])
+        self.assertEqual({e["name"] for e in tensor}, {"Tensor Active [Throughput %]"})
+
+    def test_quartiles_follow_the_same_factor(self):
+        hw = _tensor_hw(self.H20_RAW, gpu_name="NVIDIA H20")
+        raw_q = mk._compact_hw_quartiles(hw)["tensor_active"]
+        hw["tensor_active_scale"] = mk.resolve_tensor_active_scale(hw)
+        cor_q = mk._compact_hw_quartiles(hw)["tensor_active"]
+        for raw, cor in zip(raw_q, cor_q):
+            self.assertAlmostEqual(cor, min(100.0, 4.0 * raw), delta=0.25)  # both sides rounded to 0.1
+
+    def test_plateau_without_correction_is_flagged_advisory(self):
+        hw = _tensor_hw(self.H20_RAW)  # no GPU name, card unknown -> not corrected
+        info = mk.resolve_tensor_active_scale(hw, arch="sm_90a", card="auto")
+        msg = mk._tensor_plateau_suspect(hw, info)
+        self.assertIsNotNone(msg)
+        self.assertIn("TENSOR_ACTIVE_PLATEAU_UNCORRECTED (advisory)", msg)
+        self.assertIsNone(mk._tensor_plateau_suspect(hw, mk.resolve_tensor_active_scale(hw, card="h20")))
+        busy = _tensor_hw([20, 40, 60, 80, 95, 60, 40, 30, 20, 50, 70, 90])  # real full-range curve
+        self.assertIsNone(mk._tensor_plateau_suspect(busy, mk.resolve_tensor_active_scale(busy)))
+
 
 class WpSoControllerTest(unittest.TestCase):
     def test_ctypes_plumbing_with_fake_library(self):
@@ -567,6 +673,40 @@ class MegakernelAuditTest(_TmpCase):
         self.assertEqual(rep2["status"], "PASS")
         self.assertIsNotNone(rep2["round_diff"])
         self.assertTrue(rep2["causal_opportunities"])
+
+    def test_h20_tensor_active_x4_end_to_end(self):
+        """Workflow B on an H20 capture: overview trace, hw_quartiles and feedback all carry the x4 correction."""
+        db = make_nsys_sqlite(self.tmp / "h20.sqlite")
+        conn = sqlite3.connect(str(db))
+        conn.executescript(
+            "UPDATE GPU_METRICS SET value = 25 WHERE metricId = 2;"  # Tensor Active pinned at the H20 ceiling
+            "CREATE TABLE TARGET_INFO_GPU (id INTEGER, name TEXT, chipName TEXT);"
+            "INSERT INTO TARGET_INFO_GPU VALUES (0, 'NVIDIA H20', 'GH100');"
+        )
+        conn.commit()
+        conn.close()
+        ws = self._workspace()
+        dump = write_dump(self.tmp / "h20.wp02.bin")
+        rep = mk.run_megakernel_audit(
+            ws, entry_source="sparse_mla.cu", dump_path=dump, names=NAMES, runtime_metrics=runtime_metrics(),
+            nsys_sqlite=db, card="auto", limit=0.10, out_dir=self.tmp / "out-h20",
+            render_overview_png=False, write_perfetto_gz=True)
+        self.assertEqual(rep["status"], "PASS", rep)
+        self.assertEqual(rep["tensor_active_scale"], 4.0)
+        if "hw_quartiles" in rep:
+            self.assertEqual(rep["hw_quartiles"]["tensor_active"], [100.0, 100.0, 100.0, 100.0])
+        self.assertFalse(any("PLATEAU" in b for b in rep["structural_blockers"]), rep["structural_blockers"])
+        out = self.tmp / "out-h20"
+        nsys_hw = json.loads((out / "nsys_hw.json").read_text(encoding="utf-8"))
+        self.assertEqual(nsys_hw["gpu_name"], "NVIDIA H20")
+        self.assertTrue(nsys_hw["tensor_active_scale"]["applied"])
+        self.assertEqual(nsys_hw["hw_series"]["tensor_active"]["val"][0], 25.0)  # raw curve kept on disk
+        import gzip as _gzip
+        tr = json.loads(_gzip.decompress((out / "trace.perfetto.json.gz").read_bytes()).decode("utf-8"))
+        tensor = [e for e in tr["traceEvents"] if e.get("ph") == "C" and "tensor" in e["name"].lower()]
+        self.assertTrue(tensor)
+        self.assertEqual({e["args"]["pct"] for e in tensor}, {100.0})
+        self.assertEqual(tr["otherData"]["nsys_hw"]["tensor_active_scale"]["scale"], 4.0)
 
     def test_revise_probe_spec_preserves_dominant_semantic_stage(self):
         from weaveprof.contract import revise_probe_spec
