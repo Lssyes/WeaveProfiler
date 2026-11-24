@@ -70,51 +70,88 @@ _STAGE_DRAW_PRIORITY = {
 _ASYNC_ENGINE_STYLE: Dict[str, Dict[str, Any]] = {
     "mem": {
         "short": "mem",
-        # Unified emerald/green family: 5-shade depth strip + vivid emerald-green ▼ issue pin
-        "depth_colors": ("#B2F2D8", "#6CE0B5", "#28BF8C", "#108E65", "#075C40"),
-        "rail_bg": "#F2F7F5",
-        "rail_ec": "#D2E0DC",
-        "pin_color": "#008556",                              # vivid emerald green ▼ (distinct from blue, never near-black)
+        # High-contrast 5-stop sequential ramp (Lime -> Aqua-Mint -> Vivid Emerald -> Forest -> Deep Pine)
+        "depth_colors": ("#D9F99D", "#5EEAD4", "#10B981", "#047857", "#022C22"),
+        "rail_bg": "#F1F5F9",
+        "rail_ec": "#CBD5E1",
+        "pin_color": "#047857",                              # crisp dark emerald ▼ issue pin
         "pin_label": "Mem Async Issue (v)",
-        "depth_label": "Mem In-Flight Depth (1/2/3/4/5+)",
+        "depth_label": "Mem In-Flight Depth",
         "panel_b_color": "#0E8561",
     },
     "mma": {
         "short": "mma",
-        # Unified azure/cobalt family: 5-shade depth strip + vivid cobalt-blue ▼ issue pin
-        "depth_colors": ("#B3D6FF", "#6EB0FF", "#2E80F0", "#1455C8", "#0B3282"),
-        "rail_bg": "#F1F5FB",
-        "rail_ec": "#CFDCEB",
-        "pin_color": "#0047D4",                              # vivid cobalt blue ▼ (pure blue, never purple/near-black)
+        # High-contrast sequential azure/cobalt ramp
+        "depth_colors": ("#DBEAFE", "#93C5FD", "#3B82F6", "#1D4ED8", "#1E3A8A"),
+        "rail_bg": "#F1F5F9",
+        "rail_ec": "#CBD5E1",
+        "pin_color": "#1D4ED8",                              # vivid cobalt blue ▼ issue pin
         "pin_label": "MMA Async Issue (v)",
-        "depth_label": "MMA In-Flight Depth (1/2/3/4/5+)",
+        "depth_label": "MMA In-Flight Depth",
         "panel_b_color": "#1B4DB1",
     },
 }
 
 
-def _depth_to_bucket(depth: int, scale_max: int) -> int:
-    """Map integer in-flight depth >= 1 into 5 monotonic color buckets (0..4)."""
-    if scale_max >= 7:
-        # Deep pipelines (e.g. Triton num_stages=5..6 -> 6..10 cp.async groups): 1, 2, 3-4, 5-6, 7+
-        if depth <= 1:
-            return 0
-        if depth == 2:
-            return 1
-        if depth <= 4:
-            return 2
-        if depth <= 6:
-            return 3
-        return 4
-    return min(4, max(0, int(depth) - 1))
+def _depth_bins_spec(eng: str, scale_max: int) -> List[Tuple[int, int, str, str]]:
+    """Return explicit ``(lo_depth, hi_depth, hex_color, short_label)`` bins for ``depth >= 1``.
+
+    Adapts to ``scale_max`` so every active depth step (including paired A+B ``cp.async`` steps
+    ``2, 4, 6, 8`` on deep-pipelined Triton GEMM and exact integer steps ``1, 2, 3`` on CDNA3 / TMA)
+    gets a perceptually distinct color AND an exact depth label in the legend.
+    """
+    smax = max(1, int(scale_max))
+    if eng == "mma":
+        if smax <= 1:
+            return [(1, 1, "#2563EB", "d=1")]
+        if smax == 2:
+            return [(1, 1, "#93C5FD", "d=1"), (2, 2, "#1D4ED8", "d=2")]
+        if smax == 3:
+            return [(1, 1, "#BFDBFE", "d=1"), (2, 2, "#3B82F6", "d=2"), (3, 3, "#1E3A8A", "d=3")]
+        return [
+            (1, 1, "#DBEAFE", "d=1"),
+            (2, 2, "#60A5FA", "d=2"),
+            (3, 3, "#2563EB", "d=3"),
+            (4, smax, "#1E3A8A", "d=4" if smax == 4 else f"d=4–{smax}"),
+        ]
+    # MEM engine (`cp.async` / `TMA` / `vmcnt`)
+    if smax <= 1:
+        return [(1, 1, "#10B981", "d=1")]
+    if smax == 2:
+        return [(1, 1, "#86EFAC", "d=1"), (2, 2, "#047857", "d=2")]
+    if smax == 3:
+        return [(1, 1, "#BEF264", "d=1"), (2, 2, "#10B981", "d=2"), (3, 3, "#064E3B", "d=3")]
+    if smax == 4:
+        return [
+            (1, 1, "#D9F99D", "d=1"),
+            (2, 2, "#5EEAD4", "d=2"),
+            (3, 3, "#10B981", "d=3"),
+            (4, 4, "#064E3B", "d=4"),
+        ]
+    if smax in (5, 6):
+        return [
+            (1, 1, "#D9F99D", "d=1"),
+            (2, 2, "#6EE7B7", "d=2"),
+            (3, 3, "#10B981", "d=3"),
+            (4, 4, "#047857", "d=4"),
+            (5, smax, "#022C22", "d=5" if smax == 5 else f"d=5–{smax}"),
+        ]
+    # smax >= 7 (e.g. Triton num_stages=5 -> 8 cp.async groups stepping 2, 4, 6, 8)
+    return [
+        (1, 2, "#D9F99D", "d=1–2"),
+        (3, 4, "#5EEAD4", "d=3–4"),
+        (5, 6, "#10B981", "d=5–6"),
+        (7, smax, "#064E3B", f"d=7–{smax}"),
+    ]
 
 
-def _depth_scale_label(scale_max: int) -> str:
-    if scale_max >= 7:
-        return f"1/2/3-4/5-6/7+ (max {scale_max})"
-    if scale_max >= 4:
-        return f"1/2/3/4/5+ (max {scale_max})"
-    return "1/2/3+"
+def _depth_to_bucket_color(eng: str, depth: int, scale_max: int) -> Tuple[int, str]:
+    bins = _depth_bins_spec(eng, scale_max)
+    d_i = max(1, int(depth))
+    for idx, (lo, hi, col, _lbl) in enumerate(bins):
+        if lo <= d_i <= hi:
+            return idx, col
+    return len(bins) - 1, bins[-1][2]
 
 # Dual-color Inter-Node vs Intra-Node Fabric Palette (NVIDIA IB/RDMA vs NVLink, AMD RDMA vs xGMI).
 # Warm crimson / amber is strictly reserved for Inter-Node RDMA / IB; cool teal / royal blue for
@@ -1027,8 +1064,9 @@ def _pick_micro_zoom_window(
         its = cta_iter_ts.get(c_id) or _dedup_sorted(cta_issues.get(c_id, ()))
         n_it = len(its)
         w_us = cta_wait.get(c_id, 0.0)
-        if n_it > 48:
-            # Cap strictly to 32 iterations centered on worst wait bubble (or steady midpoint)
+        if n_it > 108:
+            # Cap strictly to 32 iterations centered on worst wait bubble when CTA has >108 issues
+            # (Note: 32-K-tile GEMM with 2 cp.async + 1 wgmma per K-tile emits 96 issues <= 108, preserving full prologue & drain!)
             ws = cta_wait_spans.get(c_id, [])
             if ws:
                 peak_t = max(ws, key=lambda x: x[1] - x[0])[0]
@@ -1362,7 +1400,7 @@ def _render_warp_panel(
                 for s0, s1, d in d_segs:
                     cx0, cx1 = max(x_lo, s0), min(x_hi, s1)
                     if cx1 > cx0:
-                        bucket = _depth_to_bucket(d, smax)
+                        bucket, _bcol = _depth_to_bucket_color(eng, d, smax)
                         depth_polys[(eng, bucket)].append([(cx0, y_top), (cx1, y_top), (cx1, y_bot), (cx0, y_bot)])
 
                 # Prominent Fixed-Pixel ▼ Async Issue Pins (with clean Adaptive LOD so emerald depth strip stays crisp!)
@@ -1429,7 +1467,8 @@ def _render_warp_panel(
                     rail_polys[eng], facecolors=st["rail_bg"], edgecolors=st["rail_ec"],
                     linewidths=0.45, zorder=2.2,
                 ))
-            for bucket, dcol in enumerate(st["depth_colors"]):
+            bins_eng = _depth_bins_spec(eng, eng_scale_max.get(eng, 1))
+            for bucket, (_lo_d, _hi_d, dcol, _dlbl) in enumerate(bins_eng):
                 polys = depth_polys.get((eng, bucket))
                 if polys:
                     ax.add_collection(PolyCollection(
@@ -1782,7 +1821,8 @@ def render_swhw_overview_png(
                         label=desc,
                     ))
 
-        # Add clean async engine legend handles (Issue ▼ pin + dynamic 5-shade In-Flight Depth strip) on demand!
+        # Build dedicated, crystal-clear per-depth color key (`async_depth_handles`) so every shade has its exact `d=` label!
+        async_depth_handles: List[Any] = []
         rep_eng_max: Dict[str, int] = {}
         for eng in active_async_engines:
             by_wc: Dict[Tuple[int, int], List[Tuple[float, float]]] = defaultdict(list)
@@ -1793,17 +1833,23 @@ def render_swhw_overview_png(
 
         for eng in active_async_engines:
             st = _ASYNC_ENGINE_STYLE[eng]
-            top_legend_handles.append(Line2D(
+            eng_u = eng.upper()
+            async_depth_handles.append(Line2D(
                 [0], [0], marker="v", color=st["pin_color"], markerfacecolor=st["pin_color"],
-                markeredgecolor="#FFFFFF", markeredgewidth=0.6, markersize=7.5, lw=1.6,
-                label=f"{eng.upper()} Async Issue",
+                markeredgecolor="#FFFFFF", markeredgewidth=0.6, markersize=7.2, lw=1.4,
+                label=f"{eng_u} Issue",
             ))
             if has_async_depth.get(eng):
-                smax = rep_eng_max.get(eng, 3)
-                top_legend_handles.append(Patch(
-                    facecolor=st["depth_colors"][3], edgecolor=st["depth_colors"][1], linewidth=1.2,
-                    label=f"{eng.upper()} In-Flight Depth ({_depth_scale_label(smax)})",
+                smax = max(1, rep_eng_max.get(eng, 1))
+                async_depth_handles.append(Patch(
+                    facecolor=st["rail_bg"], edgecolor="#94A3B8", linewidth=0.75,
+                    label=f"{eng_u} d=0",
                 ))
+                for _lo_d, _hi_d, dcol, dlbl in _depth_bins_spec(eng, smax):
+                    async_depth_handles.append(Patch(
+                        facecolor=dcol, edgecolor="#334155", linewidth=0.6,
+                        label=f"{eng_u} {dlbl}",
+                    ))
 
         def _span_color(sp: Mapping[str, Any]) -> str:
             if sp.get("async_engine") in _ASYNC_ENGINE_STYLE:
@@ -1811,17 +1857,24 @@ def render_swhw_overview_png(
             lbl = str(sp.get("label") or sp["sem"]).strip()
             return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
 
-        n_leg_rows = 1
+        has_second_async_leg = bool(async_depth_handles)
         if top_legend_handles:
             n_leg_cols = min(len(top_legend_handles), 7)
-            n_leg_rows = (len(top_legend_handles) + n_leg_cols - 1) // max(n_leg_cols, 1)
-            leg_y = 0.934 if has_zoom else (0.928 if has_hw else 0.916)
+            leg_y = (0.942 if has_second_async_leg else 0.934) if has_zoom else (0.934 if has_hw else 0.916)
             fig.legend(
                 handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, leg_y),
                 ncol=n_leg_cols, frameon=False,
-                fontsize=7.9 if n_leg_cols >= 7 else 8.4,
-                handlelength=1.35 if n_leg_cols >= 7 else 1.4,
-                columnspacing=0.95 if n_leg_cols >= 7 else 1.35,
+                fontsize=8.1 if n_leg_cols >= 7 else 8.5,
+                handlelength=1.35, columnspacing=1.15,
+            )
+        if has_second_async_leg:
+            n_acol = min(len(async_depth_handles), 11)
+            aleg_y = 0.919 if has_zoom else (0.910 if has_hw else 0.892)
+            fig.legend(
+                handles=async_depth_handles, loc="upper center", bbox_to_anchor=(0.5, aleg_y),
+                ncol=n_acol, frameon=True, facecolor="#F8FAFC", edgecolor="#CBD5E1",
+                fontsize=7.65 if n_acol >= 9 else 8.0,
+                handlelength=1.25, handletextpad=0.38, columnspacing=0.82, borderpad=0.28,
             )
 
     x_pad = max(1.0, t_max * 0.015)
@@ -2111,7 +2164,9 @@ def render_swhw_overview_png(
     max_lbl = max((len(s) for s in yt_labels), default=10)
     left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
     right_m = (0.795 if len(active_async_engines) >= 2 else 0.825) if has_async_rep else 0.985
-    extra_leg = 0.022 if (not dual_fabric and len(top_legend_handles) > 7) else 0.0
+    extra_leg = (0.022 if (not dual_fabric and len(top_legend_handles) > 7) else 0.0) + (
+        0.026 if (not dual_fabric and bool(active_async_engines)) else 0.0
+    )
     if has_zoom:
         top_m = min(0.862, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else min(0.870, 1.0 - 1.85 / fig_h) - extra_leg
     else:
