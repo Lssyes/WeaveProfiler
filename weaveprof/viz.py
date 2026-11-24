@@ -2238,11 +2238,12 @@ def render_swhw_overview_png(
         top_m = min(0.862, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else min(0.870, 1.0 - 1.85 / fig_h) - extra_leg
     else:
         top_m = 0.855 if (has_hw and dual_fabric) else (min(0.805, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else 0.835)
-    bottom_m = (0.088 if has_zoom else 0.104) if hw_summary_items else (0.055 if has_zoom else 0.065)
+    show_hw_box = bool(hw_summary_items) and not dual_fabric
+    bottom_m = (0.088 if has_zoom else 0.104) if show_hw_box else (0.055 if has_zoom else 0.065)
     fig.subplots_adjust(left=left_m, right=right_m, top=top_m, bottom=bottom_m)
 
     # ---- Bottom Hardware Metrics Summary Box (Peak & Mean for every hardware metric) ----
-    if hw_summary_items:
+    if show_hw_box:
         from matplotlib.patches import FancyBboxPatch
         box_x0 = left_m
         box_x1 = 0.978
