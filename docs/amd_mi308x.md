@@ -166,18 +166,24 @@ derived value; stable semantic IDs 不变, 计算轨道可标 `compute_util [mat
 不是 primary source。旧 `configs/metrics/rocprof_gfx942_moe.json` 的 `_sum` 名称属于
 rocprofv3 explicit-PMC 词汇, 不能据此改写 same-run rocprof-sys raw track 名。
 
-### 8.1 MI308X 出口限规 SKU 算力口径辨析（为何不像 H20 那样乘常数因子，**measured**）
+### 8.1 MI308X 出口限规 SKU 算力口径校准：双层限规机制（`1.85 GHz → 1.378 GHz` 降频 + `451.5T → 398.7T` 功耗/占空封顶，**measured**）
 
-需要严格区分 **NVIDIA H20 的硬件宽度缩减（需 `×4` 修正）** 与 **AMD MI308X 的动态限频机制（保持 `×1.0`，严禁乘 `606.2 / 398.7 = 1.52×`）**：
+需要严格区分 **NVIDIA H20 的 `1/4` 管线宽度裁剪（需 `×4.0`）**、**错误乘未限频 `606.2T / 398.7T = 1.5205×`（会溢出至 `126.1%`）** 与 **MI308X 真实的 `398.7 TFLOPS` 物理吞吐重归一（`×1.1325` 相对 `1.378 GHz` 管线周期上限，同 [l20d_achievable_peak_rebase.md](l20d_achievable_peak_rebase.md)）**：
 
-1. **H20 (`sm_90a`) 为何必须 `×4`**：`nsys` 的 `Tensor Active [Throughput %]` 以完整 GH100 核心的每周期 Tensor 吞吐宽度为分母，而 H20 每 SM 的 Tensor 吞吐被硬件裁剪为满血 GH100 的 `1/4`，导致 100% 跑满的 H20 GEMM 原始读数封顶在 `25%`，因此必须乘以 `tensor_active_scale = 4.0`。
-2. **MI308X (`gfx942`, 80 CUs) 为何严禁乘 `1.52×`**：
-   - `rocminfo` 报告 `Max Clock Freq = 1850 MHz`，按未限频 CDNA3 理论公式计算为 `80 CU × 4 SIMD × 1024 FP8 FLOPs/clk × 1.85 GHz = 606.208 TFLOPS`；但出口合规版 MI308X 的官方物理稠密 FP8 峰值上限为 **`398.7 TFLOPS`**（BF16 为 **`199.3 TFLOPS`**）。
-   - 真机 80 µs 硬件 PMC 实测表明：MI308X 并非每周期屏蔽部分 MFMA 槽位，而是**在密集 MFMA 负载下由固件将实际着色器运行主频动态压制在 `1.373–1.380 GHz`**（由 `(GRBM_GUI_ACTIVE / 4) / dt_ns` 直接测得：`327,680 FLOPs/clk × 1.378 GHz = 451.5 TFLOPS` 原始管线时钟上限）。
-   - 因为 `100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE)` 的分母 **`GRBM_GUI_ACTIVE` 本身统计的就是降频后（`~1.38 GHz`）真实流逝的活跃着色器周期数**，频率缩减已经在分母中被自然消去！在 MI308X 真机上运行 `8192×4096×2048` 稠密 FP8 GEMM（实测 **`376.65 TFLOPS`**，已达 `398.7 TFLOPS` SKU 峰值的 **`94.5%`**）时，该公式原始读数直接达到 **`max = 82.90%`、`p95 = 76.29%`（中位数 `72.14%`）**。若错误乘上 `606.2 / 398.7 = 1.5205×`，读数将溢出至 **`126.1% > 100%`**。
-3. **图例与全双工 xGMI 规范**：
-   - Panel (A) 计算曲线应标注为 **`FP8 Matrix Core Pipe Active % (398.7T MI308X SKU)`**（表示当前 `~1.38 GHz` 真实运行主频下的 Matrix Core 管线周期占空比），绝不可误标为 `% of 606.2T`。
-   - 机内全双工 xGMI 硬件计数器（`communication_rx_util` 入向与 `communication_tx_util` 出向，单向理论带宽 `7 × 41.03 = 287.2 GB/s`）必须在 Panel (A) 中拆分为 **`Intra-Node xGMI RX (In)`** 与 **`Intra-Node xGMI TX (Out)`** 两条独立曲线，严禁做 `max()` 合并或相加。
+1. **H20 (`sm_90a`) 为何乘 `×4.0`**：`nsys` 的 `Tensor Active` 以完整 GH100 核心宽度为分母，H20 硬件裁剪为 `1/4`，满载原始读数封顶 `25%`，故乘 `tensor_active_scale = 4.0`。
+2. **MI308X (`gfx942`, 80 CUs) 的双层物理限规机制（80 µs 硬件 PMC 实测标定）**：
+   - 未限频 CDNA3 理论值（`rocminfo Max Clock = 1850 MHz`）：`80 CU × 4 SIMD × 1024 FP8 FLOPs/clk × 1.85 GHz = 606.208 TFLOPS`；而出口合规版 MI308X 官方物理稠密 FP8 峰值上限为 **`398.7 TFLOPS`**（BF16 为 **`199.3 TFLOPS`**）。
+   - **第一层（动态限频 `606.2T → 451.5T`）**：真机运行稠密 FP8 GEMM 与 MegaMoE 时，由 `(GRBM_GUI_ACTIVE / 4) / dt_ns` 实测着色器主频稳定在 **`1.377–1.382 GHz`**，对应 `100%` 管线占空时的理论时钟速率为 **`327,680 FLOPs/clk × 1.378 GHz = 451.5 TFLOPS`**。因为 `GRBM_GUI_ACTIVE` 已经按 `~1.378 GHz` 计数，这一层 `1.85 / 1.378 = 1.34×` 降频已在 `GRBM_GUI_ACTIVE` 分母中消去（若再误乘 `606.2 / 398.7 = 1.5205×`，`376.65 TFLOPS` 稠密 GEMM 会溢出至 **`126.1% > 100%`**）。
+   - **第二层（SKU 功耗/发射占空封顶 `451.5T → 398.7T`，即 `1.1325×` 残余分母偏置）**：注意 `451.5 TFLOPS` 仍高于 MI308X 物理上限 `398.7 TFLOPS` 达 **`451.5 / 398.7 = 1.1325×`**！实测 `8192×4096×2048` 稠密 FP8 GEMM 达到 **`376.65 TFLOPS`**（已达 `398.7T` 物理上限的 **`94.5%`**）时，原始周期占空比 `100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE)` 仅读到 **`max = 82.90%`、`p95 = 76.29%`**（因为 `376.65 / 451.5 = 83.4%`，永远无法触及 `100%`）。
+3. **正确的两种计算口径（严禁混用）**：
+   - **Per-dispatch 无逐拍墙钟聚合（`rocprof-sys` 通用精度）**：保持第 8 节 `100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE)`，标注为 **`Matrix Core Pipe Active % (398.7T MI308X SKU)`**（判读时注意 `100%` SKU 峰值对应 `~88.3%` 管线占空、稠密 GEMM 实测天花板 `~76.3%–82.9%`）。
+   - **HSA 墙钟逐区间 FP8 硬件采样（`device_counting_service`）**：由于每拍 `SQ_VALU_MFMA_BUSY_CYCLES` 严格执行 `1,024` 次 FP8 乘加（`v_mfma_f32_16x16x32_fp8_fp8`：`16,384 FLOPs / 16 cycles`），直接与 HBM（`bytes / dt / 3684 GB/s`）、xGMI（`bytes / dt / 287.2 GB/s`）统一按 **真实物理工作量 / `dt` / MI308X 物理上限 `398.7 TFLOPS`** 归一化：
+     ```text
+     compute_util [FP8 Matrix Core % of 398.7T] =
+         100 * (d(SQ_VALU_MFMA_BUSY_CYCLES) * 1024) / (dt_s * 398.7e12)
+     ```
+     该精确公式在 `376.65 TFLOPS` 稠密 FP8 GEMM 上直接读出 **`94.5%`**（与 `2MNK/dt` 吻合至 `<0.5%`，绝不溢出 `100%`）；在双机 16 卡 EP16 MegaMoE（`qwen38max S=16384`，含 `100/640 = 15.6%` 常驻通信 Wave）上全卡峰值读出 **`70.4%`（`280.64 TFLOPS`）**，折算至 **`540/640`（`84.4%`）计算 Wave 池**的算力利用率达 **`83.4%`（占稠密 GEMM 实测天花板 `376.7T` 的 `88.3%`）**。
+4. **全双工 xGMI 规范**：机内全双工 xGMI 硬件计数器（`communication_rx_util` 入向与 `communication_tx_util` 出向，单向理论带宽 `7 × 41.03 = 287.2 GB/s`）必须在 Panel (A) 中拆分为 **`Intra-Node xGMI RX (In)`** 与 **`Intra-Node xGMI TX (Out)`** 两条独立曲线，严禁做 `max()` 合并或相加。
 
 ## 9. Native Perfetto 导出与 Trace Processor 验收（capture -> validate）
 

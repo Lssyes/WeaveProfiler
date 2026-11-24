@@ -126,16 +126,23 @@ ARCH_PROFILES: Dict[str, Dict[str, Any]] = {
         "reg_file_per_sm": 65536,
         "max_regs_per_thread": 256,
         # Unlike H20 (where nsys normalizes Tensor Active to full GH100 pipe width -> x4),
-        # export-regulated MI308X caps FP8 at 398.7 TFLOPS by throttling shader clock under
-        # dense MFMA load (~1.378 GHz vs 1.85 GHz max, 606.2T unthrottled CDNA3). Because
-        # GRBM_GUI_ACTIVE counts actual elapsed shader cycles, raw MFMA pipe duty cycle
-        # 100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE) already reaches ~82.9% at
-        # 376.7 TFLOPS (94.5% of 398.7T) and must keep tensor_active_scale = 1.0.
+        # export-regulated MI308X caps FP8 at 398.7 TFLOPS (vs 606.2T @ 1.85 GHz unthrottled CDNA3)
+        # via BOTH dynamic shader clock throttling (~1.378 GHz -> 451.5T raw pipe clock ceiling)
+        # AND power/issue duty-cycle capping (~88.3% max duty at 1.378 GHz -> 398.7T SKU cap).
+        # Consequently:
+        #   - Raw pipe duty 100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE) divides by
+        #     ~451.5T (reaching 82.9% max / 76.3% p95 at 376.7T = 94.5% of 398.7T; multiplying by
+        #     606.2/398.7 = 1.5205x would overflow to 126.1%, whereas 451.5/398.7 = 1.1325x).
+        #   - Timestamped periodic FP8 PMC sampling computes exact SKU utilization directly via
+        #     100 * (d_mfma * 1024 FLOPs) / (dt * 398.7e12) -> 94.5% on dense GEMM, 70.4% whole-GPU
+        #     (83.4% on the 540/640 Compute wave pool) on EP16 MegaMoE.
         "tensor_active_scale": 1.0,
         "tensor_raw_uncalibrated_ceiling": 101.0,
-        "tensor_saturated_pct": 75.0,
+        "tensor_saturated_pct": 70.0,
         "dram_saturated_pct": 70.0,
         "unthrottled_cdna3_tflops_fp8": 606.2,
+        "raw_pipe_clock_tflops_fp8": 451.5,
+        "pipe_to_sku_fp8_rebase": 1.1325,
         "nominal_tflops_fp8": 398.7,
         "empirical_tflops_fp8": 376.7,
         "empirical_shader_ghz_mfma": 1.378,

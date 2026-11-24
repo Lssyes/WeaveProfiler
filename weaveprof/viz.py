@@ -310,6 +310,12 @@ def _pretty_hw_curve_label(raw_name: str, role: str, *, is_amd: bool, multi_node
                     b_clean,
                     flags=re.I,
                 )
+                b_clean = re.sub(
+                    r"%\s*of\s*398\.7\s*T\b(?!\s*(?:MI308X|SKU))",
+                    "% of 398.7T MI308X SKU",
+                    b_clean,
+                    flags=re.I,
+                )
             return f"Compute — {b_clean}", "Compute"
         return ("Compute — Matrix Core / MFMA Pipe Active % (398.7T MI308X SKU)" if is_amd else "Tensor Active / MMA Pipe %"), "Compute"
     if role == "dram_bw":
