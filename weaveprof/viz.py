@@ -305,19 +305,19 @@ def _pretty_hw_curve_label(raw_name: str, role: str, *, is_amd: bool, multi_node
             b_clean = bracket
             if is_amd:
                 b_clean = re.sub(
-                    r"%\s*of\s*606(?:\.\d+)?\s*T\b",
-                    "Pipe Active % (398.7T MI308X SKU)",
+                    r"%\s*of\s*(?:606|398)(?:\.\d+)?\s*T(?:\s*(?:MI308X|SKU))*",
+                    "Pipe Active %",
                     b_clean,
                     flags=re.I,
                 )
                 b_clean = re.sub(
-                    r"%\s*of\s*398\.7\s*T\b(?!\s*(?:MI308X|SKU))",
-                    "% of 398.7T MI308X SKU",
+                    r"\s*\(398(?:\.\d+)?\s*T\s*(?:MI308X\s*)?SKU\)",
+                    "",
                     b_clean,
                     flags=re.I,
-                )
+                ).strip()
             return f"Compute — {b_clean}", "Compute"
-        return ("Compute — Matrix Core / MFMA Pipe Active % (398.7T MI308X SKU)" if is_amd else "Tensor Active / MMA Pipe %"), "Compute"
+        return ("Compute — Matrix Core / MFMA Pipe Active %" if is_amd else "Tensor Active / MMA Pipe %"), "Compute"
     if role == "dram_bw":
         if bracket:
             return f"HBM — {bracket}", "HBM BW"

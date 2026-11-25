@@ -126,30 +126,30 @@ ARCH_PROFILES: Dict[str, Dict[str, Any]] = {
         "reg_file_per_sm": 65536,
         "max_regs_per_thread": 256,
         # Unlike H20 (where nsys normalizes Tensor Active to full GH100 pipe width -> x4),
-        # export-regulated MI308X caps FP8 at 398.7 TFLOPS (vs 606.2T @ 1.85 GHz unthrottled CDNA3)
-        # via BOTH dynamic shader clock throttling (~1.378 GHz -> 451.5T raw pipe clock ceiling)
-        # AND power/issue duty-cycle capping (~88.3% max duty at 1.378 GHz -> 398.7T SKU cap).
-        # Consequently:
-        #   - Raw pipe duty 100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE) divides by
-        #     ~451.5T (reaching 82.9% max / 76.3% p95 at 376.7T = 94.5% of 398.7T; multiplying by
-        #     606.2/398.7 = 1.5205x would overflow to 126.1%, whereas 451.5/398.7 = 1.1325x).
-        #   - Timestamped periodic FP8 PMC sampling computes exact SKU utilization directly via
-        #     100 * (d_mfma * 1024 FLOPs) / (dt * 398.7e12) -> 94.5% on dense GEMM, 70.4% whole-GPU
-        #     (83.4% on the 540/640 Compute wave pool) on EP16 MegaMoE.
+        # MI308X (gfx942, 80 CUs x 4 SIMDs = 320 Matrix pipes = 327,680 FP8 FLOPs/clk) has NO
+        # die-width cut and NO 88.3% hardware issue cap: pure FP8 MFMA reaches ~461.3+ TFLOPS
+        # (97.6%-99.5% pipe duty) and spill-free AGPR dense FP8 GEMM (8192x8192x4096) sustains
+        # 443.37 TFLOPS at ~1.408 GHz (96.1% of the 461.27 TFLOPS dynamic-clock ceiling, which
+        # would overflow to 111.2% if normalized by datasheet 398.7T!).
+        # Because GRBM_GUI_ACTIVE / 4 counts exact elapsed shader cycles at the live dynamic
+        # clock f_shader(t), 100 * SQ_VALU_MFMA_BUSY_CYCLES / (80 * GRBM_GUI_ACTIVE) directly
+        # measures true Matrix Core pipe duty in [0, 100]% across both per-dispatch rocprof-sys
+        # and periodic DCS sampling (62.2% whole-GPU / 73.7% on 540/640 compute waves on EP16).
         "tensor_active_scale": 1.0,
         "tensor_raw_uncalibrated_ceiling": 101.0,
         "tensor_saturated_pct": 70.0,
         "dram_saturated_pct": 70.0,
         "unthrottled_cdna3_tflops_fp8": 606.2,
-        "raw_pipe_clock_tflops_fp8": 451.5,
-        "pipe_to_sku_fp8_rebase": 1.1325,
+        "sustained_clock_ceiling_tflops_fp8": 461.3,
+        "raw_pipe_clock_tflops_fp8": 461.3,
+        "pipe_to_sku_fp8_rebase": 1.0,
         "nominal_tflops_fp8": 398.7,
-        "empirical_tflops_fp8": 376.7,
-        "empirical_shader_ghz_mfma": 1.378,
+        "empirical_tflops_fp8": 443.4,
+        "empirical_shader_ghz_mfma": 1.408,
         "nominal_tflops_bf16": 199.3,
         "nominal_hbm_tbps": 5.30,
         "empirical_hbm_tbps": 3.684,
-        "empirical_tensor_ratio": 0.85,
+        "empirical_tensor_ratio": 0.961,
         "empirical_hbm_ratio": 0.70,
     },
 }
