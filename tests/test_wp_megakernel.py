@@ -1444,15 +1444,16 @@ class HygieneTest(unittest.TestCase):
         self.assertEqual(prof["card"], "mi308x")
         self.assertEqual(prof["tensor_active_scale"], 1.0)
         self.assertAlmostEqual(prof["nominal_tflops_fp8"], 398.7, places=1)
-        self.assertAlmostEqual(prof["raw_pipe_clock_tflops_fp8"], 451.5, places=1)
-        self.assertAlmostEqual(prof["pipe_to_sku_fp8_rebase"], 1.1325, places=3)
+        self.assertAlmostEqual(prof["sustained_clock_ceiling_tflops_fp8"], 461.3, places=1)
+        self.assertAlmostEqual(prof["empirical_tflops_fp8"], 443.4, places=1)
+        self.assertAlmostEqual(prof["pipe_to_sku_fp8_rebase"], 1.0, places=3)
         self.assertAlmostEqual(prof["unthrottled_cdna3_tflops_fp8"], 606.2, places=1)
         self.assertAlmostEqual(prof["empirical_hbm_tbps"], 3.684, places=3)
 
         tr = {
             "traceEvents": [
-                {"ph": "C", "pid": 900, "tid": 1, "ts": 100.0, "name": "compute_util [FP8 Matrix Core % of 398.7T]", "args": {"value": 70.4}},
-                {"ph": "C", "pid": 900, "tid": 1, "ts": 200.0, "name": "compute_util [FP8 Matrix Core % of 398.7T]", "args": {"value": 65.8}},
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 100.0, "name": "compute_util [FP8 Matrix Core Pipe Active %]", "args": {"value": 62.2}},
+                {"ph": "C", "pid": 900, "tid": 1, "ts": 200.0, "name": "compute_util [FP8 Matrix Core Pipe Active %]", "args": {"value": 58.1}},
                 {"ph": "C", "pid": 900, "tid": 1, "ts": 100.0, "name": "communication_rx_util [xGMI RX (In) — % of 287.2GB/s]", "args": {"value": 16.5}},
                 {"ph": "C", "pid": 900, "tid": 1, "ts": 200.0, "name": "communication_rx_util [xGMI RX (In) — % of 287.2GB/s]", "args": {"value": 0.0}},
                 {"ph": "C", "pid": 900, "tid": 1, "ts": 100.0, "name": "communication_tx_util [xGMI TX (Out) — % of 287.2GB/s]", "args": {"value": 0.0}},
@@ -1463,11 +1464,14 @@ class HygieneTest(unittest.TestCase):
             "otherData": {"meta": {"card": "mi308x", "arch": "gfx942", "world_size": 16}},
         }
         parsed = viz._parse_trace(tr)
-        self.assertAlmostEqual(max(v for _, v in parsed["hw_curves"]["tensor_active"]), 70.4, places=1)
+        self.assertAlmostEqual(max(v for _, v in parsed["hw_curves"]["tensor_active"]), 62.2, places=1)
         tc_pretty, _ = viz._pretty_hw_curve_label(parsed["hw_labels"]["tensor_active"], "tensor_active", is_amd=True, multi_node=True)
-        self.assertIn("398.7T MI308X SKU", tc_pretty)
+        self.assertIn("Pipe Active %", tc_pretty)
+        self.assertNotIn("398.7T", tc_pretty)
         tc_leg, _ = viz._pretty_hw_curve_label("compute_util [FP8 Matrix Core % of 606.2T]", "tensor_active", is_amd=True, multi_node=True)
         self.assertNotIn("606.2T", tc_leg)
+        tc_leg398, _ = viz._pretty_hw_curve_label("compute_util [FP8 Matrix Core % of 398.7T]", "tensor_active", is_amd=True, multi_node=True)
+        self.assertNotIn("398.7T", tc_leg398)
         # Keep xGMI RX (In) and xGMI TX (Out) as separate full-duplex curves!
         self.assertIn("nvlink_rx", parsed["hw_curves"])
         self.assertIn("nvlink_tx", parsed["hw_curves"])
