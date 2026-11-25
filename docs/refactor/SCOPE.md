@@ -1,6 +1,6 @@
 # Refactor scope (proposal, needs an owner decision)
 
-Baseline: tag `baseline/pre-refactor` = `ae39cc4`. Core code today: 79,355 non-blank lines in 106 files
+Baseline: tag `baseline/pre-refactor` = `ae39cc4`. Core code today: 79,415 non-blank lines in 106 files
 (`python3 -B tests/quality/code_metrics.py`). Goal of the refactor: core under 10,000 lines without losing
 any behavior that the kept scope promises.
 
@@ -16,7 +16,7 @@ The megakernel audit, as called through MCP `weaveprof_megakernel_audit` or
 | `weaveprof/megakernel.py` | 1,907 | audit driver, gates, nsys reader, trace merge |
 | `weaveprof/harness.py` | 1,767 | policy, gate checks, GPU region lock, seal; only part of it is used by the audit |
 | `weaveprof/causal.py` | 1,642 | SW+HW causal analysis (advisory) |
-| `weaveprof/viz.py` | 2,190 | four-panel PNG |
+| `weaveprof/viz.py` | 2,250 | four-panel PNG |
 | `weaveprof/pipeline/validate/tools/{fi_lite_decode,wp_decode}.py` | ~1,400 | dump decoder |
 | `recorders/cuda_cpp/wp_lite.cuh` | 1,328 | device recorder |
 | `weaveprof/mcp_server.py` | 670 | MCP tools |
