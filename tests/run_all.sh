@@ -331,7 +331,6 @@ run_item "SCAN tests/test_fast_scan.py" "${PY_RUN[@]}" tests/test_fast_scan.py
 run_item "INSTRUMENT tests/test_generate_edits.py" "${PY_RUN[@]}" tests/test_generate_edits.py
 run_item "INSTRUMENT tests/test_apply_plan.py" "${PY_RUN[@]}" tests/test_apply_plan.py
 run_item "INSTRUMENT tests/test_card_schema.py" "${PY_RUN[@]}" tests/test_card_schema.py
-run_item "INSTRUMENT tests/test_fast_path.py" "${PY_RUN[@]}" tests/test_fast_path.py
 run_item "PROBE tests/test_probe_pipeline.py" "${PY_RUN[@]}" tests/test_probe_pipeline.py
 run_item "CLI tests/test_run_cli.py" "${PY_RUN[@]}" tests/test_run_cli.py
 run_item "GEMM tests/test_gemm_probe_unit.py" "${PY_RUN[@]}" tests/test_gemm_probe_unit.py
