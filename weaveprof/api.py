@@ -722,7 +722,7 @@ def doctor(*, check_gpu=True):
 
     # Check LLM endpoint & key availability without leaking secret values.
     placer = implementation("weaveprof.pipeline.scan.llm_probe_placer")
-    llm_cfg = placer.resolve_bailian_config()
+    llm_cfg = placer.resolve_llm_config()
 
     lock_dir = Path(
         os.environ.get("WEAVEPROF_LOCK_DIR")

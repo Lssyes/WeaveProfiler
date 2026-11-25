@@ -47,7 +47,7 @@ if str(SCAN_DIR) not in sys.path:
 from llm_probe_placer import (  # noqa: E402
     ABLATION_MODES,
     SUPPORTED_MODELS,
-    call_bailian_llm,
+    call_llm,
     detect_language,
     detect_spin_loop_lines,
     extract_code_block,
@@ -737,7 +737,7 @@ def audit_incremental_with_whole_kernel_llm(
             },
         }
 
-    caller = llm_caller or call_bailian_llm
+    caller = llm_caller or call_llm
     inc_draft = incremental_inherit_probes(current_source, prev_source, prev_inst_source)
     projected_inst = inc_draft[0] if inc_draft is not None else None
 
@@ -858,7 +858,7 @@ def direct_instrument_kernel(
     source_text = source_path.read_text(encoding="utf-8")
     det_lang = detect_language(source_path, source_text, explicit=language)
     route = resolve_route(card, arch, det_lang)
-    caller = llm_caller or call_bailian_llm
+    caller = llm_caller or call_llm
     kb_ctx = retrieve_route_kb(route["language"], route["card"], route["arch"], source_text)
 
     # 1. Incremental path: Diff-Preprojected Whole-Kernel Semantic Audit (default) or fast mechanical projection

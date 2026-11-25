@@ -4,7 +4,7 @@
 
 > **See what every SM/CU and warp/wave is doing microsecond by microsecond — an automated intra-kernel GPU profiling framework built for modern asynchronous pipelines and agent-driven Recursive Self-Improvement (RSI).**
 
-**WeaveProfiler** aligns **closed-loop automated intra-kernel software instrumentation** with **same-run hardware utilization counters** in a single static four-panel timeline image (`overview.png`). It supports two native entry modes: (1) **`Skill + MCP + Hook`** integration directly inside AI coding agents (`Claude Code`, `Qwen Code`, `OpenAI Codex CLI`, `Antigravity` — no extra API key needed); and (2) **Direct API Key** execution via CLI or Python SDK with automatic endpoint routing for **Alibaba Cloud Bailian (`DashScope` / `Coding Plan` / `MaaS`)** and any OpenAI-compatible provider. Across **CUDA C++, HIP C++, Triton (NVIDIA PTX & AMD AMDGCN), and CuTeDSL**, all probe injection and verification run in isolated scratch copies with zero edits to production code or function signatures.
+**WeaveProfiler** aligns **closed-loop automated intra-kernel software instrumentation** with **same-run hardware utilization counters** in a single static four-panel timeline image (`overview.png`). It integrates directly inside AI coding agents (`Claude Code`, `Qwen Code`, `OpenAI Codex CLI`, `Antigravity`) via **`Skill + MCP + Hook`**, and also provides a standalone CLI and Python SDK. Across **CUDA C++, HIP C++, Triton (NVIDIA PTX & AMD AMDGCN), and CuTeDSL**, all probe injection and verification run in isolated scratch copies with zero edits to production code or function signatures.
 
 ---
 
@@ -25,7 +25,7 @@ Existing profilers and naive LLM code edits fall short due to three fundamental 
 > **Key Observation**: Only **stage identification** requires semantic understanding from an LLM, whereas probe injection, asynchronous issue-to-wait pairing, and trace validation can all be executed by **deterministic rules**—and because asynchronous engines retire operations in FIFO issue order, runtime probe state fits in a **single 32-bit register** (`0 B` shared memory).
 
 ```text
-Protected Source (Read-Only) ──► Read-Only Stage Identification (Coding Agent or Bailian/OpenAI API) ──► probe.json
+Protected Source (Read-Only) ──► Read-Only Stage Identification (Coding Agent / LLM) ──► probe.json
                                                                                                             │
                                                                                                             ▼
                  Out-of-Workspace Deterministic Harness (C++/CuTe Injection · NVIDIA PTX / AMD AMDGCN Auto-Async Pass)
@@ -45,7 +45,7 @@ WeaveProfiler realizes this observation through three mechanisms backed by syste
 
 ### 2.2 Within- & Cross-Warp Asynchronous Pipeline Tracing
 - **Cross-warp producer–consumer pairing (1-to-$N$ earliest-arrival deduplication)**: For warp-specialized `mbarrier` rings (e.g., Hopper FA3 and FlashMLA), producer issues and consumer wait exits are paired by `(CTA, event, slot)` on a chip-wide nanosecond clock. Taking the earliest consumer arrival ($\min_w t_{\text{exit}}(w)$) per generation avoids 1-to-$N$ fan-out double-counting and slow-consumer inflation, yielding exact CTA-wide in-flight TMA depth via sweep-line analysis.
-- **Within-warp multi-engine FIFO depth**: Explicit `Exposed Wait` spans bracket `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` on each warp's main row, while dual sequence counters (`seq_in++` at commit, retiring `seq_out < seq_in - N` at wait) reconstruct exact per-cycle in-flight depth $dd = seq_in - seq_out across NVIDIA (`cp.async`, `wgmma`, `tcgen05`) and AMD CDNA3 (`WP_VMEM_COMMIT` / `WP_VMEM_WAIT`, `v_mfma`).
+- **Within-warp multi-engine FIFO depth**: Explicit `Exposed Wait` spans bracket `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` on each warp's main row, while dual sequence counters (`seq_in++` at commit, retiring `seq_out < seq_in - N` at wait) reconstruct exact per-cycle in-flight depth $d = \texttt{seq\_in} - \texttt{seq\_out}$ across NVIDIA (`cp.async`, `wgmma`, `tcgen05`) and AMD CDNA3 (`WP_VMEM_COMMIT` / `WP_VMEM_WAIT`, `v_mfma`).
 
 ### 2.3 Minimal-State Low-Overhead Recording & Zero-Signature Binding
 - **Lock-free per-warp slices + 1-register context (`WP_CTX_REG`)**: Lane 0 of each `(CTA, physical warp/wave)` appends 16-byte cache-streaming records (`st.global.cs.v4.u32` on NVIDIA; `buffer_store_dwordx4` / `global_store_dwordx4 ... nt` on AMD) with **zero atomics and zero cross-warp sync**. `WP_CTX_REG` packs mutable state (disabled/overflow bit + 16-bit slot + 15-bit cursor) into **one 32-bit register and `0 B` SMEM** (hoisted before `setmaxnreg`), with an optional `16 B` static SMEM fallback (`WP_CTX_SMEM`) for zero-headroom single-module kernels.
@@ -127,16 +127,16 @@ Captured on a 2-node 16×MI308X cluster (`2×8 GPUs`, `287.2 GB/s` per-direction
 
 ---
 
-## 5. Dual-Mode Quick Start & Support Matrix
+## 5. Quick Start & Support Matrix
 
 | Dimension | Coverage |
 | --- | --- |
 | **GPUs** | NVIDIA Hopper H20 (`sm_90`/`sm_90a`), Blackwell B300 (`sm_100a`/`sm_103a`), Ampere (`sm_86`), AMD Instinct MI308X (`gfx942`) |
 | **Frontends** | CUDA C++, HIP C++, Triton (NVIDIA PTX Dual-Async & AMD AMDGCN Async), CuTeDSL |
-| **Dual Entry Modes** | **Mode 1**: AI Coding Agents (`Claude Code`, `Qwen Code`, `OpenAI Codex CLI`, `Antigravity` via `Skill + MCP + Hook`, no extra key required); **Mode 2**: Direct **Alibaba Cloud Bailian (`DashScope` / `Coding Plan` / `MaaS`)** or any OpenAI-compatible API Key via CLI / Python SDK |
+| **Integration** | AI Coding Agents (`Claude Code`, `Qwen Code`, `OpenAI Codex CLI`, `Antigravity` via `Skill + MCP + Hook`), or CLI / Python SDK |
 | **Prerequisites** | Python 3.10+, `nvcc` + `nsys` (NVIDIA) or `hipcc` + `rocprof-sys` (AMD), `matplotlib` |
 
-### Mode 1: AI Coding Agents (`Skill + MCP + Hook`, No Extra API Key Needed)
+### AI Coding Agents (`Skill + MCP + Hook`)
 
 Install into any kernel repository in two commands (`--protect` locks production files until the initial baseline seal passes):
 
@@ -148,14 +148,10 @@ python3 -B WeaveProfiler/run.py install-agent \
   --card h20   # h20 | b300 | mi308x | sm86
 ```
 
-### Mode 2: Direct API Key (Alibaba Cloud Bailian / DashScope or OpenAI-Compatible)
-
-Automatically routes Bailian standard keys (`DASHSCOPE_API_KEY` / `BAILIAN_API_KEY`, `sk-...` → `dashscope.aliyuncs.com`), Bailian Coding Plan keys (`sk-sp-...` → `coding.dashscope.aliyuncs.com`), Bailian MaaS workspace keys (`sk-ws-...`), or custom `OPENAI_BASE_URL` + `OPENAI_API_KEY`:
+### Standalone CLI & Python SDK
 
 ```bash
-export DASHSCOPE_API_KEY="sk-..."   # or BAILIAN_API_KEY, or pass --api-key directly
-
-python3 -B WeaveProfiler/run.py identify kernel.cu -o probe.json   --card h20 --model qwen-max
+python3 -B WeaveProfiler/run.py identify kernel.cu -o probe.json   --card h20
 python3 -B WeaveProfiler/run.py profile  kernel.cu -o overview.png --card h20 -- python3 bench.py
 python3 -B WeaveProfiler/run.py doctor
 ```
@@ -163,8 +159,8 @@ python3 -B WeaveProfiler/run.py doctor
 ```python
 import weaveprof as wp
 
-spec = wp.identify("kernel.cu", out="probe.json", card="h20", api_key="sk-...", model="qwen-max")
-with wp.profile("kernel.cu", out="overview.png", card="h20", api_key="sk-..."):
+spec = wp.identify("kernel.cu", out="probe.json", card="h20")
+with wp.profile("kernel.cu", out="overview.png", card="h20"):
     run_kernel()
 ```
 

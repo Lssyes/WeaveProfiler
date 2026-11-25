@@ -53,10 +53,7 @@ from weaveprof.contract import (
 )
 
 PROBE_SPEC_SCHEMA = "weaveprofiler.probe-spec/v1"
-PUBLIC_BAILIAN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-CODING_BAILIAN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1/chat/completions"
-MAAS_BAILIAN_BASE_URL = "https://ws-3o1qb69p061drz4g.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
-BAILIAN_BASE_URL = PUBLIC_BAILIAN_BASE_URL
+DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1/chat/completions"
 
 SUPPORTED_MODELS = (
     "auto",
@@ -238,12 +235,7 @@ def find_api_key(explicit_api_key: Optional[str] = None) -> Tuple[Optional[str],
     """Return `(api_key, source_label)` without printing or persisting secret values."""
     if explicit_api_key and str(explicit_api_key).strip():
         return str(explicit_api_key).strip(), "explicit_arg"
-    has_openai_url = bool((os.environ.get("OPENAI_BASE_URL") or "").strip())
-    env_order = (
-        ("OPENAI_API_KEY", "BAILIAN_API_KEY", "DASHSCOPE_API_KEY")
-        if has_openai_url
-        else ("BAILIAN_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY")
-    )
+    env_order = ("WEAVEPROF_API_KEY", "OPENAI_API_KEY")
     for name in env_order:
         val = os.environ.get(name)
         if val and val.strip():
@@ -264,56 +256,43 @@ def find_api_key(explicit_api_key: Optional[str] = None) -> Tuple[Optional[str],
     return None, None
 
 
-def resolve_bailian_config(
+def resolve_llm_config(
     *,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Resolve Alibaba Cloud Bailian (DashScope / Coding Plan / MaaS) or OpenAI-compatible config."""
+    """Resolve LLM chat-completions endpoint and model configuration."""
     key_val, key_src = find_api_key(api_key)
     explicit_url = (base_url or "").strip()
-    env_bailian_url = (os.environ.get("BAILIAN_BASE_URL") or os.environ.get("DASHSCOPE_BASE_URL") or "").strip()
+    env_custom_url = (os.environ.get("WEAVEPROF_BASE_URL") or "").strip()
     env_openai_url = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+    discovered_url = _discover_qwen_settings_base_url()
 
     if explicit_url:
         endpoint = _normalize_chat_endpoint(explicit_url)
         mode = "custom_explicit"
-    elif env_bailian_url:
-        endpoint = _normalize_chat_endpoint(env_bailian_url)
-        mode = "bailian_custom_env"
+    elif env_custom_url:
+        endpoint = _normalize_chat_endpoint(env_custom_url)
+        mode = "custom_env"
     elif env_openai_url:
         endpoint = _normalize_chat_endpoint(env_openai_url)
-        mode = "openai_compatible"
-    elif key_val and key_val.startswith("sk-sp-"):
-        endpoint = CODING_BAILIAN_BASE_URL
-        mode = "bailian_coding_plan"
-    elif key_val and key_val.startswith("sk-ws-"):
-        endpoint = _discover_qwen_settings_base_url() or MAAS_BAILIAN_BASE_URL
-        mode = "bailian_maas_workspace"
+        mode = "env_base_url"
+    elif discovered_url:
+        endpoint = discovered_url
+        mode = "agent_settings"
     else:
-        endpoint = PUBLIC_BAILIAN_BASE_URL
-        mode = "bailian_dashscope"
+        endpoint = DEFAULT_LLM_BASE_URL
+        mode = "default_endpoint"
 
     req_model = (model or "").strip()
     env_model = (
-        os.environ.get("BAILIAN_MODEL")
-        or os.environ.get("DASHSCOPE_MODEL")
-        or os.environ.get("WEAVEPROF_MODEL")
+        os.environ.get("WEAVEPROF_MODEL")
+        or os.environ.get("OPENAI_MODEL")
         or ""
     ).strip()
     if not req_model or req_model.lower() == "auto":
-        if env_model:
-            resolved_model = env_model
-        elif "maas.aliyuncs.com" in endpoint:
-            resolved_model = "qwen4-max"
-        elif "coding.dashscope.aliyuncs.com" in endpoint:
-            resolved_model = "qwen3.5-plus"
-        else:
-            resolved_model = "qwen-max"
-    elif req_model == "qwen4-max" and "dashscope.aliyuncs.com" in endpoint and "maas.aliyuncs.com" not in endpoint:
-        # Seamless fallback when default `qwen4-max` is called against public DashScope / Coding Plan
-        resolved_model = "qwen3.5-plus" if "coding.dashscope.aliyuncs.com" in endpoint else "qwen-max"
+        resolved_model = env_model or "qwen4-max"
     else:
         resolved_model = req_model
 
@@ -327,20 +306,20 @@ def resolve_bailian_config(
 
 
 def get_llm_endpoint_url(base_url: Optional[str] = None, api_key: Optional[str] = None) -> str:
-    """Resolve OpenAI-compatible chat/completions endpoint (`BAILIAN_BASE_URL` / `DASHSCOPE_BASE_URL` / `OPENAI_BASE_URL` or auto Bailian)."""
-    return resolve_bailian_config(api_key=api_key, base_url=base_url)["endpoint_url"]
+    """Resolve chat/completions endpoint URL."""
+    return resolve_llm_config(api_key=api_key, base_url=base_url)["endpoint_url"]
 
 
-def get_bailian_api_key(explicit_api_key: Optional[str] = None) -> str:
+def get_llm_api_key(explicit_api_key: Optional[str] = None) -> str:
     key_val, _ = find_api_key(explicit_api_key)
     if key_val:
         return key_val
     raise RuntimeError(
-        "No API key found (pass api_key=... / --api-key, or set BAILIAN_API_KEY / DASHSCOPE_API_KEY / OPENAI_API_KEY)"
+        "No API key found (pass api_key=... / --api-key, or set WEAVEPROF_API_KEY / OPENAI_API_KEY)"
     )
 
 
-def call_bailian_llm(
+def call_llm(
     model: str,
     messages: List[Dict[str, str]],
     *,
@@ -354,19 +333,16 @@ def call_bailian_llm(
     retries: int = 5,
     stream: bool = True,
 ) -> Dict[str, Any]:
-    """Call Alibaba Cloud Bailian (DashScope / Coding Plan / MaaS) or OpenAI-compatible API with SSE streaming."""
-    cfg = resolve_bailian_config(api_key=api_key, base_url=base_url, model=model)
+    """Call chat/completions API with SSE streaming."""
+    cfg = resolve_llm_config(api_key=api_key, base_url=base_url, model=model)
     resolved_key = cfg["api_key"]
     if not resolved_key:
         raise RuntimeError(
-            "No API key found (pass api_key=... / --api-key, or set BAILIAN_API_KEY / DASHSCOPE_API_KEY / OPENAI_API_KEY)"
+            "No API key found (pass api_key=... / --api-key, or set WEAVEPROF_API_KEY / OPENAI_API_KEY)"
         )
     endpoint_url = cfg["endpoint_url"]
     resolved_model = cfg["model"]
     send_effort = bool(reasoning_effort) and os.environ.get("WEAVEPROF_SEND_REASONING_EFFORT", "1") != "0"
-    if "dashscope.aliyuncs.com" in endpoint_url and "maas.aliyuncs.com" not in endpoint_url:
-        # Public DashScope standard Qwen models do not take `reasoning_effort="max"` unless explicitly enabled
-        send_effort = os.environ.get("WEAVEPROF_SEND_REASONING_EFFORT", "0") == "1"
 
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     last_err: Optional[Exception] = None
@@ -476,7 +452,7 @@ def call_bailian_llm(
                 base_wait = (4.0 * (2 ** attempt)) if is_rate_limit else (2.0 * (attempt + 1))
                 jitter = (hash((resolved_model, attempt, time.time_ns())) % 1000) / 1000.0
                 time.sleep(min(30.0, base_wait + jitter))
-    raise RuntimeError(f"Bailian call failed for {resolved_model} ({endpoint_url}): {last_err}")
+    raise RuntimeError(f"LLM call failed for {resolved_model} ({endpoint_url}): {last_err}")
 
 
 def retrieve_route_kb(
@@ -1285,7 +1261,7 @@ def place_probes(
         caller = llm_caller
     else:
         def caller(m: str, msgs: List[Dict[str, str]], **kw: Any) -> Dict[str, Any]:
-            return call_bailian_llm(m, msgs, api_key=api_key, base_url=base_url, **kw)
+            return call_llm(m, msgs, api_key=api_key, base_url=base_url, **kw)
 
     kb_ctx = retrieve_route_kb(route["language"], route["card"], route["arch"], source_text)
 
@@ -1621,9 +1597,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--card", default="auto", choices=("auto", "h20", "b300", "mi308x", "sm86"))
     ap.add_argument("--arch", help="Explicit architecture (e.g. sm_90a, sm_103a, sm_86, gfx942)")
     ap.add_argument("--language", help="Optional explicit language (cuda_cpp, hip_cpp, triton, cutedsl)")
-    ap.add_argument("--model", default="auto", help="Bailian / OpenAI-compatible model (" + ", ".join(SUPPORTED_MODELS) + ")")
-    ap.add_argument("--api-key", help="Alibaba Cloud Bailian (DashScope) or OpenAI-compatible API key")
-    ap.add_argument("--base-url", help="Optional Bailian / OpenAI-compatible base URL")
+    ap.add_argument("--model", default="auto", help="LLM model identifier (" + ", ".join(SUPPORTED_MODELS) + ")")
+    ap.add_argument("--api-key", help="LLM API key")
+    ap.add_argument("--base-url", help="Optional chat completions base URL")
     ap.add_argument("--reasoning-effort", default="max")
     ap.add_argument("--mode", default="open_loop", choices=ABLATION_MODES)
     ap.add_argument("--diagnostics-json", help="Optional diagnostics JSON file from previous verification round")

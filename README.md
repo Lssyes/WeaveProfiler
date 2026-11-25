@@ -4,7 +4,7 @@
 
 > **让智能体与工程师看清 GPU 核内每一微秒——面向现代异步流水算子与智能体递归自我改进（RSI）的自动化核内剖析框架。**
 
-**WeaveProfiler** 将**闭环自动核内软件插桩**与**同次硬件利用率采样**刚性对齐到同一张静态四联时间线图（`overview.png`）中。框架同时支持两种接入形态：① 以 **`Skill + MCP + Hook`** 直接嵌入 Claude Code、Qwen Code、OpenAI Codex CLI、Antigravity 等 AI 编程代理（免配额外密钥）；② 直接传入 API Key 通过 CLI / Python SDK 独立调用。跨 **CUDA C++、HIP C++、Triton（NVIDIA PTX 与 AMD AMDGCN）及 CuTeDSL**，所有探针注入与校验均在隔离副本内自动完成，零生产源码修改、零函数签名入侵。
+**WeaveProfiler** 将**闭环自动核内软件插桩**与**同次硬件利用率采样**刚性对齐到同一张静态四联时间线图（`overview.png`）中。框架支持以 **`Skill + MCP + Hook`** 直接嵌入 Claude Code、Qwen Code、OpenAI Codex CLI、Antigravity 等 AI 编程代理，也可通过 CLI 或 Python SDK 独立调用。跨 **CUDA C++、HIP C++、Triton（NVIDIA PTX 与 AMD AMDGCN）及 CuTeDSL**，所有探针注入与校验均在隔离副本内自动完成，零生产源码修改、零函数签名入侵。
 
 ---
 
@@ -25,7 +25,7 @@
 > **核心观察**：在核内剖析全流程中，**只有阶段语义识别需要大模型的语义理解**，而探针注入、异步配对与真伪验证均可由确定性规则完成；同时，由于所有异步硬件引擎均遵循“发射提交 → 按序等待退役”的固定因果律，探针只需极小运行时可变状态即可精确还原在途并发深度与暴露等待。
 
 ```text
-受保护源码 (只读) ──► 只读阶段识别 (AI 编程代理 或 百炼/OpenAI API) ──► 结构化 probe.json
+受保护源码 (只读) ──► 只读阶段识别 (AI 编程代理 / LLM) ──► 结构化 probe.json
                                                                            │
                                                                            ▼
              工作区外确定性 Harness (CUDA/HIP/CuTe 源码注入 · NVIDIA Triton PTX / AMD AMDGCN 自动异步 Pass)
@@ -45,7 +45,7 @@
 
 ### 2.2 跨 Warp 与单 Warp 异步流水线配对追踪
 - **跨 Warp 生产者–消费者配对（1-to-$N$ 最早到达去重）**：在 Hopper FA3、FlashMLA 等由单生产者 Warp 向多计算 Warp 广播数据的 `mbarrier` 环形流水线中，基于全卡统一纳秒时钟按 `(CTA, event, slot)` 匹配同代发射与等待退出，以最早消费者到达时刻 $\min_w t_{\text{exit}}(w)$ 作为保守完成上界，经全 CTA 扫描线精确计算真实的跨 Warp TMA 在途深度（杜绝 1-to-$N$ 扇出重复计数与慢消费者虚高）。
-- **单 Warp 多引擎 FIFO 深度还原**：在每条物理 Warp/Wave 主轨上显式框定 `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` 的 **Exposed Wait**，并在独立的 `MEM` 与 `MMA` 副轨上维护双序号计数器（每次提交开区间 `seq_in++`，每次等待 `N` 按序闭合 `seq_out < seq_in - N`），在 NVIDIA（`cp.async` / `wgmma` / `tcgen05`）与 AMD CDNA3（`WP_VMEM_COMMIT` / `WP_VMEM_WAIT` / `v_mfma`）上统一还原逐拍在途深度 $dd = seq_in - seq_out。
+- **单 Warp 多引擎 FIFO 深度还原**：在每条物理 Warp/Wave 主轨上显式框定 `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` 的 **Exposed Wait**，并在独立的 `MEM` 与 `MMA` 副轨上维护双序号计数器（每次提交开区间 `seq_in++`，每次等待 `N` 按序闭合 `seq_out < seq_in - N`），在 NVIDIA（`cp.async` / `wgmma` / `tcgen05`）与 AMD CDNA3（`WP_VMEM_COMMIT` / `WP_VMEM_WAIT` / `v_mfma`）上统一还原逐拍在途深度 $d = \texttt{seq\_in} - \texttt{seq\_out}$。
 
 ### 2.3 极小状态低扰动流式记录与免改签名接入
 - **无锁分片流式写 + 单寄存器状态压缩**：每个 `(CTA, 物理 Warp/Wave)` 独占连续缓冲切片，仅由 `lane 0` 以绕过缓存的 16 字节向量写指令（NVIDIA `st.global.cs.v4.u32`、AMD `buffer_store_dwordx4` / `global_store_dwordx4 ... nt`）顺序追加，热路径**零原子操作、零跨 Warp 同步**。默认模式 `WP_CTX_REG` 将可变状态（禁用/溢出位 + 16 位槽号 + 15 位游标）压缩进**单个 32-bit 寄存器（`0 B` 共享内存）**，在 `setmaxnreg` 核上自动前移至配额缩减前初始化，并为零寄存器余量核提供 `16 B` 静态共享内存回退（`WP_CTX_SMEM`）。
@@ -127,16 +127,16 @@ WeaveProfiler 输出的 `(在途深度 d, Exposed Wait %)` 直接给出可执行
 
 ---
 
-## 5. 双模式快速上手与支持矩阵
+## 5. 快速上手与支持矩阵
 
 | 维度 | 支持范围 |
 | --- | --- |
 | **GPU 架构** | NVIDIA Hopper H20（`sm_90` / `sm_90a`）、Blackwell B300（`sm_100a` / `sm_103a`）、Ampere（`sm_86`）、AMD Instinct MI308X（`gfx942`） |
 | **算子前端** | CUDA C++、HIP C++、Triton（NVIDIA PTX 自动双异步 & AMD AMDGCN 自动异步）、CuTeDSL |
-| **双接入模式** | **模式一**：直接接入 AI 编程代理（`Claude Code`、`Qwen Code`、`OpenAI Codex CLI`、`Antigravity`，免配额外 API Key）；**模式二**：直接使用 **阿里云百炼（DashScope / Coding Plan / MaaS）** 或任意 OpenAI 兼容 API Key 独立调用 CLI / Python SDK |
+| **接入方式** | 以 `Skill + MCP + Hook` 嵌入 AI 编程代理（`Claude Code`、`Qwen Code`、`OpenAI Codex CLI`、`Antigravity`），或通过 CLI / Python SDK 调用 |
 | **运行依赖** | Python 3.10+、`nvcc` + `nsys`（NVIDIA）或 `hipcc` + `rocprof-sys`（AMD）、`matplotlib` |
 
-### 模式一：接入 AI 编程代理（`Skill + MCP + Hook`，免配额外 API Key）
+### 接入 AI 编程代理（`Skill + MCP + Hook`）
 
 两步挂载至目标算子仓库（`--protect` 自动保护原文件不被直接篡改，待首次基线剖析签发封签后解锁迭代优化）：
 
@@ -148,27 +148,22 @@ python3 -B WeaveProfiler/run.py install-agent \
   --card h20   # 可选：h20 | b300 | mi308x | sm86
 ```
 
-### 模式二：直接使用阿里云百炼（Bailian / DashScope）或 OpenAI 兼容 API Key
-
-内置端点自适应路由：自动识别百炼标准密钥（`DASHSCOPE_API_KEY` / `BAILIAN_API_KEY`，`sk-...` → `dashscope.aliyuncs.com`）、百炼 Coding Plan 密钥（`sk-sp-...` → `coding.dashscope.aliyuncs.com`）、百炼专属 MaaS 工作空间密钥（`sk-ws-...`）以及任意自定义 `OPENAI_BASE_URL` + `OPENAI_API_KEY`：
+### CLI 与 Python SDK 直接调用
 
 ```bash
-export DASHSCOPE_API_KEY="sk-..."   # 或 BAILIAN_API_KEY；也可在命令行直接传 --api-key
-
 # 1) CLI 一键只读阶段识别 / 闭环插桩剖析直出四联 PNG
-python3 -B WeaveProfiler/run.py identify kernel.cu -o probe.json   --card h20 --model qwen-max
+python3 -B WeaveProfiler/run.py identify kernel.cu -o probe.json   --card h20
 python3 -B WeaveProfiler/run.py profile  kernel.cu -o overview.png --card h20 -- python3 bench.py
 
-# 2) 环境、编译器与 API 端点连通性自检（零密钥明文泄露）
+# 2) 环境与编译器自检
 python3 -B WeaveProfiler/run.py doctor
 ```
 
 ```python
 import weaveprof as wp
 
-# Python SDK 独立调用（可直接传 api_key 或自动读取环境变量）
-spec = wp.identify("kernel.cu", out="probe.json", card="h20", api_key="sk-...", model="qwen-max")
-with wp.profile("kernel.cu", out="overview.png", card="h20", api_key="sk-..."):
+spec = wp.identify("kernel.cu", out="probe.json", card="h20")
+with wp.profile("kernel.cu", out="overview.png", card="h20"):
     run_kernel()
 ```
 

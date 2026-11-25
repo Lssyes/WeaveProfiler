@@ -476,11 +476,11 @@ class DeterministicHarnessTests(unittest.TestCase):
             self.assertEqual(r_stop_allow.stdout.strip(), "", f"Expected allow, got: {r_stop_allow.stdout}")
 
     def test_red_team_audit_fixes_bypasses_and_hardening(self):
-        """Regression tests for every P0/P1 vulnerability found by live Bailian run + red-team audit."""
+        """Regression tests for every P0/P1 vulnerability found by live LLM run + red-team audit."""
         from weaveprof.contract import normalize_probe_spec
         from weaveprof.backend import assess
 
-        # 1. Live Bailian bugs: `"slot": null` and Python floor-div `"k0 // BLOCK_K"` normalize cleanly
+        # 1. Live LLM edge cases: `"slot": null` and Python floor-div `"k0 // BLOCK_K"` normalize cleanly
         src = _sample_cuda_pipeline()
         spec_null_slot = {
             "roles": {"math": "warps 0-3"},

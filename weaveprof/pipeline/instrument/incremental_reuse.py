@@ -217,7 +217,7 @@ def _run_delta_llm_update(
     reasoning_effort: str,
     llm_caller: Optional[Callable[..., Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
-    caller = llm_caller or placer_mod.call_bailian_llm
+    caller = llm_caller or placer_mod.call_llm
     sys_msg = (
         "You are WeaveProfiler's §3.1 Semantic Probe Placement Agent operating in Incremental Hunk Mode.\n"
         "Unchanged AST blocks have ALREADY inherited their verified probe placements in 0 seconds. "

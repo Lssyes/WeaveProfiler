@@ -51,16 +51,15 @@ Avoid slow 30-minute sequential trial-and-error loops by following these four ru
 ```python
 import weaveprof as wp
 
-# Mode A: AI Coding Agent / MCP (`run.py install-agent --workspace ... --protect ...`) — no separate API key needed!
-# Mode B: Direct API Key (Alibaba Cloud Bailian / DashScope `sk-...` / `sk-sp-...` / `sk-ws-...` or OpenAI-compatible)
-spec = wp.identify("kernels/fa3_fwd.py", out="probe.json", card="h20", api_key="sk-...", model="qwen-max")
+# AI Coding Agent / MCP (`run.py install-agent --workspace ... --protect ...`) or Python SDK
+spec = wp.identify("kernels/fa3_fwd.py", out="probe.json", card="h20")
 
 # 1. Run Trace Verifier on stage specification (probe.json -> feedback.json + 4-panel PNG)
 res = wp.verify("probe.json", feedback="feedback.json", out="overview.png",
                 bench=["python", "bench.py"])
 
 # 2. End-to-end closed-loop Stage Identifier + Trace Verifier (unchanged kernel & launch)
-with wp.profile(source="kernels/fa3_fwd.py", limit=0.10, out="overview.png", api_key="sk-..."):
+with wp.profile(source="kernels/fa3_fwd.py", limit=0.10, out="overview.png"):
     out = flash_attn_v3(q, k, v)
 ```
 

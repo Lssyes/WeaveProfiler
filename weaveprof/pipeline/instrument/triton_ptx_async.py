@@ -29,7 +29,9 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 EV_LOAD = 1
 EV_WAIT = 2
+EV_WAIT_LOAD = 2
 EV_MMA = 3
+EV_WAIT_MMA = 4
 
 _TAG_OPEN = 0x40000000
 _TAG_CLOSE = 0x08000000
@@ -290,9 +292,9 @@ def instrument_triton_ptx_async(
         m_wwg = re.match(r"^wgmma\.wait_group\.sync\.aligned\s+(\d+)\s*;$", s) if instrument_wgmma_async else None
         if m_wwg:
             wait_n = int(m_wwg.group(1))
-            out.extend(_emit_rec_ptx(EV_WAIT, "%wp_wout", cap=cap, ovf_reg=ovf_reg, timer_clk=timer_clk))
+            out.extend(_emit_rec_ptx(EV_WAIT_MMA, "%wp_wout", cap=cap, ovf_reg=ovf_reg, timer_clk=timer_clk))
             out.append(ln)
-            out.extend(_emit_rec_ptx(_TAG_END | EV_WAIT, "%wp_wout", cap=cap, ovf_reg=ovf_reg, timer_clk=timer_clk))
+            out.extend(_emit_rec_ptx(_TAG_END | EV_WAIT_MMA, "%wp_wout", cap=cap, ovf_reg=ovf_reg, timer_clk=timer_clk))
             drain_uid += 1
             lbl_loop = f"$L__WP_WDRAIN_{drain_uid}"
             lbl_done = f"$L__WP_WDONE_{drain_uid}"
@@ -378,20 +380,27 @@ def build_triton_ptx_async_names(
     if use_wgmma:
         slotted["3"] = {"id": "wgmma_async", "slot": "seq", "cross_warp": False}
         async_engines["3"] = "mma"
+    events_map: Dict[str, str] = {
+        "1": "cp_async_tile_load",
+        "2": "async_wait_group",
+        "3": "wgmma_async" if use_wgmma else "mma_sync_hmma",
+        "6": "tl_store_c",
+    }
+    labels_map: Dict[str, str] = {
+        "1": "Triton Async Load (cp.async/TMA FIFO)",
+        "2": "Exposed Load Wait (cp.async.wait_group + bar.sync)",
+        "3": "Tensor Core WGMMA (async FIFO)" if use_wgmma else "Tensor Core MMA",
+        "6": store_label,
+    }
+    sem_map: Dict[str, str] = {"1": "load", "2": "wait", "3": "mma", "6": "store"}
+    if use_wgmma:
+        events_map["4"] = "wgmma_wait_group"
+        labels_map["4"] = "Exposed MMA Wait (wgmma.wait_group)"
+        sem_map["4"] = "wait"
     return {
-        "events": {
-            "1": "cp_async_tile_load",
-            "2": "async_wait_group",
-            "3": "wgmma_async" if use_wgmma else "mma_sync_hmma",
-            "6": "tl_store_c",
-        },
-        "labels": {
-            "1": "Triton Async Load (cp.async/TMA FIFO)",
-            "2": "Exposed Wait (wait_group + bar.sync)",
-            "3": "Tensor Core WGMMA (async FIFO)" if use_wgmma else "Tensor Core MMA",
-            "6": store_label,
-        },
-        "semantics": {"1": "load", "2": "wait", "3": "mma", "6": "store"},
+        "events": events_map,
+        "labels": labels_map,
+        "semantics": sem_map,
         "slotted_events": slotted,
         "async_engines": async_engines,
         "roles": {"0": "cta_worker"},
