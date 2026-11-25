@@ -1759,7 +1759,7 @@ def render_swhw_overview_png(
     if has_zoom:
         heights.append(panel_d_h)
     fig = plt.figure(figsize=(fig_w, fig_h), facecolor="#FFFFFF")
-    gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.44 if dual_fabric else (0.39 if has_zoom else 0.34))
+    gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.49 if dual_fabric else (0.39 if has_zoom else 0.34))
     idx_g = 0
     ax_hw = fig.add_subplot(gs[idx_g]) if has_hw else None
     if has_hw:
@@ -2126,23 +2126,30 @@ def render_swhw_overview_png(
     yt = list(range(0, n_sms, step))
     if n_sms > 1 and ((n_sms - 1) - yt[-1]) >= max(2, step // 2):
         yt.append(n_sms - 1)
+    dense_cu_idx = bool(is_amd and len(sms) == 80 and sms and sms[-1] >= 80)
     ax_sm.set_yticks(yt)
-    ax_sm.set_yticklabels([f"{unit_nm}{sms[i]}" for i in yt] if sms else [f"{unit_nm}0"], fontsize=10.2)
+    ax_sm.set_yticklabels(
+        ([f"{unit_nm}{i}" for i in yt] if dense_cu_idx else [f"{unit_nm}{sms[i]}" for i in yt])
+        if sms else [f"{unit_nm}0"],
+        fontsize=10.2,
+    )
     rank_tag = f" (rank {meta['rank']})" if meta.get("rank") is not None else f" ({len(sms)} {unit_nm}s)"
     ax_sm.set_ylabel(f"Physical {unit_nm}{rank_tag}", fontsize=11.6, fontweight="bold", color="#1E293B")
     if dual_fabric and panel_b_fabric_handles:
         b_mode_lbl = "Multi-CTA" if sm_cta_slots else f"Persistent 1-CTA/{unit_nm}"
         ax_sm.set_title(
-            f"(B) {b_mode_lbl} Execution Across All {len(sms)} Physical {unit_nm}s",
-            fontsize=12.0, fontweight="bold", color="#0F172A", loc="left", pad=21,
+            f"(B) {b_mode_lbl} Execution ({unit_nm}0–{unit_nm}{len(sms)-1})",
+            fontsize=11.6, fontweight="bold", color="#0F172A", loc="left", pad=21,
         )
         ax_sm.legend(
             handles=panel_b_fabric_handles, loc="lower right", bbox_to_anchor=(1.0, 1.002),
-            ncol=4, frameon=False, fontsize=9.4, handlelength=1.30, columnspacing=1.05,
+            ncol=4, frameon=False, fontsize=9.0, handlelength=1.25, columnspacing=0.95,
         )
     else:
+        u_hi = (len(sms) - 1) if dense_cu_idx else (sms[-1] if sms else 0)
+        u_lo = 0 if dense_cu_idx else (sms[0] if sms else 0)
         ax_sm.set_title(
-            f"(B) All {len(sms)} physical {unit_nm}s ({unit_nm}{sms[0]}–{unit_nm}{sms[-1]}) — full per-tile stage waterfall"
+            f"(B) All {len(sms)} physical {unit_nm}s ({unit_nm}{u_lo}–{unit_nm}{u_hi}) — full per-tile stage waterfall"
             if sms else f"(B) Physical {unit_nm} timeline",
             fontsize=12.8, fontweight="bold", color="#0F172A", pad=11,
         )
@@ -2184,13 +2191,16 @@ def render_swhw_overview_png(
         ax_wp.set_yticklabels(c_yticks, fontsize=yt_fs)
         ax_wp.set_ylabel(f"{unit_nm} {rep_sm} {lane_nm}", fontsize=11.6, fontweight="bold", color="#1E293B")
         if dual_fabric and panel_c_handles:
+            n_c_cols = 4 if len(panel_c_handles) > 5 else len(panel_c_handles)
+            n_c_rows = (len(panel_c_handles) + n_c_cols - 1) // max(1, n_c_cols)
             ax_wp.set_title(
                 f"(C) Representative {unit_nm} {rep_sm} — Complete Pipeline by Real {lane_nm.title()} Role",
-                fontsize=12.6, fontweight="bold", color="#0F172A", pad=34,
+                fontsize=12.4, fontweight="bold", color="#0F172A", pad=46 if n_c_rows >= 2 else 32,
             )
             ax_wp.legend(
-                handles=panel_c_handles, loc="upper center", bbox_to_anchor=(0.5, 1.155),
-                ncol=min(len(panel_c_handles), 8), frameon=False, fontsize=9.8, handlelength=1.30, columnspacing=1.05,
+                handles=panel_c_handles, loc="upper center",
+                bbox_to_anchor=(0.5, 1.255 if n_c_rows >= 2 else 1.155),
+                ncol=n_c_cols, frameon=False, fontsize=9.4, handlelength=1.30, columnspacing=1.05,
             )
         else:
             role_names = ", ".join(dict.fromkeys(r for _, r in rep_warps))
@@ -2234,7 +2244,7 @@ def render_swhw_overview_png(
             rep_cta_slot=rep_cta_slot,
             warp_to_y=warp_to_y,
             span_color_fn=_span_color,
-            dual_fabric=False,
+            dual_fabric=dual_fabric,
             x_lim=(z0, z1),
             k_dur=k_dur,
             is_zoom=True,
@@ -2276,7 +2286,10 @@ def render_swhw_overview_png(
     _nasy = max(1, (len(async_depth_handles) + 8) // 9) if (not dual_fabric and bool(active_async_engines)) else 0
     extra_leg = (0.0215 * max(0, _ntop - 1)) + ((0.034 + 0.0205 * max(0, _nasy - 1)) if _nasy > 0 else 0.0)
     if has_zoom:
-        top_m = min(0.842, 1.0 - 2.65 / fig_h) - extra_leg if has_hw else min(0.855, 1.0 - 2.20 / fig_h) - extra_leg
+        if dual_fabric:
+            top_m = 0.858 if has_hw else 0.875
+        else:
+            top_m = min(0.842, 1.0 - 2.65 / fig_h) - extra_leg if has_hw else min(0.855, 1.0 - 2.20 / fig_h) - extra_leg
     else:
         top_m = 0.840 if (has_hw and dual_fabric) else (min(0.790, 1.0 - 2.65 / fig_h) - extra_leg if has_hw else 0.818)
     show_hw_box = bool(hw_summary_items)
