@@ -8,59 +8,57 @@
 
 ---
 
-## 1. Background & Three Challenges: Why Modern GPU Kernels and RSI Need WeaveProfiler
+## 1. Why WeaveProfiler
 
-Modern LLM training and inference kernels increasingly rely on **persistent fused megakernels** (MegaMoE, FlashAttention-3, FlashMLA, Gated Delta Networks), where warps within each CTA take on specialized **roles** (data loading, matrix compute, inter-GPU communication) connected by multi-stage **asynchronous hardware pipelines** (NVIDIA `cp.async` / TMA / `wgmma` / `tcgen05`, AMD CDNA3 `buffer_load` + `s_waitcnt vmcnt` + `MFMA`). Performance hinges on role overlap: **in-flight pipeline depth ($d$)** determines whether memory/communication latency is hidden, while **Exposed Wait** pinpoints stalls on the critical path. As kernel engineering shifts toward **agent-driven Recursive Self-Improvement (RSI)** with no human in the loop, intra-kernel profiling must become both fine-grained and fully automated.
+Modern LLM kernels (MegaMoE, FlashAttention-3, FlashMLA, GDN) increasingly run as **persistent fused megakernels**: warps inside each CTA split up data loading, matrix math, and inter-GPU communication, hiding latency behind multi-stage **asynchronous hardware pipelines** (NVIDIA `cp.async` / TMA / `wgmma` / `tcgen05`, AMD `buffer_load` / `vmcnt` / `MFMA`). Tuning them comes down to two numbers: **in-flight depth `d`** (how many async operations are concurrently in flight) and **Exposed Wait** (how much time warps actually spend stalled at wait instructions).
 
-Existing profilers and naive LLM code edits fall short due to three fundamental challenges:
+Existing hardware profilers and free-form LLM code edits hit three practical roadblocks:
 
-1. **Free-form LLM code edits silently corrupt traces without trace-level verification**: Vendor hardware profilers (`nsys`, `rocprofv3`) treat launches as black boxes without warp/stage attribution. Asking an LLM agent to directly edit source code for instrumentation—even with compile and output checks—frequently produces unpaired spans across branches, missing warp roles, buffer truncation, or severe hot-loop slowdowns; if verification scripts live inside a writable workspace, unconstrained agents may even tamper with `#pragma unroll` / `__launch_bounds__` or relax check thresholds to pass.
-2. **Asynchronous hardware & compiler pipelines are mismeasured as synchronous stubs**: Source-level or high-level IR probes close immediately after non-blocking issue, missing compiler-generated commit/wait boundaries (such as Triton's lowered `commit_group` / `wait_group` or AMDGCN's `s_waitcnt vmcnt(N)`). This underestimates true in-flight residency by `30×–120×`, reports $d=0$ concurrency, and dumps real wait stalls into downstream compute stages.
-3. **Heavy recorder state triggers register spills or shared-memory occupancy cliffs**: Production fused kernels run close to register-file and shared-memory ceilings. Multi-register contexts (4–10 live registers) push tight kernels into local-memory `STL/LDL` spills, while kilobyte-scale shared-memory ring buffers (`0.5–4 KB/CTA`) trigger occupancy cliffs (e.g., `2 → 1 CTA/SM`) or silently overwrite events upon wrap-around.
+1. **Free-form code edits break traces without verification**: Vendor profilers (`nsys`, `rocprofv3`) treat each kernel launch as a black box. Asking an LLM to rewrite kernel source for instrumentation routinely leaves unpaired spans across branches, misses warps, overflows buffers, or slows down hot loops.
+2. **Async instructions get mismeasured as instant synchronous calls**: Source-level probes close right after non-blocking issue, missing lowered commit/wait points (such as Triton's `commit_group` / `wait_group` or AMD's `s_waitcnt vmcnt(N)`). Load durations look `30×–120×` shorter than reality, in-flight depth reads `d = 0`, and real wait stalls get lumped into compute stages.
+3. **Heavy recorder state triggers register spills or occupancy cliffs**: Production fused kernels run right up against register and shared-memory limits. Adding 4–10 live registers causes `STL/LDL` local-memory spills, while kilobyte shared-memory buffers drop occupancy (e.g., `2 → 1 CTA/SM`).
 
 ---
 
-## 2. Key Observation & Three Core Mechanisms
+## 2. Core Idea & Three Key Designs
 
-> **Key Observation**: Only **stage identification** requires semantic understanding from an LLM, whereas probe injection, asynchronous issue-to-wait pairing, and trace validation can all be executed by **deterministic rules**—and because asynchronous engines retire operations in FIFO issue order, runtime probe state fits in a **single 32-bit register** (`0 B` shared memory).
+> **Core Idea**: Only **recognizing stage boundaries** requires an LLM to read source code; probe injection, async pairing, and trace checks can all run as **deterministic rules**. And because hardware async queues retire work in FIFO order, runtime probe state fits in **one 32-bit register** (`0 B` shared memory).
 
 ```text
-Protected Source (Read-Only) ──► Read-Only Stage Identification (Coding Agent / LLM) ──► probe.json
-                                                                                                            │
-                                                                                                            ▼
-                 Out-of-Workspace Deterministic Harness (C++/CuTe Injection · NVIDIA PTX / AMD AMDGCN Auto-Async Pass)
-                                                                                                            │
-                                                                                                            ▼
-                           Same-Run HW Sampling (200 kHz nsys / rocprof-sys) + Four Fail-Closed Checks
-                             ├── Any check fails ──► return offending probes & trace in feedback.json -> auto-coarsen
-                             └── All checks pass ──► render aligned 4-panel overview.png + sign HMAC-SHA256 seal
+Protected Source (Read-Only) ──► Read-Only Stage Identification (LLM) ──► probe.json
+                                                                              │
+                                                                              ▼
+             Out-of-Workspace Auto-Injection (C++/CuTe Source · NVIDIA PTX / AMD AMDGCN Async Pass)
+                                                                              │
+                                                                              ▼
+                       Same-Run HW Sampling (200 kHz nsys / rocprof-sys) + Four Hard Gates
+                         ├── Any gate fails ──► return offending probes in feedback.json -> coarsen & retry
+                         └── All gates pass ──► render aligned 4-panel overview.png + HMAC-SHA256 seal
 ```
 
-WeaveProfiler realizes this observation through three mechanisms backed by system-level guardrails:
+### 2.1 Closed-Loop Auto-Instrumentation & Four Hard Gates
+- **Read-only stage identification + automatic injection**: The LLM only reads kernel code and outputs warp roles plus line boundaries (`probe.json`). Deterministic tooling injects probes into a scratch copy—and for Triton kernels, instruments **NVIDIA PTX and AMD AMDGCN assembly directly** without touching Python loops.
+- **Four fail-closed checks**: (1) **Assembly & resources** (core instruction order preserved, zero added spill `Δspill ≤ 0 B`, zero added shared memory `Δsmem ≤ 0 B`); (2) **Numerical output** (matches unmodified baseline); (3) **Trace completeness** (every `begin` paired with `end`, zero drops, 100% physical warp/wave64 coverage); (4) **Bidirectional overhead** (steady-state median runtime within `±10%`; over-budget probes are automatically coarsened and re-verified).
+- **Out-of-workspace tamper protection**: Validation runs in a separate MCP process signing `HMAC-SHA256` seals, paired with lifecycle hooks and optional `bubblewrap` read-only mounts so agents cannot relax thresholds or leave stray edits.
 
-### 2.1 Closed-Loop Automated Instrumentation & System Guardrails
-- **Read-only stage identification + deterministic injection**: The LLM analyzes kernel source strictly read-only to emit role predicates and stage line boundaries (`probe.json`). Deterministic harness code injects probes into an isolated copy—at the source level for CUDA/HIP/CuTeDSL, via an automatic **PTX dual-async pass** (`triton_ptx_async.py`) for NVIDIA Triton, and via an automatic **AMDGCN async pass** (`triton_amdgcn_async.py`, preserving live scalar `SCC` flags and streaming via `vscnt` without perturbing `vmcnt`) for AMD ROCm Triton, requiring zero Python K-loop edits.
-- **Four fail-closed validation checks**: (1) **Assembly & resource check** (core instruction order and loop unrolling preserved, $\Delta_{\text{spill}} \le 0\text{ B}$, $\Delta_{\text{smem}} \le 0\text{ B}$); (2) **Output check** (bitwise-identical or strict numerical equivalence to unmodified baseline); (3) **Event completeness & coverage check** (every `begin` paired with `end`, zero overflow/drops, 100% physical warp/wave64 coverage); (4) **Bidirectional steady-state overhead check** ($|t_{\text{inst}}/t_{\text{base}} - 1| \le 10\%$, rejecting both >+10% slowdowns and <-10% schedule-perturbing speedups).
-- **Three system-level guardrails**: Out-of-workspace MCP service signing `HMAC-SHA256` seals with a secret hidden from the agent (`~/.cache/weaveprof/sessions/`), `PreToolUse` / `PostToolUse` / `Stop` lifecycle hooks, and optional Linux `bubblewrap` read-only mounts.
+### 2.2 Asynchronous Pipeline Tracing (Single-Warp & Cross-Warp)
+- **Single-warp FIFO counting**: Hardware async memory and matrix engines complete requests in submission order (FIFO). Counting `in++` on issue and closing completed entries on `wait(N)` gives exact in-flight depth `d = in - out` at every cycle, while the time spent blocked inside `wait` is recorded separately as **Exposed Wait** (split into `Load Wait` vs. `MMA Wait`) across both NVIDIA (`cp.async`, `wgmma`, `tcgen05`) and AMD (`vmcnt`, `v_mfma`).
+- **Cross-warp producer–consumer pairing**: In warp-specialized ring buffers (such as Hopper FA3 and FlashMLA) where one producer warp loads a slot and multiple compute warps wait on it, pairing each producer issue on `(CTA, slot)` with the **first consumer warp that clears the wait** gives true transfer duration and in-flight TMA depth—without 1-to-N fan-out double-counting or slow-consumer inflation.
 
-### 2.2 Within- & Cross-Warp Asynchronous Pipeline Tracing
-- **Cross-warp producer–consumer pairing (1-to-$N$ earliest-arrival deduplication)**: For warp-specialized `mbarrier` rings (e.g., Hopper FA3 and FlashMLA), producer issues and consumer wait exits are paired by `(CTA, event, slot)` on a chip-wide nanosecond clock. Taking the earliest consumer arrival ($\min_w t_{\text{exit}}(w)$) per generation avoids 1-to-$N$ fan-out double-counting and slow-consumer inflation, yielding exact CTA-wide in-flight TMA depth via sweep-line analysis.
-- **Within-warp multi-engine FIFO depth**: Explicit `Exposed Wait` spans bracket `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` on each warp's main row, while dual sequence counters (`seq_in++` at commit, retiring `seq_out < seq_in - N` at wait) reconstruct exact per-cycle in-flight depth $d = \texttt{seq\_in} - \texttt{seq\_out}$ across NVIDIA (`cp.async`, `wgmma`, `tcgen05`) and AMD CDNA3 (`WP_VMEM_COMMIT` / `WP_VMEM_WAIT`, `v_mfma`).
-
-### 2.3 Minimal-State Low-Overhead Recording & Zero-Signature Binding
-- **Lock-free per-warp slices + 1-register context (`WP_CTX_REG`)**: Lane 0 of each `(CTA, physical warp/wave)` appends 16-byte cache-streaming records (`st.global.cs.v4.u32` on NVIDIA; `buffer_store_dwordx4` / `global_store_dwordx4 ... nt` on AMD) with **zero atomics and zero cross-warp sync**. `WP_CTX_REG` packs mutable state (disabled/overflow bit + 16-bit slot + 15-bit cursor) into **one 32-bit register and `0 B` SMEM** (hoisted before `setmaxnreg`), with an optional `16 B` static SMEM fallback (`WP_CTX_SMEM`) for zero-headroom single-module kernels.
-- **Dual-anchor cycle timing, boundary fusion & out-of-band binding**: Low-latency `%clock64` / `s_memtime` reads inside hot loops are calibrated via per-warp `%globaltimer` / `s_memrealtime` open/close anchors; adjacent stage `end`/`begin` pairs fuse into a single clock read; device descriptors (`cudaMemcpyToSymbol` / `hipMemcpyToSymbol`) and per-warp progress slots carry cursors across multi-header `__device__` helpers without changing any C++ signature.
+### 2.3 Low-Overhead Recording & Unchanged Function Signatures
+- **Per-warp buffer slices + single-register state (`WP_CTX_REG`)**: Each `(CTA, warp/wave)` writes 16-byte records sequentially from `lane 0` with **zero atomics and zero cross-warp sync**. `WP_CTX_REG` packs slot ID and write cursor into **one 32-bit register and `0 B` shared memory** (initialized before `setmaxnreg`), with an optional `16 B` shared-memory fallback (`WP_CTX_SMEM`).
+- **Cycle-counter calibration + out-of-band binding**: Hot loops read fast local cycle counters (`%clock64` / `s_memtime`) anchored by open/close wall clocks, fusing back-to-back stage boundaries into one clock read; multi-header C++ kernels bind buffers via module-scope device symbols without changing any `__global__` / `__device__` function signature.
 
 ---
 
 ## 3. Reading the Four-Panel Aligned View (`overview.png`)
 
-WeaveProfiler outputs one static high-resolution PNG readable directly by both engineers and multimodal LLMs. Panels (A)–(C) share a locked microsecond (`µs`) axis, and Panel (D) opens automatically when full-kernel stages are dense:
+WeaveProfiler renders one high-resolution PNG readable directly by engineers and multimodal LLMs. Panels (A)–(C) share a locked microsecond (`µs`) axis, and Panel (D) opens automatically when stages are dense:
 
-- **(A) Same-Run Hardware Utilization Curves (Fail-Closed)**: Chip-wide Compute (Tensor / Matrix Core MFMA), summed HBM R+W bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` plotted independently; `xGMI` on AMD), and active SM/CU %. Refuses to render if real same-run hardware curves are absent.
-- **(B) All-SM / All-CU Stage Waterfall**: Every physical SM/CU on the vertical axis, exposing wave boundaries, load skew, and tail stragglers.
-- **(C) Single-SM / Single-CU Per-Warp / Per-Wave Timeline**: Each physical warp splits into an **upper main track** (stages + amber-hatched `Exposed Wait` + `Store`) and **lower async engine depth strips** (`MEM` green & `MMA/WGMMA/tcgen05` blue 5-shade heat bands + issue pins `▼`).
-- **(D) Deterministic Single-CTA Micro-Zoom**: Zooms into the complete CTA with highest `Exposed Wait` ratio (marked in dashed magenta across Panels A–C), revealing individual issue pins, ramp-up, overlap, and drain steps.
+- **(A) Same-Run Hardware Utilization Curves**: Chip-wide compute (Tensor / Matrix Core), HBM read+write bandwidth, separate full-duplex interconnect (`NVLink TX` and `NVLink RX` plotted separately; `xGMI` on AMD), and active SM/CU %. Fails closed if real same-run hardware curves are missing.
+- **(B) All-SM / All-CU Waterfall**: Every physical SM/CU on the vertical axis, showing wave steps, load imbalance, and tail stragglers.
+- **(C) Single-SM / Single-CU Per-Warp Timeline**: Each warp shows an **upper main track** (compute stages + amber-hatched `Exposed Wait` + `Store`) and **lower async depth strips** (`MEM` green and `MMA` blue 5-shade heat bands + issue pins `▼` encoding live depth `d`).
+- **(D) Single-CTA Micro-Zoom**: Zooms into the CTA with the highest `Exposed Wait` share (marked in dashed magenta across Panels A–C) to show prefetch ramp-up, steady-state overlap, wait bubbles, and drain steps.
 
 ![NVIDIA H20 Triton num_stages=5 PTX Auto-Async Four-Panel Aligned View](docs/images/case_h20_triton_s5_4panel.png)
 
@@ -117,11 +115,11 @@ For local Ampere desktop/laptop development:
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async Low-Overhead Four-Panel View](docs/images/case_sm86_cuda_s6_4panel.png)
 ![RTX 3050 sm_86 8192³ Triton GEMM Cold-Start DRAM Ramp and WDDM Preemption](docs/images/case_sm86_wddm_preemption.png)
 
-### 4.6 2-Node 16×AMD Instinct MI308X (EP16) Multi-Fabric RDMA + Full-Duplex xGMI MegaMoE (`2.46×` Speedup)
+### 4.6 2-Node 16×AMD Instinct MI308X (EP16) Inter-Node RDMA + Full-Duplex xGMI MegaMoE (`2.46×` Speedup)
 
-Captured on a 2-node 16×MI308X cluster (`2×8 GPUs`, `287.2 GB/s` per-direction xGMI + inter-node RDMA) running a persistent single-megakernel **MegaMoE (Qwen3.8-Max, `EP=16, S=16384, E=512, K=10`)**:
-- **Panel (A) Export-Regulated MI308X `398.7T` SKU Calibration & Split Full-Duplex xGMI**: MI308X enforces its `398.7 TFLOPS` FP8 cap via both shader clock throttling (`~1.38 GHz` → `451.5T` raw pipe clock ceiling) and power/duty capping (`451.5 / 398.7 = 1.1325×`). Normalizing interval MFMA work directly to the `398.7 TFLOPS` SKU ceiling (`100 × ΔSQ_VALU_MFMA_BUSY_CYCLES × 1024 / (Δt × 398.7T)`) reads **`94.5%`** on a `376.7 TFLOPS` dense FP8 GEMM and **`70.4%` chip-wide (`280.6 TFLOPS`)** here—corresponding to **`83.4%` of `398.7T` SKU peak (`88.3%` of achievable dense GEMM ceiling)** across the `540/640` (`84.4%`) Compute wave pool (see [amd_mi308x.md](docs/amd_mi308x.md)). Full-duplex `Intra-Node xGMI RX (In)` and `Intra-Node xGMI TX (Out)` are plotted as independent curves alongside an explicit HCA-counter unavailability note (never zero-filled).
-- **Panels (B)–(D) Persistent `1-CTA/CU (80×512)` Multi-Fabric Waterfall & 3-Group `GEMM1 ↔ GEMM2` Overlap**: Strictly adhering to **`1 CTA/CU` (`80 CTAs × 512 threads = 80 physical CUs × 8 waves`)** over a unified `64 KB` LDS arena with software partial-wave 4-wave synchronization (`W00–W03` Compute / Combine + `W04–W07` Comm / Dispatch & Async Scatter), fused single-stage opening dispatch, cross-node Top-K deduplication & node-level pre-reduction (**`+15.1%`** standalone gain), and 3-group `GEMM1 ↔ GEMM2` interleaving launch `xGMI TX (Out)` and streaming RDMA/xGMI Combine at `t ≈ 3,550 µs` underneath **`70.4%`** chip-wide (**`83.4%`** Compute-pool) Matrix Core execution (reaching **`88.3%`** Inter-Node RDMA bound roofline utilization), cutting latency from `17,204.0 µs` (`RCCL + AITER`) to **`6,981.1 µs` (`2.46×` speedup, 16-rank FP64 verified)**:
+Captured on a 2-node 16×MI308X cluster (`2×8 GPUs`, full-duplex intra-node xGMI + inter-node RDMA) running a persistent **MegaMoE (Qwen3.8-Max, `EP=16, S=16384, E=512, K=10`)**:
+- **Panel (A) `398.7T` SKU Calibration & Split xGMI**: Interval MFMA work normalized against MI308X's `398.7 TFLOPS` FP8 ceiling (see [amd_mi308x.md](docs/amd_mi308x.md)) reaches **`70.4%` chip-wide (`280.6 TFLOPS`)** and **`83.4%`** across the `540/640` compute-wave pool. `xGMI RX (In)` and `xGMI TX (Out)` are plotted separately, with an explicit note where host NIC RDMA counters are unavailable (never zero-filled).
+- **Panels (B)–(D) `1-CTA/CU` Overlapped Pipeline**: Running `1 CTA/CU` (`80 CTAs × 512 threads`) with 4 compute waves and 4 comm waves per CU, fused opening dispatch, cross-node Top-K deduplication (`+15.1%`), and 3-group `GEMM1 ↔ GEMM2` interleaving overlap inter-node RDMA and xGMI reduction underneath full Matrix Core execution, cutting latency from `17,204.0 µs` (`RCCL + AITER`) to **`6,981.1 µs` (`2.46×` speedup, 16-rank FP64 verified)**:
 
 ![2×8 AMD MI308X EP16 Qwen3.8-Max S=16384 Inter-Node RDMA and Full-Duplex xGMI Four-Panel View](docs/images/case_mi308x_ep16_megamoe_4panel.png)
 
