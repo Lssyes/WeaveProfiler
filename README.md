@@ -4,7 +4,7 @@
 
 > **让智能体与工程师看清 GPU 核内每一微秒——面向现代异步流水算子与智能体递归自我改进（RSI）的自动化核内剖析框架。**
 
-**WeaveProfiler** 将**闭环自动核内软件插桩**与**同次硬件利用率采样**刚性对齐到同一张静态四联时间线图（`overview.png`）中。框架同时支持两种接入形态：① 以 **`Skill + MCP + Hook`** 直接嵌入 Claude Code、Qwen Code、OpenAI Codex CLI、Antigravity 等 AI 编程代理（免配额外密钥）；② 直接传入 **阿里云百炼（DashScope / Coding Plan / MaaS）** 或任意 OpenAI 兼容 API Key 通过 CLI / Python SDK 独立调用。跨 **CUDA C++、HIP C++、Triton（NVIDIA PTX 与 AMD AMDGCN）及 CuTeDSL**，所有探针注入与校验均在隔离副本内自动完成，零生产源码修改、零函数签名入侵。
+**WeaveProfiler** 将**闭环自动核内软件插桩**与**同次硬件利用率采样**刚性对齐到同一张静态四联时间线图（`overview.png`）中。框架同时支持两种接入形态：① 以 **`Skill + MCP + Hook`** 直接嵌入 Claude Code、Qwen Code、OpenAI Codex CLI、Antigravity 等 AI 编程代理（免配额外密钥）；② 直接传入 API Key 通过 CLI / Python SDK 独立调用。跨 **CUDA C++、HIP C++、Triton（NVIDIA PTX 与 AMD AMDGCN）及 CuTeDSL**，所有探针注入与校验均在隔离副本内自动完成，零生产源码修改、零函数签名入侵。
 
 ---
 
