@@ -959,21 +959,32 @@ class WorkflowADirectTest(unittest.TestCase):
         norm_n = _norm_paths(rep_n, pairs)
         self.assertEqual(norm_n["status"], "FAIL")
         self.assertEqual(norm_n["mode"], "shadow_build_run")
+        self.assertIs(norm_n["seal_verified"], True)
+        self.assertIs(norm_n["seal_integrity_only"], True)
         self.assertEqual(
             norm_n["structural_blockers"],
             [
                 "NSYS_CAPTURE_FAILED: nsys profile exited 0 (see <TMP>/n/nsys_profile.log)",
                 "LOW_MATH_WAIT_NO_LATENCY_HIDING",
                 "OVERVIEW_PNG_FAILED: ValueError: MISSING_HARDWARE_UTILIZATION_CURVES: Panel (A) requires same-run hardware profiler utilization curves (200 ",
-                "MISSING_OVERVIEW_PNG: render_overview_png=True requires a valid non-empty overview.png",
             ],
         )
+        seal_n = _norm_paths(json.loads((out_n / "seal.json").read_text(encoding="utf-8")), pairs)
+        self.assertEqual(seal_n["status"], "FAIL")
+        self.assertEqual(seal_n["failed"], ["structural"])
+        self.assertIsNone(seal_n["artifacts"]["trace"])
+        self.assertEqual(seal_n["artifacts"]["failed_trace"]["path"], "<TMP>/n/bench/capture.fi02.bin")
+        ver_n = _norm_paths(json.loads((out_n / "verify.json").read_text(encoding="utf-8")), pairs)
+        self.assertEqual(ver_n["status"], "FAIL")
+        self.assertEqual(ver_n["failed"], [])
         fb_n = _norm_paths(json.loads((out_n / "feedback.json").read_text(encoding="utf-8")), pairs)
+        self.assertEqual(fb_n["status"], "FAIL")
         self.assertEqual(
             fb_n["structural_blockers"],
             [
                 "NSYS_CAPTURE_FAILED: nsys profile exited 0 (see <TMP>/n/nsys_profile.log)",
                 "LOW_MATH_WAIT_NO_LATENCY_HIDING",
+                "OVERVIEW_PNG_FAILED: ValueError: MISSING_HARDWARE_UTILIZATION_CURVES: Panel (A) requires same-run hardware profiler utilization curves (200 kHz nsys on NVIDIA o",
             ],
         )
         recs_n = self._read_invocations(inv_n)

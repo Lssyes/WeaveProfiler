@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""Characterization tests pinning suspected bugs M2b & M2a on nsys capture failure (P1c R24).
+"""Characterization tests pinning fixed M2 behavior when requested nsys capture fails.
 
 Drives ``weaveprof.megakernel.run_megakernel_audit`` through Workflow A (``shadow_build_run``) on CPU
 with runtime-generated fake ``build_cmd``, fake ``bench_cmd``, and fake ``nsys`` scripts, pinning:
-  1. ``test_suspected_bug_M2b_...``: ``capture_nsys=True, render_overview_png=False`` when ``nsys profile``
-     fails (``rc=2``, no ``.nsys-rep`` -> ``_capture_nsys_sqlite`` raises ``RuntimeError``, caught at
-     ``megakernel.py:1825-1826`` without setting ``hard_fail = True``): returned ``report['status']``,
-     ``seal.json['status']``, ``verify.json['status']``, and ``feedback.json['status']`` are all ``'PASS'``,
-     only appending ``NSYS_CAPTURE_FAILED`` to ``structural_blockers``, and ``overview.png`` is absent.
-  2. ``test_suspected_bug_M2a_...``: same failing ``nsys profile`` under default ``render_overview_png=True``:
-     ``feedback.json`` and ``verify.json`` are written to disk with ``status='PASS'`` (``megakernel.py:1942-1955``)
-     before ``render_swhw_overview_png`` fails on missing hardware curves and flips ``status='FAIL'``,
-     ``hard_fail=True`` (``:1963-1986``), leaving disk ``verify.json``/``feedback.json`` (``'PASS'``, 2 blockers
-     in ``feedback.json``, ``failed=[]`` in ``verify.json``) contradicting returned ``report`` and ``seal.json``
-     (``'FAIL'``, 4 blockers in ``report``, ``failed=['structural']`` in ``seal.json``).
+  1. ``test_m2b_nsys_capture_failure_without_overview_png_fails_in_all_four_places``:
+     ``capture_nsys=True, render_overview_png=False`` when ``nsys profile`` fails (``rc=2``, no ``.nsys-rep``):
+     returned ``report['status']``, ``seal.json['status']``, ``verify.json['status']``, and
+     ``feedback.json['status']`` are all ``'FAIL'`` (修复前的行为见 PR-3).
+  2. ``test_m2a_nsys_capture_failure_default_overview_png_fails_in_all_four_places``:
+     same failing ``nsys profile`` under default ``render_overview_png=True``: returned ``report['status']``,
+     ``seal.json['status']``, ``verify.json['status']``, and ``feedback.json['status']`` are all ``'FAIL'``
+     with 3 ``structural_blockers`` (修复前的行为见 PR-3).
   3. ``test_control_...``: identical inputs to M2b (``capture_nsys=True, render_overview_png=False``) with
      succeeding fake ``nsys``: returned ``report``, ``seal.json``, ``verify.json``, and ``feedback.json`` all
      consistently report ``status='PASS'`` with extracted hardware curves and no ``NSYS_CAPTURE_FAILED``.
@@ -47,6 +44,7 @@ os.environ.pop("WEAVEPROF_GOLDEN_UPDATE", None)
 os.environ.pop("WEAVEPROF_METRICS_UPDATE", None)
 
 from weaveprof import megakernel as mk  # noqa: E402
+from weaveprof.harness import verify_seal  # noqa: E402
 
 _ENV_KEYS = (
     "PATH",
@@ -497,8 +495,8 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
             )
         return rows
 
-    def test_suspected_bug_M2b_nsys_capture_failure_without_overview_png_returns_pass(self) -> None:
-        """这是疑似 bug M2b：nsys 采集失败时审计仍判 PASS，见 `交付/疑似bug清单.md`。这里只钉现状，修复时要同时改这里的期望值。"""
+    def test_m2b_nsys_capture_failure_without_overview_png_fails_in_all_four_places(self) -> None:
+        """capture_nsys=True, render_overview_png=False 下 nsys 采集失败时，四处结论均为 FAIL。修复前的行为见 PR-3。"""
         resolved_nsys = mk.find_nsys_binary()
         self.assertIsNotNone(resolved_nsys)
         self.assertEqual(Path(str(resolved_nsys)).resolve(), self._fake_nsys.resolve())
@@ -532,10 +530,10 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
 
         rep = _norm_paths(raw_rep, pairs)
         self.assertEqual(rep["schema"], "weaveprof.megakernel-audit/v1")
-        self.assertEqual(rep["status"], "PASS")
+        self.assertEqual(rep["status"], "FAIL")
         self.assertEqual(rep["mode"], "shadow_build_run")
         self.assertIs(rep["seal_verified"], True)
-        self.assertNotIn("seal_integrity_only", rep)
+        self.assertIs(rep["seal_integrity_only"], True)
         self.assertEqual(rep["seal_path"], "<TMP>/b/seal.json")
         self.assertIsNotNone(re.fullmatch(r"[0-9a-f]{64}", str(rep["seal_sha256"])))
         self.assertEqual(rep["overhead_pct"], 3.95)
@@ -551,27 +549,26 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
         )
         self.assertEqual(rep["artifacts"], {"out_dir": "<TMP>/b", "files": ["feedback.json", "verify.json"]})
 
-        # overview.png and nsys hardware outputs are NOT generated
         self.assertFalse((out_b / "overview.png").exists())
         self.assertFalse((out_b / "nsys_hw.json").exists())
         self.assertFalse((out_b / "nsys_cap.sqlite").exists())
         self.assertTrue((out_b / "nsys_profile.log").is_file())
 
-        # Seal on disk also records status == "PASS" and empty failed list
         seal_doc = _norm_paths(json.loads((out_b / "seal.json").read_text(encoding="utf-8")), pairs)
-        self.assertEqual(seal_doc["status"], "PASS")
+        self.assertEqual(seal_doc["status"], "FAIL")
         self.assertEqual(seal_doc["mode"], "shadow_build_run")
-        self.assertEqual(seal_doc["failed"], [])
+        self.assertEqual(seal_doc["failed"], ["structural"])
         self.assertEqual(seal_doc["checks"], {"assembly": True, "output": True, "events": True, "overhead": True})
         self.assertIsNone(seal_doc["artifacts"]["overview_png"])
         self.assertIsNone(seal_doc["artifacts"]["nsys_hw"])
-        self.assertEqual(seal_doc["artifacts"]["trace"]["path"], "<TMP>/b/bench/capture.fi02.bin")
-        self.assertIsNone(seal_doc["artifacts"]["failed_trace"])
+        self.assertIsNone(seal_doc["artifacts"]["trace"])
+        self.assertEqual(seal_doc["artifacts"]["failed_trace"]["path"], "<TMP>/b/bench/capture.fi02.bin")
+        self.assertIs(verify_seal(out_b / "seal.json", require_pass=True)["ok"], False)
+        self.assertIs(verify_seal(out_b / "seal.json", require_pass=False)["ok"], True)
 
-        # verify.json and feedback.json on disk both record status == "PASS"
         verify_doc = _norm_paths(json.loads((out_b / "verify.json").read_text(encoding="utf-8")), pairs)
         self.assertEqual(set(verify_doc.keys()), _VERIFY_JSON_KEYS)
-        self.assertEqual(verify_doc["status"], "PASS")
+        self.assertEqual(verify_doc["status"], "FAIL")
         self.assertEqual(verify_doc["failed"], [])
         self.assertEqual(verify_doc["checks"], {"assembly": True, "output": True, "events": True, "overhead": True})
         self.assertEqual(verify_doc["overhead_ratio"], 0.039501)
@@ -579,7 +576,7 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
         self.assertEqual(verify_doc["region_lock"]["provider"], "local_file")
 
         feedback_doc = _norm_paths(json.loads((out_b / "feedback.json").read_text(encoding="utf-8")), pairs)
-        self.assertEqual(feedback_doc["status"], "PASS")
+        self.assertEqual(feedback_doc["status"], "FAIL")
         self.assertEqual(feedback_doc["mode"], "shadow_build_run")
         self.assertIsNone(feedback_doc["nsys"])
         self.assertEqual(
@@ -590,7 +587,6 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
             ],
         )
 
-        # Confirm fake nsys profile was invoked and exited non-zero (rc=2), without reaching nsys export
         recs = self._read_invocations(inv_b, "m2b")
         self.assertEqual(len(recs), 4)
         self.assertEqual({recs[0]["kind"], recs[1]["kind"]}, {"build"})
@@ -599,8 +595,8 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
         self.assertEqual(recs[3]["mode"], "fail_rc")
         self.assertEqual(recs[3]["rc"], 2)
 
-    def test_suspected_bug_M2a_nsys_capture_failure_default_overview_png_disk_vs_return_mismatch(self) -> None:
-        """这是疑似 bug M2a：默认参数（render_overview_png=True）下 nsys 采集失败时，磁盘上的 verify.json、feedback.json 写 PASS，返回值和封条写 FAIL，见 `交付/疑似bug清单.md`。这里只钉现状，修复时要同时改这里的期望值。"""
+    def test_m2a_nsys_capture_failure_default_overview_png_fails_in_all_four_places(self) -> None:
+        """默认参数（render_overview_png=True）下 nsys 采集失败时，四处结论均为 FAIL。修复前的行为见 PR-3。"""
         resolved_nsys = mk.find_nsys_binary()
         self.assertIsNotNone(resolved_nsys)
         self.assertEqual(Path(str(resolved_nsys)).resolve(), self._fake_nsys.resolve())
@@ -611,7 +607,6 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
         inv_a = self._root / "inv_m2a.jsonl"
         pairs = _make_pairs((self._root, "<TMP>"), (REPO_ROOT, "<REPO>"))
 
-        # Omit render_overview_png so the default parameter value render_overview_png=True is exercised directly
         prev = self._run_with_isolated_env(
             self._root / "cache_m2a",
             inv_a,
@@ -632,7 +627,6 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
         finally:
             self._restore_env(prev)
 
-        # 1. Returned report has status == "FAIL" and 4 structural_blockers (2 pre-write + 2 post-write PNG blockers)
         rep = _norm_paths(raw_rep, pairs)
         self.assertEqual(rep["schema"], "weaveprof.megakernel-audit/v1")
         self.assertEqual(rep["status"], "FAIL")
@@ -651,14 +645,12 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
                 "NSYS_CAPTURE_FAILED: nsys profile exited 2 (see <TMP>/a/nsys_profile.log)",
                 "LOW_MATH_WAIT_NO_LATENCY_HIDING",
                 "OVERVIEW_PNG_FAILED: ValueError: MISSING_HARDWARE_UTILIZATION_CURVES: Panel (A) requires same-run hardware profiler utilization curves (200 ",
-                "MISSING_OVERVIEW_PNG: render_overview_png=True requires a valid non-empty overview.png",
             ],
         )
         self.assertEqual(rep["artifacts"], {"out_dir": "<TMP>/a", "files": ["feedback.json", "verify.json"]})
         self.assertFalse((out_a / "overview.png").exists())
         self.assertFalse((out_a / "nsys_hw.json").exists())
 
-        # 2. Seal on disk (written at :1996 after PNG failure flip) has status == "FAIL" and failed == ["structural"]
         seal_doc = _norm_paths(json.loads((out_a / "seal.json").read_text(encoding="utf-8")), pairs)
         self.assertEqual(seal_doc["status"], "FAIL")
         self.assertEqual(seal_doc["mode"], "shadow_build_run")
@@ -668,19 +660,19 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
         self.assertIsNone(seal_doc["artifacts"]["nsys_hw"])
         self.assertIsNone(seal_doc["artifacts"]["trace"])
         self.assertEqual(seal_doc["artifacts"]["failed_trace"]["path"], "<TMP>/a/bench/capture.fi02.bin")
+        self.assertIs(verify_seal(out_a / "seal.json", require_pass=True)["ok"], False)
+        self.assertIs(verify_seal(out_a / "seal.json", require_pass=False)["ok"], True)
 
-        # 3. verify.json on disk (written at :1951 before PNG failure flip) still has status == "PASS" and failed == []
         verify_doc = _norm_paths(json.loads((out_a / "verify.json").read_text(encoding="utf-8")), pairs)
         self.assertEqual(set(verify_doc.keys()), _VERIFY_JSON_KEYS)
-        self.assertEqual(verify_doc["status"], "PASS")
+        self.assertEqual(verify_doc["status"], "FAIL")
         self.assertEqual(verify_doc["failed"], [])
         self.assertEqual(verify_doc["checks"], {"assembly": True, "output": True, "events": True, "overhead": True})
         self.assertEqual(verify_doc["overhead_ratio"], 0.039501)
         self.assertIsNone(verify_doc["fidelity_gates"]["sw_hw_coverage"])
 
-        # 4. feedback.json on disk (written at :1942 before PNG failure flip) still has status == "PASS" and only 2 blockers
         feedback_doc = _norm_paths(json.loads((out_a / "feedback.json").read_text(encoding="utf-8")), pairs)
-        self.assertEqual(feedback_doc["status"], "PASS")
+        self.assertEqual(feedback_doc["status"], "FAIL")
         self.assertEqual(feedback_doc["mode"], "shadow_build_run")
         self.assertIsNone(feedback_doc["nsys"])
         self.assertEqual(
@@ -688,6 +680,7 @@ class M2NsysCaptureFailureCharacterizationTest(unittest.TestCase):
             [
                 "NSYS_CAPTURE_FAILED: nsys profile exited 2 (see <TMP>/a/nsys_profile.log)",
                 "LOW_MATH_WAIT_NO_LATENCY_HIDING",
+                "OVERVIEW_PNG_FAILED: ValueError: MISSING_HARDWARE_UTILIZATION_CURVES: Panel (A) requires same-run hardware profiler utilization curves (200 kHz nsys on NVIDIA o",
             ],
         )
 
