@@ -737,7 +737,7 @@ def _parse_trace(trace: Mapping[str, Any]) -> Dict[str, Any]:
     )
     ep_val = int(meta.get("ep") or other.get("ep") or 0)
     multi_node = bool(ep_val > 8 or meta.get("multi_node") or "inter_rdma" in hw_curves or has_inter_slices)
-    dual_fabric = bool(has_inter_slices and (has_intra_slices or multi_node))
+    dual_fabric = bool(not other.get("unified_stage_mode") and has_inter_slices and (has_intra_slices or multi_node))
     use_ib = any(
         sp["fabric"] == "inter_node_ib" or bool(re.search(r"\b(?:infiniband|ibgda|ib_)\b", sp["label"], re.I))
         for sp in sw_spans
@@ -1419,17 +1419,36 @@ def _render_warp_panel(
                     only_ivs = [(a, b) for a, b, _ in ivs_cta]
                     d_segs, avg_d, max_d = _compute_depth_segments(only_ivs)
                 else:
-                    # Take max per-CTA depth at each time point for visual strip, and mean per-CTA depth for stats
-                    all_d_segs: List[Tuple[float, float, int]] = []
+                    # Pointwise max per-CTA depth across resident CTAs (disjoint x-intervals) and mean per-CTA depth for stats
+                    pts_set = set()
+                    cta_seg_lists: List[List[Tuple[float, float, int]]] = []
                     for _c_id, c_ivs in by_cta_ivs.items():
                         c_segs, c_avg, c_max = _compute_depth_segments(c_ivs)
                         if c_max > 0:
                             cta_avgs.append(c_avg)
                             max_d = max(max_d, c_max)
-                            all_d_segs.extend(c_segs)
-                    # Draw lower depths first so deeper active CTA stages remain visible on top
-                    all_d_segs.sort(key=lambda x: x[2])
-                    d_segs = all_d_segs
+                            cta_seg_lists.append(c_segs)
+                            for a_s, b_s, _ in c_segs:
+                                pts_set.add(a_s)
+                                pts_set.add(b_s)
+                    pts_sorted = sorted(pts_set)
+                    merged_max: List[Tuple[float, float, int]] = []
+                    for idx_p in range(len(pts_sorted) - 1):
+                        pa, pb = pts_sorted[idx_p], pts_sorted[idx_p + 1]
+                        if pb <= pa:
+                            continue
+                        pm = 0.5 * (pa + pb)
+                        md = 0
+                        for cs_l in cta_seg_lists:
+                            for sa, sb, sd in cs_l:
+                                if sa <= pm <= sb and sd > md:
+                                    md = sd
+                        if md > 0:
+                            if merged_max and merged_max[-1][2] == md and abs(merged_max[-1][1] - pa) < 1e-9:
+                                merged_max[-1] = (merged_max[-1][0], pb, md)
+                            else:
+                                merged_max.append((pa, pb, md))
+                    d_segs = merged_max
                     avg_d = (sum(cta_avgs) / len(cta_avgs)) if cta_avgs else 0.0
 
                 smax = eng_scale_max.get(eng, max_d)
@@ -1442,7 +1461,7 @@ def _render_warp_panel(
                         depth_polys[(eng, bucket)].append([(cx0, y_top), (cx1, y_top), (cx1, y_bot), (cx0, y_bot)])
                         seg_px = ((cx1 - cx0) / x_span) * 2200.0
                         need_px = min_lbl_px + (7.0 if d >= 10 else 0.0)
-                        if (is_zoom or len(by_cta_ivs) <= 1) and seg_px >= need_px:
+                        if sub_h >= 0.20 and (is_zoom or len(by_cta_ivs) <= 1) and seg_px >= need_px:
                             rr_c, gg_c, bb_c = _hex_to_rgb(_bcol)
                             lum = 0.299 * rr_c + 0.587 * gg_c + 0.114 * bb_c
                             t_col = "#FFFFFF" if lum < 145.0 else "#0F172A"
@@ -1465,15 +1484,17 @@ def _render_warp_panel(
                 if ts_all:
                     gaps = sorted(ts_all[i] - ts_all[i - 1] for i in range(1, len(ts_all)))
                     med_gap = gaps[len(gaps) // 2] if gaps else x_span
-                    dense_pins = (not is_zoom) and (len(ts_all) > 40 or med_gap < min_pin_gap_us)
+                    eff_pin_gap_us = (x_span * (10.5 / 2200.0)) if is_zoom else min_pin_gap_us
+                    dense_pins = (len(ts_all) > (120 if is_zoom else 40)) or (med_gap < eff_pin_gap_us)
                     stem_top = y_top if is_pure_prod else (y_top - 0.05)
                     pin_y = y_top + (0.01 if is_pure_prod else -0.01)
                     tick_bot = y_top + (y_bot - y_top) * 0.45 if max_d >= 1 else y_bot
                     last_pin_t = -1e18
                     last_tick_t = -1e18
                     for idx_t, t_val in enumerate(ts_all):
-                        is_wave_head = (idx_t == 0) or ((t_val - ts_all[idx_t - 1]) > max(2.2 * med_gap, min_pin_gap_us))
-                        if (not dense_pins) or (is_wave_head and (t_val - last_pin_t) >= min_pin_gap_us * 0.9):
+                        is_wave_head = (idx_t == 0) or ((t_val - ts_all[idx_t - 1]) > max(2.2 * med_gap, eff_pin_gap_us))
+                        can_place_pin = (t_val - last_pin_t) >= eff_pin_gap_us * (0.95 if is_zoom else 0.9)
+                        if can_place_pin and ((not dense_pins) or is_zoom or is_wave_head):
                             pin_stems[eng].append([(t_val, stem_top), (t_val, y_bot)])
                             pin_pts_x[eng].append(t_val)
                             pin_pts_y[eng].append(pin_y)
@@ -1916,22 +1937,28 @@ def render_swhw_overview_png(
             return stage_color_map.get((sp["sem"], lbl), STAGE_COLORS.get(sp["sem"], _DEFAULT_COLOR))[0]
 
         has_second_async_leg = bool(async_depth_handles)
+        n_top_rows = 0
+        n_async_rows = 0
+        n_leg_cols = 7
+        leg_y = (0.946 if has_second_async_leg else 0.936) if has_zoom else (0.936 if has_hw else 0.916)
         if top_legend_handles:
-            n_leg_cols = min(len(top_legend_handles), 7)
-            leg_y = (0.942 if has_second_async_leg else 0.934) if has_zoom else (0.934 if has_hw else 0.916)
+            max_top_lbl = max((len(str(h.get_label() or "")) for h in top_legend_handles), default=0)
+            n_leg_cols = min(len(top_legend_handles), 5 if max_top_lbl >= 38 else (6 if max_top_lbl >= 32 else 7))
+            n_top_rows = (len(top_legend_handles) + n_leg_cols - 1) // n_leg_cols
             fig.legend(
                 handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, leg_y),
                 ncol=n_leg_cols, frameon=False,
-                fontsize=8.1 if n_leg_cols >= 7 else 8.5,
-                handlelength=1.35, columnspacing=1.15,
+                fontsize=7.6 if max_top_lbl >= 34 else (8.0 if n_leg_cols >= 6 else 8.4),
+                handlelength=1.28, columnspacing=0.95,
             )
         if has_second_async_leg:
             n_acol = min(len(async_depth_handles), 11)
-            aleg_y = 0.919 if has_zoom else (0.910 if has_hw else 0.892)
+            n_async_rows = (len(async_depth_handles) + n_acol - 1) // n_acol
+            aleg_y = leg_y - (0.0145 * max(1, n_top_rows) + 0.0085)
             fig.legend(
                 handles=async_depth_handles, loc="upper center", bbox_to_anchor=(0.5, aleg_y),
                 ncol=n_acol, frameon=True, facecolor="#F8FAFC", edgecolor="#CBD5E1",
-                fontsize=7.65 if n_acol >= 9 else 8.0,
+                fontsize=7.6 if n_acol >= 9 else 8.0,
                 handlelength=1.25, handletextpad=0.38, columnspacing=0.82, borderpad=0.28,
             )
 
@@ -2008,11 +2035,11 @@ def render_swhw_overview_png(
         ax_hw.set_ylabel("Utilization (%)", fontsize=9.5, color="#263238")
         hw_title_src = "same-run SW+HW capture" if is_amd else "real nsys GPU metric curves"
         ax_hw.set_title(f"(A) Aligned Hardware Utilization Curves ({hw_title_src})",
-                        fontsize=10.5, fontweight="bold", color="#111111", pad=44)
+                        fontsize=10.5, fontweight="bold", color="#111111", pad=36)
         ax_hw.legend(
-            loc="upper center", bbox_to_anchor=(0.5, 1.33),
+            loc="upper center", bbox_to_anchor=(0.5, 1.25),
             ncol=min(max(2, len(curve_order_keys)), 3 if len(curve_order_keys) >= 5 else 4),
-            frameon=False, fontsize=8.4, handlelength=2.0,
+            frameon=False, fontsize=8.4, handlelength=2.0, columnspacing=1.35,
         )
 
         if multi_node and not has_active_rdma:
@@ -2022,16 +2049,6 @@ def render_swhw_overview_png(
                 transform=ax_hw.transAxes, ha="left", va="center",
                 fontsize=8.2, fontstyle="italic", color="#8B1E1E", zorder=6,
             )
-
-        if chips and not dual_fabric:
-            n_ch = len(chips)
-            for idx_c, (txt, col) in enumerate(chips):
-                chip_x = 0.004 + idx_c * (0.992 / max(1, n_ch))
-                ax_hw.text(
-                    chip_x, 1.045, txt, transform=ax_hw.transAxes, ha="left", va="bottom",
-                    fontsize=7.9, fontweight="bold", color="#111111",
-                    bbox=dict(boxstyle="round,pad=0.22", facecolor="#F8FAFC", edgecolor=col, linewidth=1.0),
-                )
 
     # ---- Panel (B): All physical SMs / CUs dense rasterized waterfall ----
     ax_sm.set_facecolor("#FFFFFF")
@@ -2238,9 +2255,11 @@ def render_swhw_overview_png(
     max_lbl = max((len(s) for s in yt_labels), default=10)
     left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
     right_m = (0.795 if len(active_async_engines) >= 2 else 0.825) if has_async_rep else 0.985
-    extra_leg = (0.022 if (not dual_fabric and len(top_legend_handles) > 7) else 0.0) + (
-        0.026 if (not dual_fabric and bool(active_async_engines)) else 0.0
-    )
+    _max_tl = max((len(str(h.get_label() or "")) for h in top_legend_handles), default=0) if top_legend_handles else 0
+    _ncol_t = min(len(top_legend_handles), 5 if _max_tl >= 38 else (6 if _max_tl >= 32 else 7)) if top_legend_handles else 1
+    _ntop = max(1, (len(top_legend_handles) + _ncol_t - 1) // _ncol_t) if (not dual_fabric and top_legend_handles) else 0
+    _nasy = max(1, (len(async_depth_handles) + 10) // 11) if (not dual_fabric and bool(active_async_engines)) else 0
+    extra_leg = (0.015 * max(0, _ntop - 1)) + ((0.024 + 0.014 * max(0, _nasy - 1)) if _nasy > 0 else 0.0)
     if has_zoom:
         top_m = min(0.862, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else min(0.870, 1.0 - 1.85 / fig_h) - extra_leg
     else:
@@ -2252,11 +2271,11 @@ def render_swhw_overview_png(
     # ---- Bottom Hardware Metrics Summary Box (Peak & Mean for every hardware metric) ----
     if show_hw_box:
         from matplotlib.patches import FancyBboxPatch
-        box_x0 = left_m
+        box_x0 = 0.032
         box_x1 = 0.978
         box_w = max(0.20, box_x1 - box_x0)
         box_y0 = 0.011
-        box_h = 0.033 if has_zoom else 0.041
+        box_h = 0.032 if has_zoom else 0.040
         box_yc = box_y0 + 0.5 * box_h
         fig.patches.append(FancyBboxPatch(
             (box_x0, box_y0), box_w, box_h,
@@ -2264,19 +2283,20 @@ def render_swhw_overview_png(
             transform=fig.transFigure,
             facecolor="#F8FAFC", edgecolor="#475569", linewidth=1.2, zorder=10,
         ))
-        hdr_txt = f"Hardware Metrics Summary (0–{k_dur:,.1f} µs):"
-        hdr_x = box_x0 + 0.010
+        hdr_txt = f"Hardware Summary (0–{k_dur:,.1f} µs):"
+        hdr_x = box_x0 + 0.009
+        n_hw_it = len(hw_summary_items)
+        hdr_fs = 7.5 if n_hw_it >= 5 else 8.3
         fig.text(
             hdr_x, box_yc, hdr_txt,
-            ha="left", va="center", fontsize=8.5, fontweight="bold", color="#0F172A", zorder=11,
+            ha="left", va="center", fontsize=hdr_fs, fontweight="bold", color="#0F172A", zorder=11,
         )
-        items_x0 = hdr_x + (0.195 if len(hdr_txt) <= 38 else 0.215)
-        avail_w = max(0.10, (box_x1 - 0.010) - items_x0)
-        n_hw_it = len(hw_summary_items)
+        items_x0 = hdr_x + (0.155 if n_hw_it >= 5 else (0.165 if len(hdr_txt) <= 34 else 0.185))
+        avail_w = max(0.10, (box_x1 - 0.005) - items_x0)
         slot_w = avail_w / max(1, n_hw_it)
         sw_h = box_h * 0.42
-        sw_w = 0.0085
-        fs_hw = 8.1 if n_hw_it <= 4 else 7.4
+        sw_w = 0.0068 if n_hw_it >= 5 else 0.0075
+        fs_hw = 8.0 if n_hw_it <= 4 else 6.2
         for idx_h, (m_short, m_col, m_peak, m_mean) in enumerate(hw_summary_items):
             ix = items_x0 + idx_h * slot_w
             fig.patches.append(Rectangle(
@@ -2284,10 +2304,50 @@ def render_swhw_overview_png(
                 transform=fig.transFigure, facecolor=m_col, edgecolor="#1E293B", linewidth=0.5, zorder=11,
             ))
             fig.text(
-                ix + sw_w + 0.0045, box_yc,
-                f"{m_short}: Peak {m_peak:.1f}% · Mean {m_mean:.1f}%",
+                ix + sw_w + 0.004, box_yc,
+                f"{m_short}: peak {m_peak:.1f}%, mean {m_mean:.1f}%",
                 ha="left", va="center", fontsize=fs_hw, fontweight="bold", color="#1E293B", zorder=11,
             )
+
+    # Programmatic collision and canvas-bounds check over all visible text artists
+    from matplotlib.text import Text as _MplText
+    fig.canvas.draw()
+    _rnd = fig.canvas.get_renderer()
+    _cw, _ch = fig.canvas.get_width_height()
+    _oob_ticks = set()
+    for _ax_i in fig.axes:
+        _xl0, _xl1 = sorted(_ax_i.get_xlim())
+        _yl0, _yl1 = sorted(_ax_i.get_ylim())
+        for _tk in _ax_i.xaxis.get_major_ticks() + _ax_i.xaxis.get_minor_ticks():
+            _loc = _tk.get_loc()
+            if _loc < _xl0 - 1e-6 or _loc > _xl1 + 1e-6:
+                _oob_ticks.add(id(_tk.label1))
+                _oob_ticks.add(id(_tk.label2))
+        for _tk in _ax_i.yaxis.get_major_ticks() + _ax_i.yaxis.get_minor_ticks():
+            _loc = _tk.get_loc()
+            if _loc < _yl0 - 1e-6 or _loc > _yl1 + 1e-6:
+                _oob_ticks.add(id(_tk.label1))
+                _oob_ticks.add(id(_tk.label2))
+    _vis_texts = []
+    _seen_ids = set()
+    for _t in fig.findobj(_MplText):
+        if id(_t) in _seen_ids or id(_t) in _oob_ticks:
+            continue
+        _seen_ids.add(id(_t))
+        if _t.get_visible():
+            _s = str(_t.get_text() or "").strip()
+            if _s:
+                _bb_t = _t.get_window_extent(_rnd)
+                if _bb_t.x0 < 2.0 or _bb_t.x1 > _cw - 2.0 or _bb_t.y0 < 2.0 or _bb_t.y1 > _ch - 2.0:
+                    raise RuntimeError(f"TEXT_CLIPPED in viz.py: {_s!r} {_bb_t} outside canvas {_cw}x{_ch}")
+                _vis_texts.append((_s, _bb_t))
+    for _i in range(len(_vis_texts)):
+        _sa, _ba = _vis_texts[_i]
+        for _j in range(_i + 1, len(_vis_texts)):
+            _sb, _bb = _vis_texts[_j]
+            if (min(_ba.x1, _bb.x1) - max(_ba.x0, _bb.x0) > 1.5 and
+                    min(_ba.y1, _bb.y1) - max(_ba.y0, _bb.y0) > 1.5):
+                raise RuntimeError(f"TEXT_OVERLAP in viz.py: {_sa!r} {_ba} overlaps {_sb!r} {_bb}")
 
     out_path = Path(out_png)
     out_path.parent.mkdir(parents=True, exist_ok=True)
