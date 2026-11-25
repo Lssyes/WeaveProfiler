@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build compact, sanitized golden fixtures from recorded ``wp.profile`` H20 runs.
 
-Each generated case under ``tests/golden/cases/<case>/`` follows the replay layout:
+Each generated case under ``tests/golden/wpprofile_cases/<case>/`` follows the replay layout:
 
     <case>/case.json                        CLI options + sanitized provenance + digests
     <case>/kernel/handoff.cu                uninstrumented CUDA kernel source
@@ -735,8 +735,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--out",
         type=Path,
-        default=HERE / "cases",
-        help="Output cases directory (defaults to tests/golden/cases)",
+        default=HERE / "wpprofile_cases",
+        help="Output cases directory (defaults to tests/golden/wpprofile_cases)",
     )
     args = ap.parse_args(argv)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Golden replay harness for ``weaveprof profile`` closed-loop episodes.
 
-Each real fixture under ``tests/golden/cases/wpprofile_<name>/`` follows the
+Each real fixture under ``tests/golden/wpprofile_cases/wpprofile_<name>/`` follows the
 layout:
 
     case.json                          CLI flags + capture provenance
@@ -61,10 +61,10 @@ ROOT = HERE.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-CASES = HERE / "cases"
+CASES = HERE / "wpprofile_cases"
 REPLAY_BENCH = HERE / "wpprofile_replay_bench.py"
 
-# Active real H20 capture cases checked into tests/golden/cases/.
+# Active real H20 capture cases checked into tests/golden/wpprofile_cases/.
 EXPECTED_REAL_CASES: tuple[str, ...] = (
     "wpprofile_h20_handoff_round1_fail",
     "wpprofile_h20_handoff_collapse_fail",
@@ -1605,7 +1605,7 @@ def _make_real_case_test(case_name: str):
             "must be updated when fixed."
         )
     else:
-        _test.__doc__ = f"golden wp.profile replay of tests/golden/cases/{case_name}"
+        _test.__doc__ = f"golden wp.profile replay of tests/golden/wpprofile_cases/{case_name}"
     return _test
 
 
