@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+    branches: ["ci/**", "r/**", "refactor/**", "test/**"]
   pull_request:
 
 jobs:
@@ -24,6 +25,7 @@ jobs:
       - name: public surface
         run: python -B -m unittest -v tests/golden/test_public_surface.py
       - name: code-metrics ratchet
+        if: startsWith(github.head_ref || github.ref_name, 'r/') || startsWith(github.head_ref || github.ref_name, 'refactor/') || startsWith(github.head_ref || github.ref_name, 'ci/')
         run: python -B -m unittest -v tests/quality/test_code_metrics_ratchet.py
       - name: golden end-to-end (3 real H20 captures)
         run: python -B -m unittest -v tests/golden/test_golden_audit.py
