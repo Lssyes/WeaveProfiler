@@ -1972,6 +1972,23 @@ def run_megakernel_audit(
                 hard_fail = True
                 blockers.append("MISSING_OVERVIEW_PNG: render_overview_png=True requires a valid non-empty overview.png")
 
+    if shadow_info.get("nsys_capture") and not (hw or {}).get("hw_series"):
+        if not hw:
+            no_hw_reason = "sqlite unreadable"
+        else:
+            gm_conn = sqlite3.connect(f"{Path(nsys_sqlite).resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                if "GPU_METRICS" not in _sqlite_tables(gm_conn):
+                    no_hw_reason = "no GPU_METRICS table"
+                elif gm_conn.execute("SELECT 1 FROM GPU_METRICS LIMIT 1").fetchone() is None:
+                    no_hw_reason = "GPU_METRICS table empty"
+                else:
+                    no_hw_reason = "no GPU_METRICS rows in kernel window"
+            finally:
+                gm_conn.close()
+        status = "FAIL"
+        hard_fail = True
+        blockers.append(f"NSYS_NO_HW_CURVES: {no_hw_reason}")
     feedback_doc = {
         "schema": MEGAKERNEL_SCHEMA, "status": status, "mode": mode, "megakernel_skew": skew,
         "causal": causal, "fidelity_gates": gates, "structural_blockers": blockers, "round_diff": round_diff,

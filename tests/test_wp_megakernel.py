@@ -1896,5 +1896,298 @@ class NsysCaptureFailureAuditTest(_TmpCase):
         self.assertFalse(mk.verify_seal(out_e1 / "seal.json", require_pass=False)["ok"])
 
 
+class NsysNoUsableHwDataAuditTest(_TmpCase):
+    """Regression suite for M2c: requested nsys capture succeeds, but yields no usable GPU_METRICS curves."""
+
+    def setUp(self):
+        super().setUp()
+        import socket
+
+        home = self.tmp / "home"
+        (home / ".cache").mkdir(parents=True, exist_ok=True)
+        (home / ".config").mkdir(parents=True, exist_ok=True)
+        (home / "mpl").mkdir(parents=True, exist_ok=True)
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        self.fake_nsys_cfg = self.tmp / "fake_nsys_m2c_cfg.json"
+        self.fake_nsys_log = self.tmp / "fake_nsys_m2c_calls.log"
+        self.fake_nsys = bin_dir / "nsys"
+        self.fake_nsys.write_text(
+            f"#!{sys.executable} -B\n"
+            "import json, os, pathlib, shutil, sys\n"
+            "cfg = json.loads(pathlib.Path(os.environ['WEAVEPROF_TEST_M2C_NSYS_CFG']).read_text(encoding='utf-8'))\n"
+            "sub = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+            "with open(cfg['log_path'], 'a', encoding='utf-8') as f:\n"
+            "    f.write(sub + '\\n')\n"
+            "if sub == 'profile':\n"
+            "    if cfg.get('profile_write_rep', True):\n"
+            "        i = sys.argv.index('-o')\n"
+            "        pathlib.Path(sys.argv[i + 1] + '.nsys-rep').write_bytes(b'FAKE_NSYS_REP\\n')\n"
+            "    sys.exit(int(cfg.get('profile_rc', 0)))\n"
+            "if sub == 'export':\n"
+            "    if cfg.get('export_write_sqlite', True):\n"
+            "        i = sys.argv.index('--output')\n"
+            "        shutil.copyfile(cfg['sqlite_template'], sys.argv[i + 1])\n"
+            "    sys.exit(int(cfg.get('export_rc', 0)))\n"
+            "sys.exit(2)\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.fake_nsys.chmod(0o755)
+
+        env_overrides = {
+            "HOME": str(home),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "MPLCONFIGDIR": str(home / "mpl"),
+            "MPLBACKEND": "Agg",
+            "WEAVEPROF_TEST_M2C_NSYS_CFG": str(self.fake_nsys_cfg),
+            "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+        }
+        saved = {k: os.environ.get(k) for k in env_overrides}
+
+        def _restore_env():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        self.addCleanup(_restore_env)
+        os.environ.update(env_overrides)
+
+        real_connect = socket.socket.connect
+        real_connect_ex = socket.socket.connect_ex
+
+        def _guard_addr(addr):
+            host = addr[0] if isinstance(addr, tuple) and addr else ""
+            if isinstance(host, bytes):
+                host = host.decode("ascii", errors="ignore")
+            if host and host not in ("127.0.0.1", "::1", "localhost"):
+                raise AssertionError(f"unexpected external socket connection to {addr!r}")
+
+        p1 = mock.patch.object(socket.socket, "connect", lambda s, a: (_guard_addr(a), real_connect(s, a))[1])
+        p2 = mock.patch.object(socket.socket, "connect_ex", lambda s, a: (_guard_addr(a), real_connect_ex(s, a))[1])
+        p1.start()
+        p2.start()
+        self.addCleanup(p1.stop)
+        self.addCleanup(p2.stop)
+
+        self.ws = self.tmp / "ws"
+        self.ws.mkdir()
+        (self.ws / "sparse_mla.cu").write_text(CLEAN_SOURCE, encoding="utf-8", newline="\n")
+        self.fixtures = self.tmp / "fixtures"
+        self.fixtures.mkdir()
+        self.dump_file = write_dump(self.fixtures / "capture.wp02.bin")
+        (self.fixtures / "runtime.json").write_text(json.dumps(runtime_metrics()), encoding="utf-8", newline="\n")
+        (self.fixtures / "names.json").write_text(json.dumps(NAMES), encoding="utf-8", newline="\n")
+        (self.ws / "bench.py").write_text(
+            "import os, shutil, sys\n"
+            "out = os.environ['WEAVEPROF_OUT_DIR']\n"
+            "for f in ('capture.wp02.bin', 'runtime.json', 'names.json'):\n"
+            "    shutil.copy(os.path.join(sys.argv[1], f), os.path.join(out, f))\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.valid_sqlite = make_nsys_sqlite(self.fixtures / "valid.sqlite")
+        self.unreadable_sqlite = self.fixtures / "unreadable.sqlite"
+        self.unreadable_sqlite.write_bytes(b"CORRUPT_NOT_SQLITE_HEADER_BYTES\n")
+
+        self.no_table_sqlite = make_nsys_sqlite(self.fixtures / "no_table.sqlite")
+        c = sqlite3.connect(str(self.no_table_sqlite))
+        c.execute("DROP TABLE GPU_METRICS")
+        c.commit()
+        c.close()
+
+        self.empty_table_sqlite = make_nsys_sqlite(self.fixtures / "empty_table.sqlite")
+        c = sqlite3.connect(str(self.empty_table_sqlite))
+        c.execute("DELETE FROM GPU_METRICS")
+        c.commit()
+        c.close()
+
+        self.out_of_window_sqlite = make_nsys_sqlite(self.fixtures / "out_of_window.sqlite")
+        c = sqlite3.connect(str(self.out_of_window_sqlite))
+        c.execute("DELETE FROM GPU_METRICS WHERE timestamp > 1000100000")
+        c.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET start = start + 10000000, end = end + 10000000")
+        c.commit()
+        c.close()
+
+        self.build_cmd = [sys.executable, "-B", "-c", "open('built.txt', 'w').write('ok')"]
+        self.bench_cmd = [sys.executable, "-B", "bench.py", str(self.fixtures)]
+        self.assertEqual(Path(mk.find_nsys_binary()).resolve(), self.fake_nsys.resolve())
+
+    def _configure_nsys(self, sqlite_template: Path, *, profile_rc: int = 0, profile_write_rep: bool = True):
+        if self.fake_nsys_log.exists():
+            self.fake_nsys_log.unlink()
+        self.fake_nsys_cfg.write_text(
+            json.dumps({
+                "log_path": str(self.fake_nsys_log),
+                "profile_rc": profile_rc,
+                "profile_write_rep": profile_write_rep,
+                "export_rc": 0,
+                "export_write_sqlite": True,
+                "sqlite_template": str(sqlite_template),
+            }),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+    def _run_shadow(self, name: str, *, capture_nsys: bool, render_overview_png: bool, nsys_sqlite=None):
+        out = self.tmp / f"out-{name}"
+        rep = mk.run_megakernel_audit(
+            self.ws,
+            entry_source="sparse_mla.cu",
+            bench_cmd=self.bench_cmd,
+            build_cmd=self.build_cmd,
+            inst_files={"sparse_mla.cu": INSTRUMENTED_SOURCE},
+            card="h20",
+            limit=0.10,
+            capture_nsys=capture_nsys,
+            nsys_sqlite=nsys_sqlite,
+            render_overview_png=render_overview_png,
+            out_dir=out,
+        )
+        ver = json.loads((out / "verify.json").read_text(encoding="utf-8"))
+        fb = json.loads((out / "feedback.json").read_text(encoding="utf-8"))
+        seal = json.loads((out / "seal.json").read_text(encoding="utf-8"))
+        return out, rep, ver, fb, seal
+
+    def _assert_m2c_both_png_modes(self, tag: str, sqlite_template: Path, expected_blocker: str):
+        for png in (False, True):
+            self._configure_nsys(sqlite_template)
+            out, rep, ver, fb, seal = self._run_shadow(
+                f"{tag}-png{int(png)}", capture_nsys=True, render_overview_png=png
+            )
+            self.assertEqual(
+                (ver["status"], fb["status"], rep["status"], seal["status"]),
+                ("FAIL", "FAIL", "FAIL", "FAIL"),
+            )
+            self.assertIn(expected_blocker, fb["structural_blockers"])
+            self.assertIn(expected_blocker, rep["structural_blockers"])
+            self.assertEqual(seal["failed"], ["structural"])
+            self.assertTrue(rep["seal_verified"])
+            self.assertTrue(rep["seal_integrity_only"])
+            self.assertTrue(mk.verify_seal(out / "seal.json", require_pass=False)["ok"])
+            self.assertFalse(mk.verify_seal(out / "seal.json", require_pass=True)["ok"])
+            if png:
+                missing_png = "MISSING_OVERVIEW_PNG: render_overview_png=True requires a valid non-empty overview.png"
+                self.assertIn(missing_png, fb["structural_blockers"])
+                self.assertIn(missing_png, rep["structural_blockers"])
+            else:
+                self.assertFalse(any(b.startswith("MISSING_OVERVIEW_PNG") for b in fb["structural_blockers"]))
+                self.assertFalse(any(b.startswith("MISSING_OVERVIEW_PNG") for b in rep["structural_blockers"]))
+
+    def test_nsys_no_usable_hw_data_sqlite_unreadable(self):
+        self._assert_m2c_both_png_modes(
+            "i-unreadable", self.unreadable_sqlite, "NSYS_NO_HW_CURVES: sqlite unreadable"
+        )
+        fb = json.loads((self.tmp / "out-i-unreadable-png0" / "feedback.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(b.startswith("NSYS_SQLITE_UNREADABLE:") for b in fb["structural_blockers"]))
+
+    def test_nsys_no_usable_hw_data_no_gpu_metrics_table(self):
+        self._assert_m2c_both_png_modes(
+            "iia-no-table", self.no_table_sqlite, "NSYS_NO_HW_CURVES: no GPU_METRICS table"
+        )
+
+    def test_nsys_no_usable_hw_data_gpu_metrics_table_empty(self):
+        self._assert_m2c_both_png_modes(
+            "iib-empty-table", self.empty_table_sqlite, "NSYS_NO_HW_CURVES: GPU_METRICS table empty"
+        )
+
+    def test_nsys_no_usable_hw_data_no_rows_in_kernel_window(self):
+        self._assert_m2c_both_png_modes(
+            "iii-out-of-win", self.out_of_window_sqlite, "NSYS_NO_HW_CURVES: no GPU_METRICS rows in kernel window"
+        )
+        distinct_reasons = {
+            "NSYS_NO_HW_CURVES: sqlite unreadable",
+            "NSYS_NO_HW_CURVES: no GPU_METRICS table",
+            "NSYS_NO_HW_CURVES: GPU_METRICS table empty",
+            "NSYS_NO_HW_CURVES: no GPU_METRICS rows in kernel window",
+        }
+        self.assertEqual(len(distinct_reasons), 4)
+
+    def test_nsys_no_usable_hw_data_controls_and_non_capture_paths(self):
+        # 1. Capture succeeds with in-window GPU_METRICS rows (PNG True & False) -> 4x PASS.
+        for png in (True, False):
+            self._configure_nsys(self.valid_sqlite)
+            out_ok, rep_ok, ver_ok, fb_ok, seal_ok = self._run_shadow(
+                f"ok-png{int(png)}", capture_nsys=True, render_overview_png=png
+            )
+            self.assertEqual(
+                (ver_ok["status"], fb_ok["status"], rep_ok["status"], seal_ok["status"]),
+                ("PASS", "PASS", "PASS", "PASS"),
+            )
+            self.assertFalse(any(b.startswith("NSYS_NO_HW_CURVES") for b in fb_ok["structural_blockers"]))
+            self.assertFalse(any(b.startswith("NSYS_NO_HW_CURVES") for b in rep_ok["structural_blockers"]))
+            self.assertTrue(mk.verify_seal(out_ok / "seal.json", require_pass=True)["ok"])
+
+        # 2. capture_nsys=False without sqlite, render_overview_png=False -> 4x PASS.
+        _, rep_nc0, ver_nc0, fb_nc0, seal_nc0 = self._run_shadow(
+            "nc-none", capture_nsys=False, render_overview_png=False, nsys_sqlite=None
+        )
+        self.assertEqual(
+            (ver_nc0["status"], fb_nc0["status"], rep_nc0["status"], seal_nc0["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertFalse(any(b.startswith("NSYS_NO_HW_CURVES") for b in fb_nc0["structural_blockers"]))
+
+        # 3. capture_nsys=False with unreadable nsys_sqlite, render_overview_png=False -> 4x PASS.
+        _, rep_nc1, ver_nc1, fb_nc1, seal_nc1 = self._run_shadow(
+            "nc-unreadable", capture_nsys=False, render_overview_png=False, nsys_sqlite=self.unreadable_sqlite
+        )
+        self.assertEqual(
+            (ver_nc1["status"], fb_nc1["status"], rep_nc1["status"], seal_nc1["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertTrue(any(b.startswith("NSYS_SQLITE_UNREADABLE:") for b in fb_nc1["structural_blockers"]))
+        self.assertFalse(any(b.startswith("NSYS_NO_HW_CURVES") for b in fb_nc1["structural_blockers"]))
+
+        # 4. Guard shadow_info.get("nsys_capture") vs raw capture_nsys flag:
+        # (4a) shadow_build_run with capture_nsys=True AND explicit pre-captured unreadable nsys_sqlite (no capture run)
+        _, rep_exp, ver_exp, fb_exp, seal_exp = self._run_shadow(
+            "capflag-with-sqlite", capture_nsys=True, render_overview_png=False, nsys_sqlite=self.unreadable_sqlite
+        )
+        self.assertEqual(
+            (ver_exp["status"], fb_exp["status"], rep_exp["status"], seal_exp["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertFalse(any(b.startswith("NSYS_NO_HW_CURVES") for b in fb_exp["structural_blockers"]))
+
+        # (4b) precaptured mode ignores capture_nsys=True -> 4x PASS without NSYS_NO_HW_CURVES.
+        out_pre = self.tmp / "out-precaptured-captrue"
+        rep_pre = mk.run_megakernel_audit(
+            self.ws,
+            entry_source="sparse_mla.cu",
+            dump_path=self.dump_file,
+            names=NAMES,
+            runtime_metrics=runtime_metrics(),
+            capture_nsys=True,
+            render_overview_png=False,
+            card="h20",
+            limit=0.10,
+            out_dir=out_pre,
+        )
+        ver_pre = json.loads((out_pre / "verify.json").read_text(encoding="utf-8"))
+        fb_pre = json.loads((out_pre / "feedback.json").read_text(encoding="utf-8"))
+        seal_pre = json.loads((out_pre / "seal.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            (ver_pre["status"], fb_pre["status"], rep_pre["status"], seal_pre["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertFalse(any(b.startswith("NSYS_NO_HW_CURVES") for b in fb_pre["structural_blockers"]))
+
+        # (4c) capture step itself fails (_capture_nsys_sqlite raises) -> NSYS_CAPTURE_FAILED only, no NSYS_NO_HW_CURVES.
+        self._configure_nsys(self.valid_sqlite, profile_rc=1, profile_write_rep=False)
+        _, rep_cf, ver_cf, fb_cf, seal_cf = self._run_shadow(
+            "capstep-fails", capture_nsys=True, render_overview_png=False
+        )
+        self.assertEqual(
+            (ver_cf["status"], fb_cf["status"], rep_cf["status"], seal_cf["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED:") for b in fb_cf["structural_blockers"]))
+        self.assertFalse(any(b.startswith("NSYS_NO_HW_CURVES") for b in fb_cf["structural_blockers"]))
+
+
 if __name__ == "__main__":
     unittest.main()
