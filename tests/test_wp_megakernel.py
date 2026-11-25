@@ -1483,5 +1483,418 @@ class HygieneTest(unittest.TestCase):
         self.assertIn("Intra-Node xGMI TX (Out)", tx_pretty)
 
 
+class NsysCaptureFailureAuditTest(_TmpCase):
+    """Regression suite for M2 (M2a/M2b): requested nsys capture failure and post-PNG/seal disk JSON sync."""
+
+    def setUp(self):
+        super().setUp()
+        import socket
+
+        home = self.tmp / "home"
+        (home / ".cache").mkdir(parents=True, exist_ok=True)
+        (home / ".config").mkdir(parents=True, exist_ok=True)
+        (home / "mpl").mkdir(parents=True, exist_ok=True)
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        self.fake_nsys_cfg = self.tmp / "fake_nsys_cfg.json"
+        self.fake_nsys_log = self.tmp / "fake_nsys_calls.log"
+        self.fake_nsys = bin_dir / "nsys"
+        self.fake_nsys.write_text(
+            f"#!{sys.executable} -B\n"
+            "import json, os, pathlib, shutil, sys\n"
+            "cfg = json.loads(pathlib.Path(os.environ['WEAVEPROF_TEST_NSYS_CFG']).read_text(encoding='utf-8'))\n"
+            "sub = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+            "with open(cfg['log_path'], 'a', encoding='utf-8') as f:\n"
+            "    f.write(sub + '\\n')\n"
+            "if sub == 'profile':\n"
+            "    if cfg.get('profile_write_rep', False):\n"
+            "        i = sys.argv.index('-o')\n"
+            "        pathlib.Path(sys.argv[i + 1] + '.nsys-rep').write_bytes(b'FAKE_NSYS_REP\\n')\n"
+            "    sys.stdout.write(cfg.get('profile_msg', 'fake nsys profile\\n'))\n"
+            "    sys.exit(int(cfg.get('profile_rc', 0)))\n"
+            "if sub == 'export':\n"
+            "    if cfg.get('export_write_sqlite', False):\n"
+            "        i = sys.argv.index('--output')\n"
+            "        shutil.copyfile(cfg['sqlite_template'], sys.argv[i + 1])\n"
+            "    sys.stdout.write(cfg.get('export_msg', 'fake nsys export\\n'))\n"
+            "    sys.exit(int(cfg.get('export_rc', 0)))\n"
+            "sys.exit(2)\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.fake_nsys.chmod(0o755)
+
+        env_overrides = {
+            "HOME": str(home),
+            "XDG_CACHE_HOME": str(home / ".cache"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "MPLCONFIGDIR": str(home / "mpl"),
+            "MPLBACKEND": "Agg",
+            "WEAVEPROF_TEST_NSYS_CFG": str(self.fake_nsys_cfg),
+            "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+        }
+        saved = {k: os.environ.get(k) for k in env_overrides}
+
+        def _restore_env():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        self.addCleanup(_restore_env)
+        os.environ.update(env_overrides)
+
+        real_connect = socket.socket.connect
+        real_connect_ex = socket.socket.connect_ex
+
+        def _guard_addr(addr):
+            host = addr[0] if isinstance(addr, tuple) and addr else ""
+            if isinstance(host, bytes):
+                host = host.decode("ascii", errors="ignore")
+            if host and host not in ("127.0.0.1", "::1", "localhost"):
+                raise AssertionError(f"unexpected external socket connection to {addr!r}")
+
+        def _guarded_connect(sock, addr):
+            _guard_addr(addr)
+            return real_connect(sock, addr)
+
+        def _guarded_connect_ex(sock, addr):
+            _guard_addr(addr)
+            return real_connect_ex(sock, addr)
+
+        p1 = mock.patch.object(socket.socket, "connect", _guarded_connect)
+        p2 = mock.patch.object(socket.socket, "connect_ex", _guarded_connect_ex)
+        p1.start()
+        p2.start()
+        self.addCleanup(p1.stop)
+        self.addCleanup(p2.stop)
+
+        self.ws = self.tmp / "ws"
+        self.ws.mkdir()
+        (self.ws / "sparse_mla.cu").write_text(CLEAN_SOURCE, encoding="utf-8", newline="\n")
+        self.fixtures = self.tmp / "fixtures"
+        self.fixtures.mkdir()
+        self.dump_file = write_dump(self.fixtures / "capture.wp02.bin")
+        (self.fixtures / "runtime.json").write_text(json.dumps(runtime_metrics()), encoding="utf-8", newline="\n")
+        (self.fixtures / "names.json").write_text(json.dumps(NAMES), encoding="utf-8", newline="\n")
+        (self.ws / "bench.py").write_text(
+            "import os, shutil, sys\n"
+            "out = os.environ['WEAVEPROF_OUT_DIR']\n"
+            "for f in ('capture.wp02.bin', 'runtime.json', 'names.json'):\n"
+            "    shutil.copy(os.path.join(sys.argv[1], f), os.path.join(out, f))\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.valid_sqlite = make_nsys_sqlite(self.fixtures / "valid.sqlite")
+        self.no_metrics_sqlite = make_nsys_sqlite(self.fixtures / "no_metrics.sqlite")
+        conn = sqlite3.connect(str(self.no_metrics_sqlite))
+        conn.execute("DELETE FROM GPU_METRICS")
+        conn.commit()
+        conn.close()
+        self.build_cmd = [sys.executable, "-B", "-c", "open('built.txt', 'w').write('ok')"]
+        self.bench_cmd = [sys.executable, "-B", "bench.py", str(self.fixtures)]
+        self.assertEqual(Path(mk.find_nsys_binary()).resolve(), self.fake_nsys.resolve())
+
+    def _configure_nsys(self, *, profile_rc=0, profile_write_rep=True, export_rc=0,
+                        export_write_sqlite=True, sqlite_template=None, msg="fake nsys\n"):
+        if self.fake_nsys_log.exists():
+            self.fake_nsys_log.unlink()
+        cfg = {
+            "log_path": str(self.fake_nsys_log),
+            "profile_rc": profile_rc,
+            "profile_write_rep": profile_write_rep,
+            "profile_msg": msg,
+            "export_rc": export_rc,
+            "export_write_sqlite": export_write_sqlite,
+            "export_msg": msg,
+            "sqlite_template": str(sqlite_template or self.valid_sqlite),
+        }
+        self.fake_nsys_cfg.write_text(json.dumps(cfg), encoding="utf-8", newline="\n")
+
+    def _nsys_calls(self):
+        if not self.fake_nsys_log.is_file():
+            return []
+        return [ln for ln in self.fake_nsys_log.read_text(encoding="utf-8").splitlines() if ln]
+
+    def _run_shadow(self, name: str, *, capture_nsys: bool, render_overview_png: bool, nsys_sqlite=None):
+        out = self.tmp / f"out-{name}"
+        rep = mk.run_megakernel_audit(
+            self.ws,
+            entry_source="sparse_mla.cu",
+            bench_cmd=self.bench_cmd,
+            build_cmd=self.build_cmd,
+            inst_files={"sparse_mla.cu": INSTRUMENTED_SOURCE},
+            card="h20",
+            limit=0.10,
+            capture_nsys=capture_nsys,
+            nsys_sqlite=nsys_sqlite,
+            render_overview_png=render_overview_png,
+            out_dir=out,
+        )
+        for fname in ("verify.json", "feedback.json", "seal.json"):
+            self.assertTrue((out / fname).is_file(), fname)
+        verify_doc = json.loads((out / "verify.json").read_text(encoding="utf-8"))
+        feedback_doc = json.loads((out / "feedback.json").read_text(encoding="utf-8"))
+        seal_doc = json.loads((out / "seal.json").read_text(encoding="utf-8"))
+        return out, rep, verify_doc, feedback_doc, seal_doc
+
+    def test_nsys_capture_failure_with_overview_png_enabled(self):
+        # Case 1 (M2a / A6-profile): capture_nsys=True, render_overview_png=True, nsys profile fails.
+        self._configure_nsys(profile_rc=1, profile_write_rep=False, msg="profile boom\n")
+        out1, rep1, ver1, fb1, seal1 = self._run_shadow(
+            "m2a-prof-fail", capture_nsys=True, render_overview_png=True
+        )
+        self.assertEqual(self._nsys_calls(), ["profile"])
+        self.assertEqual(
+            (ver1["status"], fb1["status"], rep1["status"], seal1["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys profile exited 1") for b in fb1["structural_blockers"]))
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys profile exited 1") for b in rep1["structural_blockers"]))
+        self.assertTrue(any("MISSING_HARDWARE_UTILIZATION_CURVES" in b for b in fb1["structural_blockers"]))
+        self.assertTrue(any("MISSING_HARDWARE_UTILIZATION_CURVES" in b for b in rep1["structural_blockers"]))
+        self.assertFalse(any(b.startswith("MISSING_OVERVIEW_PNG") for b in fb1["structural_blockers"]))
+        self.assertFalse(any(b.startswith("MISSING_OVERVIEW_PNG") for b in rep1["structural_blockers"]))
+        self.assertEqual(seal1["failed"], ["structural"])
+        self.assertEqual(ver1["failed"], [])
+        self.assertTrue(rep1["seal_verified"])
+        self.assertTrue(rep1["seal_integrity_only"])
+        self.assertTrue(mk.verify_seal(out1 / "seal.json", require_pass=False)["ok"])
+        self.assertFalse(mk.verify_seal(out1 / "seal.json", require_pass=True)["ok"])
+
+        # Case 2 (M2a / A6-export): nsys profile writes .nsys-rep, nsys export fails without .sqlite.
+        self._configure_nsys(profile_rc=0, profile_write_rep=True, export_rc=2, export_write_sqlite=False)
+        out2, rep2, ver2, fb2, seal2 = self._run_shadow(
+            "m2a-exp-fail", capture_nsys=True, render_overview_png=True
+        )
+        self.assertEqual(self._nsys_calls(), ["profile", "export"])
+        self.assertEqual(
+            (ver2["status"], fb2["status"], rep2["status"], seal2["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys export exited 2") for b in fb2["structural_blockers"]))
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys export exited 2") for b in rep2["structural_blockers"]))
+        self.assertFalse(any(b.startswith("MISSING_OVERVIEW_PNG") for b in fb2["structural_blockers"]))
+        self.assertTrue(mk.verify_seal(out2 / "seal.json", require_pass=False)["ok"])
+
+    def test_nsys_capture_failure_with_overview_png_disabled(self):
+        # Case 1 (M2b / A5-profile): capture_nsys=True, render_overview_png=False, nsys profile exits 1.
+        self._configure_nsys(profile_rc=1, profile_write_rep=False, msg="profile boom\n")
+        out1, rep1, ver1, fb1, seal1 = self._run_shadow(
+            "m2b-prof-fail", capture_nsys=True, render_overview_png=False
+        )
+        self.assertEqual(self._nsys_calls(), ["profile"])
+        self.assertEqual(
+            (ver1["status"], fb1["status"], rep1["status"], seal1["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys profile exited 1") for b in fb1["structural_blockers"]))
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys profile exited 1") for b in rep1["structural_blockers"]))
+        self.assertEqual(seal1["failed"], ["structural"])
+        self.assertIsNone(seal1["artifacts"]["trace"])
+        self.assertIsNotNone(seal1["artifacts"]["failed_trace"])
+        self.assertTrue(rep1["seal_verified"])
+        self.assertTrue(rep1["seal_integrity_only"])
+        self.assertTrue(mk.verify_seal(out1 / "seal.json", require_pass=False)["ok"])
+        self.assertFalse(mk.verify_seal(out1 / "seal.json", require_pass=True)["ok"])
+
+        # Case 2 (M2b / A5-missing-rep): nsys profile exits 0 without producing .nsys-rep.
+        self._configure_nsys(profile_rc=0, profile_write_rep=False)
+        out2, rep2, ver2, fb2, seal2 = self._run_shadow(
+            "m2b-missing-rep", capture_nsys=True, render_overview_png=False
+        )
+        self.assertEqual(self._nsys_calls(), ["profile"])
+        self.assertEqual(
+            (ver2["status"], fb2["status"], rep2["status"], seal2["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys profile exited 0") for b in fb2["structural_blockers"]))
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys profile exited 0") for b in rep2["structural_blockers"]))
+
+        # Case 3 (M2b / A5-export): nsys profile succeeds, nsys export exits 2 without .sqlite.
+        self._configure_nsys(profile_rc=0, profile_write_rep=True, export_rc=2, export_write_sqlite=False)
+        out3, rep3, ver3, fb3, seal3 = self._run_shadow(
+            "m2b-exp-fail", capture_nsys=True, render_overview_png=False
+        )
+        self.assertEqual(self._nsys_calls(), ["profile", "export"])
+        self.assertEqual(
+            (ver3["status"], fb3["status"], rep3["status"], seal3["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys export exited 2") for b in fb3["structural_blockers"]))
+        self.assertTrue(any(b.startswith("NSYS_CAPTURE_FAILED: nsys export exited 2") for b in rep3["structural_blockers"]))
+        self.assertTrue(mk.verify_seal(out3 / "seal.json", require_pass=False)["ok"])
+
+    def test_nsys_capture_failure_control_capture_succeeds(self):
+        # Row A1: capture_nsys=True, capture succeeds, render_overview_png=True -> 4x PASS.
+        self._configure_nsys(profile_rc=0, profile_write_rep=True, export_rc=0,
+                             export_write_sqlite=True, sqlite_template=self.valid_sqlite)
+        out_a1, rep_a1, ver_a1, fb_a1, seal_a1 = self._run_shadow(
+            "ctrl-a1", capture_nsys=True, render_overview_png=True
+        )
+        self.assertEqual(self._nsys_calls(), ["profile", "export"])
+        self.assertEqual(
+            (ver_a1["status"], fb_a1["status"], rep_a1["status"], seal_a1["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in fb_a1["structural_blockers"]))
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in rep_a1["structural_blockers"]))
+        self.assertTrue((out_a1 / "overview.png").is_file())
+        self.assertTrue(rep_a1["seal_verified"])
+        self.assertNotIn("seal_integrity_only", rep_a1)
+        self.assertTrue(mk.verify_seal(out_a1 / "seal.json", require_pass=True)["ok"])
+
+        # Row A2: capture_nsys=True, capture succeeds, render_overview_png=False -> 4x PASS.
+        self._configure_nsys(profile_rc=0, profile_write_rep=True, export_rc=0,
+                             export_write_sqlite=True, sqlite_template=self.valid_sqlite)
+        out_a2, rep_a2, ver_a2, fb_a2, seal_a2 = self._run_shadow(
+            "ctrl-a2", capture_nsys=True, render_overview_png=False
+        )
+        self.assertEqual(self._nsys_calls(), ["profile", "export"])
+        self.assertEqual(
+            (ver_a2["status"], fb_a2["status"], rep_a2["status"], seal_a2["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in fb_a2["structural_blockers"]))
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in rep_a2["structural_blockers"]))
+        self.assertFalse((out_a2 / "overview.png").exists())
+        self.assertTrue(mk.verify_seal(out_a2 / "seal.json", require_pass=True)["ok"])
+
+        # Row A3: capture_nsys=True, capture succeeds (valid kernel window, 0 GPU_METRICS rows),
+        # render_overview_png=True -> PNG fails, 4x FAIL, disk JSONs match return.
+        self._configure_nsys(profile_rc=0, profile_write_rep=True, export_rc=0,
+                             export_write_sqlite=True, sqlite_template=self.no_metrics_sqlite)
+        out_a3, rep_a3, ver_a3, fb_a3, seal_a3 = self._run_shadow(
+            "ctrl-a3", capture_nsys=True, render_overview_png=True
+        )
+        self.assertEqual(self._nsys_calls(), ["profile", "export"])
+        self.assertEqual(
+            (ver_a3["status"], fb_a3["status"], rep_a3["status"], seal_a3["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in fb_a3["structural_blockers"]))
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in rep_a3["structural_blockers"]))
+        self.assertTrue(any("OVERVIEW_PNG_FAILED" in b for b in fb_a3["structural_blockers"]))
+        self.assertTrue(any("OVERVIEW_PNG_FAILED" in b for b in rep_a3["structural_blockers"]))
+        self.assertTrue(any(b.startswith("MISSING_OVERVIEW_PNG") for b in fb_a3["structural_blockers"]))
+        self.assertTrue(any(b.startswith("MISSING_OVERVIEW_PNG") for b in rep_a3["structural_blockers"]))
+        self.assertTrue(mk.verify_seal(out_a3 / "seal.json", require_pass=False)["ok"])
+
+    def test_nsys_capture_failure_not_requested_and_png_failure_consistency(self):
+        # Keep fake nsys poisoned (rc=99) on PATH to prove capture_nsys=False never invokes nsys.
+        self._configure_nsys(profile_rc=99, profile_write_rep=False, export_rc=99, export_write_sqlite=False)
+
+        # Row B1: capture_nsys=False with pre-existing nsys_sqlite, render_overview_png=True -> 4x PASS.
+        out_b1, rep_b1, ver_b1, fb_b1, seal_b1 = self._run_shadow(
+            "b1-png-ok", capture_nsys=False, render_overview_png=True, nsys_sqlite=self.valid_sqlite
+        )
+        self.assertEqual(self._nsys_calls(), [])
+        self.assertEqual(
+            (ver_b1["status"], fb_b1["status"], rep_b1["status"], seal_b1["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in fb_b1["structural_blockers"]))
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in rep_b1["structural_blockers"]))
+        self.assertTrue((out_b1 / "overview.png").is_file())
+        self.assertTrue(mk.verify_seal(out_b1 / "seal.json", require_pass=True)["ok"])
+
+        # Row B2: capture_nsys=False, nsys_sqlite=None, render_overview_png=False -> 4x PASS.
+        out_b2, rep_b2, ver_b2, fb_b2, seal_b2 = self._run_shadow(
+            "b2-png-off", capture_nsys=False, render_overview_png=False, nsys_sqlite=None
+        )
+        self.assertEqual(self._nsys_calls(), [])
+        self.assertEqual(
+            (ver_b2["status"], fb_b2["status"], rep_b2["status"], seal_b2["status"]),
+            ("PASS", "PASS", "PASS", "PASS"),
+        )
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in fb_b2["structural_blockers"]))
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in rep_b2["structural_blockers"]))
+        self.assertTrue(mk.verify_seal(out_b2 / "seal.json", require_pass=True)["ok"])
+
+        # Row B3: capture_nsys=False, nsys_sqlite=None, render_overview_png=True -> PNG fails, 4x FAIL.
+        out_b3, rep_b3, ver_b3, fb_b3, seal_b3 = self._run_shadow(
+            "b3-png-fail", capture_nsys=False, render_overview_png=True, nsys_sqlite=None
+        )
+        self.assertEqual(self._nsys_calls(), [])
+        self.assertEqual(
+            (ver_b3["status"], fb_b3["status"], rep_b3["status"], seal_b3["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in fb_b3["structural_blockers"]))
+        self.assertFalse(any("NSYS_CAPTURE_FAILED" in b for b in rep_b3["structural_blockers"]))
+        self.assertTrue(any("OVERVIEW_PNG_FAILED" in b for b in fb_b3["structural_blockers"]))
+        self.assertTrue(any("OVERVIEW_PNG_FAILED" in b for b in rep_b3["structural_blockers"]))
+        self.assertTrue(any(b.startswith("MISSING_OVERVIEW_PNG") for b in fb_b3["structural_blockers"]))
+        self.assertTrue(any(b.startswith("MISSING_OVERVIEW_PNG") for b in rep_b3["structural_blockers"]))
+        self.assertEqual(seal_b3["failed"], ["structural"])
+        self.assertTrue(mk.verify_seal(out_b3 / "seal.json", require_pass=False)["ok"])
+
+        # Precaptured (Workflow B) PNG failure also syncs verify.json and feedback.json to FAIL.
+        out_pre = self.tmp / "out-precaptured-png-fail"
+        rep_pre = mk.run_megakernel_audit(
+            self.ws,
+            entry_source="sparse_mla.cu",
+            dump_path=self.dump_file,
+            names=NAMES,
+            runtime_metrics=runtime_metrics(),
+            nsys_sqlite=None,
+            card="h20",
+            limit=0.10,
+            render_overview_png=True,
+            out_dir=out_pre,
+        )
+        ver_pre = json.loads((out_pre / "verify.json").read_text(encoding="utf-8"))
+        fb_pre = json.loads((out_pre / "feedback.json").read_text(encoding="utf-8"))
+        seal_pre = json.loads((out_pre / "seal.json").read_text(encoding="utf-8"))
+        self.assertEqual(self._nsys_calls(), [])
+        self.assertEqual(
+            (ver_pre["status"], fb_pre["status"], rep_pre["status"], seal_pre["status"]),
+            ("FAIL", "FAIL", "FAIL", "FAIL"),
+        )
+        self.assertTrue(any("OVERVIEW_PNG_FAILED" in b for b in fb_pre["structural_blockers"]))
+        self.assertTrue(any(b.startswith("MISSING_OVERVIEW_PNG") for b in fb_pre["structural_blockers"]))
+        self.assertTrue(mk.verify_seal(out_pre / "seal.json", require_pass=False)["ok"])
+
+    def test_nsys_capture_failure_seal_verify_failed_rewrites_disk_jsons(self):
+        # Sole exception E1: seal_round writes a PASS seal, then artifact corruption makes real verify_seal fail;
+        # feedback.json and verify.json are rewritten to FAIL (with SEAL_VERIFY_FAILED), while seal.json stays PASS
+        # and fails real verify_seal under both require_pass=True and require_pass=False.
+        real_seal_round = mk.EpisodeSealer.seal_round
+
+        def _tampering_seal_round(**kwargs):
+            seal_path, seal_doc = real_seal_round(**kwargs)
+            names_on_disk = Path(kwargs["names_path"])
+            names_on_disk.write_bytes(names_on_disk.read_bytes() + b"\n")
+            return seal_path, seal_doc
+
+        out_e1 = self.tmp / "out-seal-verify-fail"
+        with mock.patch.object(mk.EpisodeSealer, "seal_round", side_effect=_tampering_seal_round):
+            rep_e1 = mk.run_megakernel_audit(
+                self.ws,
+                entry_source="sparse_mla.cu",
+                dump_path=self.dump_file,
+                names=NAMES,
+                runtime_metrics=runtime_metrics(),
+                nsys_sqlite=self.valid_sqlite,
+                card="h20",
+                limit=0.10,
+                render_overview_png=False,
+                out_dir=out_e1,
+            )
+        ver_e1 = json.loads((out_e1 / "verify.json").read_text(encoding="utf-8"))
+        fb_e1 = json.loads((out_e1 / "feedback.json").read_text(encoding="utf-8"))
+        seal_e1 = json.loads((out_e1 / "seal.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            (ver_e1["status"], fb_e1["status"], rep_e1["status"], seal_e1["status"]),
+            ("FAIL", "FAIL", "FAIL", "PASS"),
+        )
+        self.assertFalse(rep_e1["seal_verified"])
+        self.assertTrue(any(b.startswith("SEAL_VERIFY_FAILED:") for b in fb_e1["structural_blockers"]))
+        self.assertTrue(any(b.startswith("SEAL_VERIFY_FAILED:") for b in rep_e1["structural_blockers"]))
+        self.assertFalse(mk.verify_seal(out_e1 / "seal.json", require_pass=True)["ok"])
+        self.assertFalse(mk.verify_seal(out_e1 / "seal.json", require_pass=False)["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()
