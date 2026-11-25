@@ -2109,8 +2109,9 @@ def render_swhw_overview_png(
     rank_tag = f" (rank {meta['rank']})" if meta.get("rank") is not None else f" ({len(sms)} {unit_nm}s)"
     ax_sm.set_ylabel(f"Physical {unit_nm}{rank_tag}", fontsize=9.5, color="#263238")
     if dual_fabric and panel_b_fabric_handles:
+        b_mode_lbl = "Multi-CTA" if sm_cta_slots else f"Persistent 1-CTA/{unit_nm}"
         ax_sm.set_title(
-            f"(B) Multi-CTA Execution Across All {len(sms)} Physical {unit_nm}s",
+            f"(B) {b_mode_lbl} Execution Across All {len(sms)} Physical {unit_nm}s",
             fontsize=10.5, fontweight="bold", color="#111111", loc="left", pad=8,
         )
         ax_sm.legend(
