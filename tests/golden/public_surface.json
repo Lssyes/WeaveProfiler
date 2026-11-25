@@ -60,7 +60,7 @@
   "weaveprof_compare_rounds": "e9ba4e1f4f8f7c1c",
   "weaveprof_megakernel_audit": "265dc6d4f0c50651",
   "weaveprof_plan_context": "da11ad9724afae7a",
-  "weaveprof_profile": "d54eef0332fcc343",
+  "weaveprof_profile": "9a42cd3f50cc8065",
   "weaveprof_status": "99334726611ccf58",
   "weaveprof_verify_seal": "a566e91f5e3ee862"
  },
@@ -157,6 +157,7 @@
    "WP_SYNC_IN()",
    "WP_SYNC_OUT()",
    "WP_TIMER",
+   "WP_TRANS()",
    "WP_TRANS_PRED()"
   ]
  },
@@ -211,7 +212,12 @@
    "WP_SYNC_IN()",
    "WP_SYNC_OUT()",
    "WP_TIMER",
-   "WP_TRANS_PRED()"
+   "WP_TRANS_PRED()",
+   "WP_VMEM_COMMIT()",
+   "WP_VMEM_COMMIT_PRED()",
+   "WP_VMEM_WAIT()",
+   "WP_VMEM_WAIT_PRED()",
+   "WP_VMEM_WAIT_SYNC()"
   ]
  },
  "recorder_triton": {
@@ -278,20 +284,28 @@
   "auto-gemm",
   "auto-profile",
   "capture",
+  "causal",
   "check",
   "deliver",
+  "doctor",
   "fast",
   "gemm-probe",
   "guard-exec",
+  "identify",
   "install-agent",
   "instrument",
+  "locate",
   "mcp-server",
   "probe-inject",
   "probe-place",
   "probe-reuse",
+  "profile",
+  "render",
   "scan",
+  "seal-check",
   "template",
-  "validate"
+  "validate",
+  "verify"
  ],
  "weaveprof_cli_commands": [
   "causal",

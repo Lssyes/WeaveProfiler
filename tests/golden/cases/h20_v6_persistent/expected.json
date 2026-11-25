@@ -13,7 +13,7 @@
    "causal_opportunities": [],
    "counterfactual_upper_bound_us": 0.0,
    "global_hw_regime": "TENSOR_SATURATED",
-   "gpu": "h20",
+   "gpu": "NVIDIA H20",
    "hw_summary": {
     "dram_read_mean_pct": 6.33,
     "dram_read_peak_pct": 14.0,
@@ -1035,6 +1035,8 @@
   },
   "mode": "precaptured",
   "nsys": {
+   "gpu_chip": "GH100",
+   "gpu_name": "NVIDIA H20",
    "in_window_samples": 229,
    "kernel": {
     "device": 0,
@@ -1047,7 +1049,17 @@
    },
    "sample_freq_hz": 200320.5,
    "sample_interval_us": 4.992,
-   "schema": "weaveprof.nsys-sqlite-fast/v1"
+   "schema": "weaveprof.nsys-sqlite-fast/v1",
+   "tensor_active_scale": {
+    "applied": true,
+    "card_factor": 4.0,
+    "raw_ceiling_pct": 29.0,
+    "raw_max_pct": 26.0,
+    "raw_mean_pct": 20.655,
+    "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4 (causal.ARCH_PROFILES)",
+    "scale": 4.0,
+    "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+   }
   },
   "round": 1,
   "round_diff": null,
@@ -1058,6 +1070,8 @@
   ]
  },
  "nsys": {
+  "gpu_chip": "GH100",
+  "gpu_name": "NVIDIA H20",
   "in_window_samples": 229,
   "kernel": {
    "device": 0,
@@ -1070,7 +1084,17 @@
   },
   "sample_freq_hz": 200320.5,
   "sample_interval_us": 4.992,
-  "schema": "weaveprof.nsys-sqlite-fast/v1"
+  "schema": "weaveprof.nsys-sqlite-fast/v1",
+  "tensor_active_scale": {
+   "applied": true,
+   "card_factor": 4.0,
+   "raw_ceiling_pct": 29.0,
+   "raw_max_pct": 26.0,
+   "raw_mean_pct": 20.655,
+   "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4 (causal.ARCH_PROFILES)",
+   "scale": 4.0,
+   "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+  }
  },
  "nsys_series": {
   "dram_read": {
@@ -1181,10 +1205,10 @@
     73.1
    ],
    "tensor_active": [
-    22.6,
-    21.8,
-    21.8,
-    16.4
+    89.8,
+    86.7,
+    86.9,
+    65.7
    ],
    "warp_issue": [
     10.4,
@@ -1261,7 +1285,8 @@
   "status": "FAIL",
   "structural_blockers": [
    "LOW_MATH_WAIT_NO_LATENCY_HIDING"
-  ]
+  ],
+  "tensor_active_scale": 4.0
  },
  "trace": {
   "by_name": {
@@ -1273,13 +1298,13 @@
    "NVLink TX Responses User Data [Throughput %]": 229,
    "SM Issue [Throughput %]": 229,
    "SMs Active [Throughput %]": 229,
-   "Tensor Active [Throughput %]": 229,
    "compute": 262144,
    "epilogue": 4096,
    "kernel(CUtensorMap_st, CUtensorMap_st, float *, int, int, int, int, int)": 1,
    "load": 262144,
    "mma": 262144,
    "store": 12288,
+   "tensor_active [Tensor Active x4 (H20 die-normalization corrected)]": 229,
    "wait": 31744
   },
   "by_ph": {
@@ -1288,8 +1313,8 @@
    "X": 834561
   },
   "events": 840722,
-  "other_data_sha256": "2d523eb1519fb0fd604b09c9418e23b02a9f67193301673fba80353b11e5b7ef",
-  "sha256": "fec4a591546de153d2ff7813dc3bf032311073706184af0b57a6cfe39143a66e"
+  "other_data_sha256": "c962660a138862740b8b037e570322b2e7cee219c0b53659066e67e819ca8fdc",
+  "sha256": "688cf812e81281f2ad439404164bff2575ed9916c8a969178ab598e9db462c35"
  },
  "verify": {
   "checks": {
