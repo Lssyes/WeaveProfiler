@@ -29,7 +29,7 @@ Golden coverage of this tier: see `docs/refactor/coverage_main_path.md`.
 
 | Component | Lines | Keep if ... |
 |---|---:|---|
-| Triton recorder `recorders/triton/` + `pipeline/instrument/triton_ptx_async.py` | ~2,000 | you profile Triton kernels |
+| Triton recorder `recorders/triton/` + `pipeline/instrument/triton_ptx_async.py` + `pipeline/instrument/triton_amdgcn_async.py` | ~2,400 | you profile Triton kernels |
 | CuTeDSL recorder `recorders/cutedsl/` | 752 | you profile CuTeDSL kernels |
 | HIP recorder `recorders/hip_cpp/` + rocprof capture (`pipeline/capture/*rocm*`, `*rocprof*`) | ~5,000 | you profile on MI308X (mail-1/3/21 are MI308X) |
 | Agent integration: `agent_installer.py`, `guard_hook.py`, `pipeline/validate/harness/`, `aka_adapter.py`, `atrex_plugin.py`, `plugin.json` | ~4,200 | agents must be installed/guarded by this package rather than by your own setup |
