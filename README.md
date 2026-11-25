@@ -8,59 +8,57 @@
 
 ---
 
-## 1. 背景与三大挑战：为什么现代 GPU 算子与 RSI 需要 WeaveProfiler
+## 1. 为什么需要 WeaveProfiler
 
-大模型训练与推理的核心算子正普遍转向**持久化融合 Megakernel**（如 MegaMoE、FlashAttention-3、FlashMLA、门控线性注意力 GDN）：同一 CTA 内的不同 Warp 被赋予独立**角色**（生产者搬运、矩阵计算、跨卡通信），并通过多级**异步硬件流水线**（NVIDIA `cp.async` / TMA / `wgmma` / `tcgen05`、AMD CDNA3 `buffer_load` + `s_waitcnt vmcnt` + `MFMA`）掩盖访存与通信延迟。算子性能直接取决于各角色之间的重叠效率：**在途异步操作深度（In-Flight Depth $d$）**决定了延迟是否被有效掩盖，而**暴露等待（Exposed Wait）**则直接标定了关键路径上的停顿根因。随着算子优化迈向无人类介入的**智能体驱动递归自我改进（Agent-Driven RSI）**，这一细粒度剖析过程必须实现全自动与防失真闭环。
+现代大模型算子（如 MegaMoE、FlashAttention-3、FlashMLA、GDN）普遍采用**持久化融合核（Megakernel）**：同一个 CTA 里的不同 Warp 分工负责搬运、矩阵计算与跨卡通信，靠多级**异步硬件流水线**（NVIDIA `cp.async` / TMA / `wgmma` / `tcgen05`、AMD `buffer_load` / `vmcnt` / `MFMA`）掩盖延迟。性能好坏主要看两件事：**在途深度 `d`**（同时有几笔异步操作在飞，决定延迟藏没藏住）和**暴露等待 `Exposed Wait`**（真正卡在等待指令上的时间，直接指出瓶颈在哪）。
 
-然而，现有工具与朴素大模型改码面临三大核心挑战：
+现有剖析工具或直接让大模型手改源码插桩，主要卡在三个问题上：
 
-1. **自由改码易引入隐蔽轨迹缺陷且缺乏真伪校验**：厂商硬件剖析器（`nsys`、`rocprofv3`）将核函数视为黑盒，无法定位到具体角色与软件阶段；而直接让大模型改写核函数插桩，即便通过编译与数值输出检查，仍会频繁出现跨分支起止漏配、角色 Warp 漏采、缓冲区截断或热循环过度打点引发严重降速；若将校验脚本暴露在可写工作区内，智能体甚至可能篡改核函数展开配置或放宽门限以“刷过”检查。
-2. **编译器与硬件异步流水被误测为同步发射桩**：源码级或高层 IR 级同步探针在非阻塞异步指令发射后立即闭合，看不到编译器在底层生成的提交与等待边界（如 Triton 自动插入的 `commit_group` / `wait_group` 或 AMDGCN `s_waitcnt vmcnt(N)`），导致真实在途驻留时长被低估数十至上百倍、在途深度虚报为 $d=0$，并将真实的等待停顿混入后续矩阵计算阶段。
-3. **重状态记录器触发寄存器溢出或共享内存驻留断崖**：生产级融合核长期运行在寄存器文件与共享内存上限边缘；多寄存器上下文（4–10 个活跃寄存器）极易诱发本地内存 `STL/LDL` 溢出，而千字节级共享内存环形缓冲（0.5–4 KB/CTA）则会导致每 SM 并发驻留 CTA 数断崖下跌（如 `2 → 1 CTA/SM`）或在环形回绕时静默丢失事件。
+1. **手改源码插桩容易出错且缺校验**：`nsys`、`rocprofv3` 只能看整核黑盒，分不清核内哪个 Warp 在干什么；让大模型直接改核函数打点，经常出现分支漏配、漏采部分 Warp、缓冲写满截断，或在热循环里打点过密拖慢算子。
+2. **异步指令被当成同步指令测错**：源码级探针在异步指令刚发出时就记了结束，看不到底层真正的提交与等待边界（如 Triton 自动生成的 `commit_group` / `wait_group` 或 AMD `s_waitcnt vmcnt(N)`），导致测出来的搬运耗时比真实情况短几十倍、在途深度虚报成 `d = 0`，真正的等待停顿反而算进了后面的矩阵计算里。
+3. **打点状态太重，挤爆寄存器或共享内存**：生产级融合核的寄存器和共享内存往往卡在硬件上限边缘；多占几个寄存器就会触发本地内存 `STL/LDL` 溢出，多占几 KB 共享内存就会把并发度从 `2 CTA/SM` 挤掉到 `1 CTA/SM`。
 
 ---
 
-## 2. 核心观察与三大设计机制
+## 2. 核心思路与三项关键设计
 
-> **核心观察**：在核内剖析全流程中，**只有阶段语义识别需要大模型的语义理解**，而探针注入、异步配对与真伪验证均可由确定性规则完成；同时，由于所有异步硬件引擎均遵循“发射提交 → 按序等待退役”的固定因果律，探针只需极小运行时可变状态即可精确还原在途并发深度与暴露等待。
+> **核心思路**：整个剖析流程里，**只有“认出哪几行是哪个阶段”需要大模型读代码**；后面的打点注入、异步配对和真伪检查都可以用确定性规则自动完成。同时，硬件异步队列天然按先进先出（FIFO）顺序完成，运行时只需 **1 个 32 位寄存器**就能记下完整轨迹。
 
 ```text
-受保护源码 (只读) ──► 只读阶段识别 (AI 编程代理 / LLM) ──► 结构化 probe.json
-                                                                           │
-                                                                           ▼
-             工作区外确定性 Harness (CUDA/HIP/CuTe 源码注入 · NVIDIA Triton PTX / AMD AMDGCN 自动异步 Pass)
-                                                                           │
-                                                                           ▼
-                     同次硬件采样 (200 kHz nsys / rocprof-sys) + 四项双向 Fail-Closed 门禁校验
-                       ├── 任一项未过 ──► 返回违规探针与失败轨迹 feedback.json，自动外提/粗化迭代
-                       └── 全部通过   ──► 生成软硬同轴四联图 overview.png + 签发 HMAC-SHA256 封签
+受保护源码 (只读) ──► 大模型只读识别阶段边界 ──► 生成 probe.json
+                                                      │
+                                                      ▼
+            工作区外自动打点 (CUDA/HIP/CuTe 源码注入 · NVIDIA PTX / AMD AMDGCN 汇编自动异步打点)
+                                                      │
+                                                      ▼
+                  同次硬件采样 (200 kHz nsys / rocprof-sys) + 四道硬门禁校验
+                    ├── 任一未过 ──► 返回超标探针 feedback.json，自动外提/粗化重测
+                    └── 全部通过 ──► 输出软硬对齐四联图 overview.png + HMAC-SHA256 封签
 ```
 
-围绕这一观察，WeaveProfiler 构建了三大核心机制与系统级护栏：
+### 2.1 闭环自动插桩与四道门禁
+- **只读认阶段 + 自动注入**：大模型只读源码、输出各 Warp 角色和阶段起止行号（`probe.json`），不碰核函数计算代码。底层工具在隔离副本里自动完成插桩；对 Triton 算子直接做 **NVIDIA PTX 与 AMD AMDGCN 汇编层自动异步打点**（AMD 下自动保护 `SCC` 条件码并走独立 `vscnt` 写通道，不干扰 `vmcnt` 计数），不用改一行 Python 循环。
+- **四道硬门禁（任一不过自动重来）**：① **反汇编与资源检查**（主干指令顺序不变，零新增寄存器溢出 `Δspill ≤ 0 B`，零新增共享内存 `Δsmem ≤ 0 B`）；② **数值检查**（与原核输出一致）；③ **完整性检查**（起止成对、零丢包、100% 物理 Warp/Wave64 覆盖）；④ **双向开销检查**（稳态中位耗时变化在 `±10%` 以内，变慢超标或异常打乱调度都自动退回粗化重测）。
+- **工作区外防篡改**：门禁校验跑在工作区外的独立 MCP 进程中并签发 `HMAC-SHA256` 封签，配合生命周期 Hook 与可选 `bubblewrap` 只读沙箱，防止智能体改门限或残留脏代码。
 
-### 2.1 闭环自动插桩与系统级防篡改护栏
-- **只读语义识别 + 确定性注入**：大模型仅以只读方式分析核函数源码并输出角色谓词与阶段边界规范 `probe.json`，绝不直接编辑核函数算术逻辑。确定性 Harness 在隔离副本中完成探针注入；针对编译器自动软流水的 Triton 算子，提供 **NVIDIA PTX 级自动双异步 Pass**（`triton_ptx_async.py`）与 **AMD CDNA3 AMDGCN 级自动异步 Pass**（`triton_amdgcn_async.py`，自动保存/恢复标量 `SCC` 条件码并使用独立 `vscnt` 向量写通道，零干扰 `vmcnt` 计数），无需改动 Python K-loop 一行代码。
-- **四项双向 Fail-Closed 阻塞门禁**：① **反汇编与资源门禁**（核心计算/访存指令保序保真，新增寄存器溢出 $\Delta_{\text{spill}} \le 0\text{ B}$，新增共享内存 $\Delta_{\text{smem}} \le 0\text{ B}$）；② **数值输出门禁**（与未插桩基线逐位一致或在严格容差内吻合）；③ **事件完整性与全物理单元覆盖门禁**（起止严格闭合、零溢出丢包、100% 物理 Warp/Wave64 覆盖）；④ **双向稳态开销门禁**（热身后稳态中位耗时满足 $|t_{\text{inst}}/t_{\text{base}} - 1| \le 10\%$，无论超标变慢还是打乱调度的异常“变快”均拒绝放行并触发自动粗化重测）。
-- **三层系统护栏**：工作区外独立 MCP 进程与代理不可见密钥的 `HMAC-SHA256` 封签（`~/.cache/weaveprof/sessions/`）、`PreToolUse` / `PostToolUse` / `Stop` 生命周期钩子，以及可选 Linux `bubblewrap` OS 只读沙箱，从系统机制上杜绝绕过校验、残留探针或篡改门限。
+### 2.2 异步流水线追踪（单 Warp 与跨 Warp）
+- **单 Warp 异步计数**：异步访存和矩阵指令都按提交顺序完成（FIFO）。每次提交记一次 `in++`，每次 `wait(N)` 把已完成的旧请求关掉，相减就是当前还在飞的请求数（在途深度 `d = in - out`）；真正卡在 `wait` 指令上的耗时单独标为 **Exposed Wait**（自动拆分为等数据的 `Load Wait` 与等矩阵核的 `MMA Wait`）。NVIDIA（`cp.async` / `wgmma` / `tcgen05`）和 AMD（`vmcnt` / `v_mfma`）共用这套逻辑。
+- **跨 Warp 生产者–消费者配对**：在 FA3、FlashMLA 这类“1 个生产者 Warp 搬数据、多个计算 Warp 等同一个槽位”的环形流水线中，按 `(CTA, 槽位)` 把每次 TMA 发射和**第一个等到数据的消费者**配成一对，即可算出真实的搬运耗时与在途深度——既不会因 1 对多广播重复计数，也不会把慢消费者自己的计算耗时算进搬运里。
 
-### 2.2 跨 Warp 与单 Warp 异步流水线配对追踪
-- **跨 Warp 生产者–消费者配对（1-to-$N$ 最早到达去重）**：在 Hopper FA3、FlashMLA 等由单生产者 Warp 向多计算 Warp 广播数据的 `mbarrier` 环形流水线中，基于全卡统一纳秒时钟按 `(CTA, event, slot)` 匹配同代发射与等待退出，以最早消费者到达时刻 $\min_w t_{\text{exit}}(w)$ 作为保守完成上界，经全 CTA 扫描线精确计算真实的跨 Warp TMA 在途深度（杜绝 1-to-$N$ 扇出重复计数与慢消费者虚高）。
-- **单 Warp 多引擎 FIFO 深度还原**：在每条物理 Warp/Wave 主轨上显式框定 `wait_group` / `mbarrier` / `s_waitcnt vmcnt(N)` 的 **Exposed Wait**，并在独立的 `MEM` 与 `MMA` 副轨上维护双序号计数器（每次提交开区间 `seq_in++`，每次等待 `N` 按序闭合 `seq_out < seq_in - N`），在 NVIDIA（`cp.async` / `wgmma` / `tcgen05`）与 AMD CDNA3（`WP_VMEM_COMMIT` / `WP_VMEM_WAIT` / `v_mfma`）上统一还原逐拍在途深度 $d = \texttt{seq\_in} - \texttt{seq\_out}$。
-
-### 2.3 极小状态低扰动流式记录与免改签名接入
-- **无锁分片流式写 + 单寄存器状态压缩**：每个 `(CTA, 物理 Warp/Wave)` 独占连续缓冲切片，仅由 `lane 0` 以绕过缓存的 16 字节向量写指令（NVIDIA `st.global.cs.v4.u32`、AMD `buffer_store_dwordx4` / `global_store_dwordx4 ... nt`）顺序追加，热路径**零原子操作、零跨 Warp 同步**。默认模式 `WP_CTX_REG` 将可变状态（禁用/溢出位 + 16 位槽号 + 15 位游标）压缩进**单个 32-bit 寄存器（`0 B` 共享内存）**，在 `setmaxnreg` 核上自动前移至配额缩减前初始化，并为零寄存器余量核提供 `16 B` 静态共享内存回退（`WP_CTX_SMEM`）。
-- **双锚点周期计时 + 相邻探针合并 + 旁路绑定**：热循环内读取低延迟本地周期计数器（`%clock64` / `s_memtime`）并由首尾全卡墙钟锚点（`%globaltimer` / `s_memrealtime`）离线线性校准；相邻阶段交界自动合并为单次读表双记录写出；CUDA/HIP 通过模块内设备符号旁路绑定并经每槽进度游标跨 `__device__` 头文件免改签名接力，Triton/CuTeDSL 通过透明代理固定最优配置注入。
+### 2.3 低开销记录与免改函数签名
+- **每 Warp 独立显存切片 + 单寄存器状态**：每个 `(CTA, Warp/Wave)` 独享一段连续缓冲，只由 `lane 0` 顺序写出 16 字节记录，全程**无原子锁、无跨 Warp 同步**。默认模式 `WP_CTX_REG` 把槽位号与写指针压进 **1 个 32 位寄存器（`0 B` 共享内存）**，在 `setmaxnreg` 核上自动提前到缩减寄存器前初始化；极端零余量场景可选 `16 B` 共享内存回退（`WP_CTX_SMEM`）。
+- **周期表校准 + 免改签名传参**：循环内读低开销周期计数器（`%clock64` / `s_memtime`），首尾用全卡纳秒墙钟校准，相邻阶段交界合并为一次读表；多头文件 C++ 算子通过全局设备符号传参，不用改任何 `__global__` / `__device__` 函数签名。
 
 ---
 
-## 3. 四联软硬同轴对齐图（`overview.png`）读法
+## 3. 四联软硬对齐图（`overview.png`）读法
 
-WeaveProfiler 默认直出单张静态高分辨率四联 PNG（人类工程师与多模态大模型均可直接读取，无需加载百兆级 Perfetto 文件）。前 3 栏锁定同一微秒（`µs`）时间轴，事件密集时自动展开第 4 栏微距视图：
+WeaveProfiler 默认直出一张高分辨率四联 PNG（工程师和多模态大模型都能直接看，不用开几百 MB 的 Perfetto）。前 3 栏共用同一微秒（`µs`）横轴，事件密集时自动展开第 4 栏放大图：
 
-- **(A) 同次硬件利用率曲线（Fail-Closed）**：同次运行采集的整卡计算（Tensor / Matrix Core MFMA）、HBM 读写总带宽、独立全双工互联（`NVLink TX` 与 `NVLink RX` 独立绘制绝不合并；AMD 为 `xGMI`）及活跃 SM/CU 占比；缺失真实同次硬件曲线时直接报错拒绝出图。
-- **(B) 全卡物理 SM / CU 阶段瀑布**：纵轴覆盖全卡所有物理核心（如 H20 78 SMs、B300 148 SMs、MI308X 80 CUs），直观呈现波次台阶、负载倾斜与尾波拖尾。
-- **(C) 单 SM / CU 全物理 Warp / Wave 分轨时间线**：每个物理 Warp/Wave 自动拆分为「**上行主执行轨**（计算阶段 + 亮黄斜纹 `Exposed Wait` + `Store`）+ **下行异步引擎深度热力副轨**（`MEM` 绿带与发射针 `▼`、`MMA/WGMMA/tcgen05` 蓝带与发射针 `▼`，以 5 档同色系深浅编码实时在途深度 $d$）」。
-- **(D) 确定性单 CTA 微距放大（Micro-Zoom）**：自动锁定 `Exposed Wait` 占比最高的完整 CTA（并在 A–C 栏以洋红虚线框同步标出），逐拍展示异步预取爬坡、稳态重叠、等待气泡与排空阶梯。
+- **(A) 同次硬件利用率曲线**：同次运行采集的整卡计算利用率（Tensor / Matrix Core）、HBM 读写总带宽、独立全双工互联（`NVLink TX` 与 `NVLink RX` 分开画；AMD 为 `xGMI`）及活跃 SM/CU 占比；缺真实硬件曲线时直接报错拒画。
+- **(B) 全卡 SM / CU 瀑布图**：纵轴列出全卡所有物理核心（如 H20 78 SMs、B300 148 SMs、MI308X 80 CUs），一眼看清波次切换、负载不均与长尾拖慢。
+- **(C) 单 SM / CU 逐 Warp / Wave 时间线**：每个 Warp 拆成上下两层——**上层主轨**画计算阶段、亮黄斜纹 `Exposed Wait` 与写回；**下层异步副轨**画 `MEM`（绿）和 `MMA`（蓝）的发射针 `▼` 与 5 档颜色深浅的实时在途深度 `d`。
+- **(D) 单 CTA 微距放大**：自动挑出 `Exposed Wait` 占比最高的完整 CTA（在 A–C 栏用洋红虚线框标出），看清预取爬坡、稳态重叠、等待气泡和收尾排空。
 
 ![NVIDIA H20 Triton num_stages=5 PTX 自动双异步四联对齐图](docs/images/case_h20_triton_s5_4panel.png)
 
@@ -117,11 +115,11 @@ WeaveProfiler 输出的 `(在途深度 d, Exposed Wait %)` 直接给出可执行
 ![RTX 3050 sm_86 CUDA C++ 6-Stage cp.async 低开销四联对齐图](docs/images/case_sm86_cuda_s6_4panel.png)
 ![RTX 3050 sm_86 8192³ Triton GEMM 冷启动 DRAM 爬升与 WDDM 抢占四联对齐图](docs/images/case_sm86_wddm_preemption.png)
 
-### 4.6 双机 16×AMD Instinct MI308X（EP16）跨机 RDMA + 机内全双工 xGMI MegaMoE 四联图（`2.46×` 加速）
+### 4.6 双机 16×AMD Instinct MI308X（EP16）跨机 RDMA + 机内全双工 xGMI MegaMoE（`2.46×` 加速）
 
-在双节点 16×MI308X（`2×8 GPUs`，机内 `287.2 GB/s` 全双工 xGMI + 跨机 RDMA）上剖析持久化单核 **MegaMoE（Qwen3.8-Max, `EP=16, S=16384, E=512, K=10`）**：
-- **Panel (A) 出口限规 SKU 算力重归一与全双工 xGMI 拆分**：MI308X 通过动态限频（`~1.38 GHz` → `451.5T` 管线时钟上限）与功耗/发射封顶共同执行 `398.7 TFLOPS` FP8 物理上限；按逐区间硬件乘加量 `100 × (ΔSQ_VALU_MFMA_BUSY_CYCLES × 1024) / (Δt × 398.7T)` 精确归一化后，稠密 `376.7 TFLOPS` GEMM 读数为 **`94.5%`**，本例整卡峰值达 **`70.4%`（`280.6 TFLOPS`）**——扣除 `100/640`（`15.6%`）常驻通信 Wave 后，**`540` 条计算 Wave 池等效利用率达 `83.4%`（占稠密 GEMM 实测上限的 `88.3%`）**（详见 [amd_mi308x.md](docs/amd_mi308x.md)）。图中同时分离了开场 `xGMI RX (In)` 入向峰值与 `t ≈ 3,550 µs` 起并行拉升的 `xGMI TX (Out)` 出向曲线，并对 HCA 侧不可采的跨机 RDMA 计数器给出显式诚实注记（绝不补零）。
-- **Panel (B)–(D) 单 CTA/CU（`80×512`）双色跨机/机内瀑布与 3 组 `GEMM1 ↔ GEMM2` 交错掩盖**：全卡严守 **`1 CTA/CU`（`80 CTAs × 512 Threads = 80 CUs × 8 Waves`）**，在整块全局复用的 `64 KB` LDS 上通过手写局部 4-Wave 同步切分 `W00–W03` Compute / Combine 与 `W04–W07` Comm / Dispatch & Async Scatter，将开场跨机/机内分发融合为单阶段，配合跨机 Top-K 路由去重预归约（单点带来 **`+15.1%`** 收益）与 3 组 `GEMM1 ↔ GEMM2` 交错流水，使通信 Wave 在后半程 `MFMA` 满载（整卡 **`70.4%`** / 计算池 **`83.4%`**）的同时异步推进跨机 RDMA（瓶颈互联峰值达 **`88.3%`** roofline 利用率）与机内 xGMI 流式归约，端到端延迟由 `RCCL + AITER` 的 `17,204.0 µs` 降至 **`6,981.1 µs`（`2.46×` 加速，16 卡全元素 FP64 校验通过）**：
+在双节点 16×MI308X（`2×8 GPUs`，机内全双工 xGMI + 跨机 RDMA）上剖析持久化单核 **MegaMoE（Qwen3.8-Max, `EP=16, S=16384, E=512, K=10`）**：
+- **Panel (A) 硬件算力校准与全双工 xGMI 拆分**：按 MI308X `398.7 TFLOPS` FP8 物理上限逐区间计算利用率（详见 [amd_mi308x.md](docs/amd_mi308x.md)），整卡峰值达 **`70.4%`（`280.6 TFLOPS`）**，其中 `540/640` 计算 Wave 池等效利用率达 **`83.4%`**；`xGMI RX (In)` 与 `xGMI TX (Out)` 独立成线，网卡侧不可采的跨机 RDMA 计数器显式注明、绝不补零。
+- **Panel (B)–(D) 单 CTA/CU 融合流水**：全卡保持 `1 CTA/CU`（`80 CTAs × 512 Threads`），切分 4 条计算 Wave 与 4 条通信 Wave，通过开场跨机/机内分发融合、跨机 Top-K 去重预归约（单点 `+15.1%`）与 3 组 `GEMM1 ↔ GEMM2` 交错掩盖，让跨机 RDMA 与机内 xGMI 归约叠在 `MFMA` 满载区间之下，端到端延迟从 `17,204.0 µs` 降至 **`6,981.1 µs`（`2.46×` 加速，16 卡 FP64 校验通过）**：
 
 ![2×8 AMD MI308X EP16 Qwen3.8-Max S=16384 跨机 RDMA 与机内全双工 xGMI 四联对齐图](docs/images/case_mi308x_ep16_megamoe_4panel.png)
 
