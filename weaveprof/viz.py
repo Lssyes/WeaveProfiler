@@ -1571,10 +1571,11 @@ def _render_warp_panel(
 
         if show_right_stats and row_stats:
             trans = ax.get_yaxis_transform()
+            _rfs = 8.2 if n_rep_rows >= 18 else (8.8 if n_rep_rows >= 14 else 9.4)
             for r, info in row_stats.items():
                 ax.text(
                     1.008, r, info["text"], transform=trans,
-                    va="center", ha="left", fontsize=7.6, color="#455A64",
+                    va="center", ha="left", fontsize=_rfs, fontweight="bold", color="#334155",
                     clip_on=False,
                 )
 
@@ -1597,6 +1598,7 @@ def render_swhw_overview_png(
     zoom_window: Optional[Tuple[float, float]] = None,
     dpi: int = 220,
     require_hw_curves: bool = True,
+    subplot_lr: Optional[Tuple[float, float]] = None,
 ) -> Path:
     """Render a publication-grade SW+HW overview PNG (with on-demand async depth strips, ▼ issue pins & micro-zoom)."""
     import matplotlib
@@ -1733,12 +1735,12 @@ def render_swhw_overview_png(
             "or pass require_hw_curves=False / --allow-no-hw explicitly for offline debugging only."
         )
     row_h_unit = 0.50 if (has_async_rep and n_rep_rows <= 6) else (0.28 if n_rep_rows >= 8 else 0.40)
-    panel_c_h = max(2.25, min(5.0, row_h_unit * n_rep_rows + 1.05))
-    panel_d_h = max(2.15, min(4.2, row_h_unit * n_rep_rows + 0.90)) if has_zoom else 0.0
+    panel_c_h = max(2.25, min(5.2, row_h_unit * n_rep_rows + 1.05))
+    panel_d_h = max(2.15, min(4.85, row_h_unit * n_rep_rows + 0.95)) if has_zoom else 0.0
     panel_b_h = max(2.9, min(4.2, 0.036 * n_sms + 1.45))
-    panel_a_h = 2.25 if has_hw else 0.0
-    footer_hw_h = 0.62 if has_hw else 0.0
-    fig_h = 2.25 + panel_a_h + panel_b_h + panel_c_h + panel_d_h + footer_hw_h
+    panel_a_h = 2.45 if has_hw else 0.0
+    footer_hw_h = 1.18 if has_hw else 0.0
+    fig_h = 2.85 + panel_a_h + panel_b_h + panel_c_h + panel_d_h + footer_hw_h
     fig_w = 16.8 if has_async_rep else 16.0
 
     plt.rcParams.update({
@@ -1757,7 +1759,7 @@ def render_swhw_overview_png(
     if has_zoom:
         heights.append(panel_d_h)
     fig = plt.figure(figsize=(fig_w, fig_h), facecolor="#FFFFFF")
-    gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.40 if dual_fabric else 0.34)
+    gs = fig.add_gridspec(len(heights), 1, height_ratios=heights, hspace=0.44 if dual_fabric else (0.39 if has_zoom else 0.34))
     idx_g = 0
     ax_hw = fig.add_subplot(gs[idx_g]) if has_hw else None
     if has_hw:
@@ -1813,8 +1815,10 @@ def render_swhw_overview_png(
             f"{len(sw_spans) + len(sw_marks):,} software events{async_note} · {hw_tool_lbl} + {magic}"
         )
 
-    fig.text(0.5, 0.986, title, ha="center", va="top", fontsize=14.2, fontweight="bold", color="#111111")
-    fig.text(0.5, 0.960 if has_zoom else 0.955, subtitle, ha="center", va="top", fontsize=9.0, color="#455A64")
+    title_fs = 14.8 if len(str(title)) > 98 else 16.8
+    sub_fs = 10.4 if len(str(subtitle)) > 118 else 11.4
+    fig.text(0.5, 0.989, title, ha="center", va="top", fontsize=title_fs, fontweight="bold", color="#0F172A")
+    fig.text(0.5, 0.963 if has_zoom else 0.957, subtitle, ha="center", va="top", fontsize=sub_fs, color="#334155")
 
     # ---- Stage / Dual-Fabric Color Map & Legends ----
     panel_b_fabric_handles: List[Patch] = []
@@ -1939,27 +1943,27 @@ def render_swhw_overview_png(
         has_second_async_leg = bool(async_depth_handles)
         n_top_rows = 0
         n_async_rows = 0
-        n_leg_cols = 7
-        leg_y = (0.946 if has_second_async_leg else 0.936) if has_zoom else (0.936 if has_hw else 0.916)
+        n_leg_cols = 5
+        leg_y = (0.941 if has_second_async_leg else 0.933) if has_zoom else (0.931 if has_hw else 0.912)
         if top_legend_handles:
             max_top_lbl = max((len(str(h.get_label() or "")) for h in top_legend_handles), default=0)
-            n_leg_cols = min(len(top_legend_handles), 5 if max_top_lbl >= 38 else (6 if max_top_lbl >= 32 else 7))
+            n_leg_cols = min(len(top_legend_handles), 4 if max_top_lbl >= 30 else (5 if max_top_lbl >= 22 else 6))
             n_top_rows = (len(top_legend_handles) + n_leg_cols - 1) // n_leg_cols
             fig.legend(
                 handles=top_legend_handles, loc="upper center", bbox_to_anchor=(0.5, leg_y),
                 ncol=n_leg_cols, frameon=False,
-                fontsize=7.6 if max_top_lbl >= 34 else (8.0 if n_leg_cols >= 6 else 8.4),
-                handlelength=1.28, columnspacing=0.95,
+                fontsize=10.2 if max_top_lbl >= 32 else (10.6 if n_leg_cols >= 5 else 11.0),
+                handlelength=1.40, columnspacing=1.08,
             )
         if has_second_async_leg:
-            n_acol = min(len(async_depth_handles), 11)
+            n_acol = min(len(async_depth_handles), 9)
             n_async_rows = (len(async_depth_handles) + n_acol - 1) // n_acol
-            aleg_y = leg_y - (0.0145 * max(1, n_top_rows) + 0.0085)
+            aleg_y = leg_y - (0.0195 * max(1, n_top_rows) + 0.011)
             fig.legend(
                 handles=async_depth_handles, loc="upper center", bbox_to_anchor=(0.5, aleg_y),
-                ncol=n_acol, frameon=True, facecolor="#F8FAFC", edgecolor="#CBD5E1",
-                fontsize=7.6 if n_acol >= 9 else 8.0,
-                handlelength=1.25, handletextpad=0.38, columnspacing=0.82, borderpad=0.28,
+                ncol=n_acol, frameon=True, facecolor="#F8FAFC", edgecolor="#94A3B8",
+                fontsize=9.8 if n_acol >= 9 else (10.2 if n_acol >= 8 else 10.8),
+                handlelength=1.35, handletextpad=0.42, columnspacing=0.90, borderpad=0.36,
             )
 
     x_pad = max(1.0, t_max * 0.015)
@@ -2032,14 +2036,15 @@ def render_swhw_overview_png(
         y_top = 108.0 if hw_max_val <= 100.0 else max(108.0, hw_max_val * 1.08)
         ax_hw.set_ylim(-4, y_top)
         ax_hw.set_yticks([0, 25, 50, 75, 100])
-        ax_hw.set_ylabel("Utilization (%)", fontsize=9.5, color="#263238")
+        ax_hw.tick_params(axis="y", labelsize=10.4)
+        ax_hw.set_ylabel("Utilization (%)", fontsize=11.6, fontweight="bold", color="#1E293B")
         hw_title_src = "same-run SW+HW capture" if is_amd else "real nsys GPU metric curves"
         ax_hw.set_title(f"(A) Aligned Hardware Utilization Curves ({hw_title_src})",
-                        fontsize=10.5, fontweight="bold", color="#111111", pad=36)
+                        fontsize=12.8, fontweight="bold", color="#0F172A", pad=50)
         ax_hw.legend(
-            loc="upper center", bbox_to_anchor=(0.5, 1.25),
-            ncol=min(max(2, len(curve_order_keys)), 3 if len(curve_order_keys) >= 5 else 4),
-            frameon=False, fontsize=8.4, handlelength=2.0, columnspacing=1.35,
+            loc="upper center", bbox_to_anchor=(0.5, 1.35),
+            ncol=min(max(2, len(curve_order_keys)), 3),
+            frameon=False, fontsize=10.8, handlelength=2.1, columnspacing=1.35,
         )
 
         if multi_node and not has_active_rdma:
@@ -2047,7 +2052,7 @@ def render_swhw_overview_png(
                 0.012, 0.78,
                 "Inter-Node RDMA NIC counters unavailable on this HCA (omitted, not zero-filled)",
                 transform=ax_hw.transAxes, ha="left", va="center",
-                fontsize=8.2, fontstyle="italic", color="#8B1E1E", zorder=6,
+                fontsize=10.2, fontstyle="italic", color="#8B1E1E", zorder=6,
             )
 
     # ---- Panel (B): All physical SMs / CUs dense rasterized waterfall ----
@@ -2122,24 +2127,24 @@ def render_swhw_overview_png(
     if n_sms > 1 and ((n_sms - 1) - yt[-1]) >= max(2, step // 2):
         yt.append(n_sms - 1)
     ax_sm.set_yticks(yt)
-    ax_sm.set_yticklabels([f"{unit_nm}{sms[i]}" for i in yt] if sms else [f"{unit_nm}0"], fontsize=8.2)
+    ax_sm.set_yticklabels([f"{unit_nm}{sms[i]}" for i in yt] if sms else [f"{unit_nm}0"], fontsize=10.2)
     rank_tag = f" (rank {meta['rank']})" if meta.get("rank") is not None else f" ({len(sms)} {unit_nm}s)"
-    ax_sm.set_ylabel(f"Physical {unit_nm}{rank_tag}", fontsize=9.5, color="#263238")
+    ax_sm.set_ylabel(f"Physical {unit_nm}{rank_tag}", fontsize=11.6, fontweight="bold", color="#1E293B")
     if dual_fabric and panel_b_fabric_handles:
         b_mode_lbl = "Multi-CTA" if sm_cta_slots else f"Persistent 1-CTA/{unit_nm}"
         ax_sm.set_title(
             f"(B) {b_mode_lbl} Execution Across All {len(sms)} Physical {unit_nm}s",
-            fontsize=10.5, fontweight="bold", color="#111111", loc="left", pad=8,
+            fontsize=12.0, fontweight="bold", color="#0F172A", loc="left", pad=21,
         )
         ax_sm.legend(
-            handles=panel_b_fabric_handles, loc="lower right", bbox_to_anchor=(1.0, 1.005),
-            ncol=4, frameon=False, fontsize=8.1, handlelength=1.25, columnspacing=1.1,
+            handles=panel_b_fabric_handles, loc="lower right", bbox_to_anchor=(1.0, 1.002),
+            ncol=4, frameon=False, fontsize=9.4, handlelength=1.30, columnspacing=1.05,
         )
     else:
         ax_sm.set_title(
             f"(B) All {len(sms)} physical {unit_nm}s ({unit_nm}{sms[0]}–{unit_nm}{sms[-1]}) — full per-tile stage waterfall"
             if sms else f"(B) Physical {unit_nm} timeline",
-            fontsize=10.5, fontweight="bold", color="#111111", pad=10,
+            fontsize=12.8, fontweight="bold", color="#0F172A", pad=11,
         )
 
     # ---- Panel (C): Representative SM/CU warp/wave role breakdown (+ thin async sub-tracks) ----
@@ -2163,35 +2168,40 @@ def render_swhw_overview_png(
         show_right_stats=has_async_rep,
     )
 
-    yt_fs = 7.8 if n_rep_rows >= 12 else 8.2
+    yt_fs = 8.2 if n_rep_rows >= 18 else (9.0 if n_rep_rows >= 14 else 10.2)
+    ax_wp.tick_params(axis="x", labelsize=10.4)
     if use_cta_slots:
         role_lbl = rep_warps[0][1] if rep_warps else "cta"
         c_yticks = [f"Slot {i} · {role_lbl}" for i in range(n_rep_rows)]
         ax_wp.set_yticklabels(c_yticks, fontsize=yt_fs)
-        ax_wp.set_ylabel(f"{unit_nm} {rep_sm} CTA slots", fontsize=9.5, color="#263238")
+        ax_wp.set_ylabel(f"{unit_nm} {rep_sm} CTA slots", fontsize=11.6, fontweight="bold", color="#1E293B")
         ax_wp.set_title(
             f"(C) {unit_nm} {rep_sm} — {n_rep_rows} concurrent CTA slots ({len(rep_cta_slot)} CTAs total on {unit_nm} {rep_sm})",
-            fontsize=10.5, fontweight="bold", color="#111111", pad=6,
+            fontsize=12.6, fontweight="bold", color="#0F172A", pad=8,
         )
     else:
         c_yticks = _compute_panel_c_role_labels(rep_warps, rep_spans_for_lbl, sw_spans, dual_fabric=dual_fabric, is_amd=is_amd)
         ax_wp.set_yticklabels(c_yticks, fontsize=yt_fs)
-        ax_wp.set_ylabel(f"{unit_nm} {rep_sm} {lane_nm}", fontsize=9.5, color="#263238")
+        ax_wp.set_ylabel(f"{unit_nm} {rep_sm} {lane_nm}", fontsize=11.6, fontweight="bold", color="#1E293B")
         if dual_fabric and panel_c_handles:
             ax_wp.set_title(
                 f"(C) Representative {unit_nm} {rep_sm} — Complete Pipeline by Real {lane_nm.title()} Role",
-                fontsize=10.5, fontweight="bold", color="#111111", pad=30,
+                fontsize=12.6, fontweight="bold", color="#0F172A", pad=34,
             )
             ax_wp.legend(
-                handles=panel_c_handles, loc="upper center", bbox_to_anchor=(0.5, 1.135),
-                ncol=min(len(panel_c_handles), 8), frameon=False, fontsize=7.9, handlelength=1.2, columnspacing=1.0,
+                handles=panel_c_handles, loc="upper center", bbox_to_anchor=(0.5, 1.155),
+                ncol=min(len(panel_c_handles), 8), frameon=False, fontsize=9.8, handlelength=1.30, columnspacing=1.05,
             )
         else:
             role_names = ", ".join(dict.fromkeys(r for _, r in rep_warps))
             async_tag = " · main track + async depth strip & issue pins (v)" if has_async_rep else ""
+            c_ttl = f"(C) {unit_nm} {rep_sm} — all {len(rep_warps)} {lane_nm}s ({role_names}){async_tag}"
+            if len(c_ttl) > 155 and has_async_rep:
+                c_ttl = f"(C) {unit_nm} {rep_sm} — {len(rep_warps)} {lane_nm}s ({role_names}) · async depth & pins (v)"
             ax_wp.set_title(
-                f"(C) {unit_nm} {rep_sm} — all {len(rep_warps)} {lane_nm}s ({role_names}){async_tag}",
-                fontsize=10.5, fontweight="bold", color="#111111", pad=6,
+                c_ttl,
+                fontsize=9.6 if len(c_ttl) > 140 else (10.6 if len(c_ttl) > 115 else (11.6 if len(c_ttl) > 88 else 12.6)),
+                fontweight="bold", color="#0F172A", pad=8,
             )
     if has_zoom and zoom_win is not None and ax_zoom is not None:
         z0, z1, z_cta, z_wait, z_reason = zoom_win
@@ -2202,7 +2212,7 @@ def render_swhw_overview_png(
             (z0, -0.46), z1 - z0, n_rep_rows - 0.08,
             facecolor="none", edgecolor="#D81B60", linewidth=1.6, linestyle="--", zorder=7.0,
         ))
-        ax_wp.set_xlabel("Full-kernel locked time (µs) — dashed magenta window zoomed in Panel (D)", fontsize=8.8, color="#455A64")
+        ax_wp.set_xlabel("Full-kernel locked time (µs) — dashed magenta window zoomed in Panel (D)", fontsize=10.8, color="#334155")
         # Isolate the single featured CTA in Panel (D) when a single CTA is selected, so concurrent
         # resident CTAs on the same SM never interleave their pins/stages in micro-zoom view!
         if z_cta is not None and (zoom_cta is not None or not dual_fabric):
@@ -2230,84 +2240,144 @@ def render_swhw_overview_png(
             is_zoom=True,
             show_right_stats=has_async_rep,
         )
+        ax_zoom.tick_params(axis="x", labelsize=10.4)
         ax_zoom.set_yticklabels(c_yticks, fontsize=yt_fs)
-        ax_zoom.set_ylabel(f"{unit_nm} {rep_sm} zoom", fontsize=9.5, color="#263238")
+        ax_zoom.set_ylabel(f"{unit_nm} {rep_sm} zoom", fontsize=11.6, fontweight="bold", color="#1E293B")
         cta_lbl = f"CTA {z_cta} on {unit_nm} {rep_sm}" if z_cta is not None else f"{unit_nm} {rep_sm}"
         zoom_detail_tail = (
-            "fine-grained compute & multi-fabric overlap detail"
-            if (dual_fabric and not has_async_rep)
+            "compute & multi-role comm overlap"
+            if not has_async_rep
             else "every async issue pin (v) & stage depth"
         )
         zoom_xlabel_tail = (
-            "multi-role compute & inter/intra-node comm overlap detail"
-            if (dual_fabric and not has_async_rep)
+            "multi-role compute & comm stage overlap detail"
+            if not has_async_rep
             else "isolated single-CTA async pipeline detail"
         )
+        d_ttl = f"(D) Deterministic Micro-Zoom: {cta_lbl} ({z0:.1f}–{z1:.1f} µs · {z_reason}) — {zoom_detail_tail}"
         ax_zoom.set_title(
-            f"(D) Deterministic Micro-Zoom: {cta_lbl} ({z0:.1f}–{z1:.1f} µs · {z_reason}) — {zoom_detail_tail}",
-            fontsize=10.2, fontweight="bold", color="#880E4F", pad=6,
+            d_ttl,
+            fontsize=10.8 if len(d_ttl) > 115 else (11.6 if len(d_ttl) > 90 else 12.4),
+            fontweight="bold", color="#880E4F", pad=8,
         )
-        ax_zoom.set_xlabel(f"Zoomed time (µs) — {zoom_xlabel_tail}", fontsize=9.5, color="#263238")
+        ax_zoom.set_xlabel(f"Zoomed time (µs) — {zoom_xlabel_tail}", fontsize=11.2, fontweight="bold", color="#1E293B")
     else:
-        ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=9.5, color="#263238")
+        ax_wp.set_xlabel("Time (µs) — identical locked scale across all panels", fontsize=11.2, fontweight="bold", color="#1E293B")
 
     yt_labels = [t.get_text() for t in ax_wp.get_yticklabels()]
     max_lbl = max((len(s) for s in yt_labels), default=10)
-    left_m = max(0.098, min(0.185, 0.052 + 0.0044 * max_lbl))
-    right_m = (0.795 if len(active_async_engines) >= 2 else 0.825) if has_async_rep else 0.985
+    left_m = max(0.114, min(0.215, 0.058 + 0.0053 * max_lbl))
+    right_m = (0.754 if len(active_async_engines) >= 2 else 0.786) if has_async_rep else 0.984
+    if subplot_lr is not None:
+        left_m, right_m = float(subplot_lr[0]), float(subplot_lr[1])
     _max_tl = max((len(str(h.get_label() or "")) for h in top_legend_handles), default=0) if top_legend_handles else 0
-    _ncol_t = min(len(top_legend_handles), 5 if _max_tl >= 38 else (6 if _max_tl >= 32 else 7)) if top_legend_handles else 1
+    _ncol_t = min(len(top_legend_handles), 4 if _max_tl >= 30 else (5 if _max_tl >= 22 else 6)) if top_legend_handles else 1
     _ntop = max(1, (len(top_legend_handles) + _ncol_t - 1) // _ncol_t) if (not dual_fabric and top_legend_handles) else 0
-    _nasy = max(1, (len(async_depth_handles) + 10) // 11) if (not dual_fabric and bool(active_async_engines)) else 0
-    extra_leg = (0.015 * max(0, _ntop - 1)) + ((0.024 + 0.014 * max(0, _nasy - 1)) if _nasy > 0 else 0.0)
+    _nasy = max(1, (len(async_depth_handles) + 8) // 9) if (not dual_fabric and bool(active_async_engines)) else 0
+    extra_leg = (0.0215 * max(0, _ntop - 1)) + ((0.034 + 0.0205 * max(0, _nasy - 1)) if _nasy > 0 else 0.0)
     if has_zoom:
-        top_m = min(0.862, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else min(0.870, 1.0 - 1.85 / fig_h) - extra_leg
+        top_m = min(0.842, 1.0 - 2.65 / fig_h) - extra_leg if has_hw else min(0.855, 1.0 - 2.20 / fig_h) - extra_leg
     else:
-        top_m = 0.855 if (has_hw and dual_fabric) else (min(0.805, 1.0 - 2.15 / fig_h) - extra_leg if has_hw else 0.835)
-    show_hw_box = bool(hw_summary_items) and not dual_fabric
-    bottom_m = (0.088 if has_zoom else 0.104) if show_hw_box else (0.055 if has_zoom else 0.065)
+        top_m = 0.840 if (has_hw and dual_fabric) else (min(0.790, 1.0 - 2.65 / fig_h) - extra_leg if has_hw else 0.818)
+    show_hw_box = bool(hw_summary_items)
+    two_row_hw = show_hw_box and len(hw_summary_items) >= 3
+    if show_hw_box:
+        if two_row_hw:
+            bottom_m = 0.118 if has_zoom else 0.142
+        else:
+            bottom_m = 0.094 if has_zoom else 0.112
+    else:
+        bottom_m = 0.058 if has_zoom else 0.068
     fig.subplots_adjust(left=left_m, right=right_m, top=top_m, bottom=bottom_m)
 
-    # ---- Bottom Hardware Metrics Summary Box (Peak & Mean for every hardware metric) ----
+    # ---- Bottom Hardware Metrics Summary Box (Large-Font Peak & Mean Readout) ----
     if show_hw_box:
         from matplotlib.patches import FancyBboxPatch
-        box_x0 = 0.032
-        box_x1 = 0.978
+        box_x0 = 0.028
+        box_x1 = 0.980
         box_w = max(0.20, box_x1 - box_x0)
-        box_y0 = 0.011
-        box_h = 0.032 if has_zoom else 0.040
-        box_yc = box_y0 + 0.5 * box_h
-        fig.patches.append(FancyBboxPatch(
-            (box_x0, box_y0), box_w, box_h,
-            boxstyle="round,pad=0.003,rounding_size=0.006",
-            transform=fig.transFigure,
-            facecolor="#F8FAFC", edgecolor="#475569", linewidth=1.2, zorder=10,
-        ))
-        hdr_txt = f"Hardware Summary (0–{k_dur:,.1f} µs):"
-        hdr_x = box_x0 + 0.009
+        box_y0 = 0.010
         n_hw_it = len(hw_summary_items)
-        hdr_fs = 7.5 if n_hw_it >= 5 else 8.3
-        fig.text(
-            hdr_x, box_yc, hdr_txt,
-            ha="left", va="center", fontsize=hdr_fs, fontweight="bold", color="#0F172A", zorder=11,
-        )
-        items_x0 = hdr_x + (0.155 if n_hw_it >= 5 else (0.165 if len(hdr_txt) <= 34 else 0.185))
-        avail_w = max(0.10, (box_x1 - 0.005) - items_x0)
-        slot_w = avail_w / max(1, n_hw_it)
-        sw_h = box_h * 0.42
-        sw_w = 0.0068 if n_hw_it >= 5 else 0.0075
-        fs_hw = 8.0 if n_hw_it <= 4 else 6.2
-        for idx_h, (m_short, m_col, m_peak, m_mean) in enumerate(hw_summary_items):
-            ix = items_x0 + idx_h * slot_w
-            fig.patches.append(Rectangle(
-                (ix, box_yc - 0.5 * sw_h), sw_w, sw_h,
-                transform=fig.transFigure, facecolor=m_col, edgecolor="#1E293B", linewidth=0.5, zorder=11,
+        hdr_txt = f"Hardware Summary (0–{k_dur:,.1f} µs):"
+        if two_row_hw:
+            box_h = 0.066 if has_zoom else 0.080
+            fig.patches.append(FancyBboxPatch(
+                (box_x0, box_y0), box_w, box_h,
+                boxstyle="round,pad=0.004,rounding_size=0.007",
+                transform=fig.transFigure,
+                facecolor="#F8FAFC", edgecolor="#334155", linewidth=1.45, zorder=10,
             ))
+            y_r1 = box_y0 + 0.72 * box_h
+            y_r2 = box_y0 + 0.27 * box_h
+            sw_h = box_h * 0.29
+            sw_w = 0.0102
+            fs_hw = 12.4
+            # Row 1: Header on left + first 1 or 2 hardware metrics
             fig.text(
-                ix + sw_w + 0.004, box_yc,
-                f"{m_short}: peak {m_peak:.1f}%, mean {m_mean:.1f}%",
-                ha="left", va="center", fontsize=fs_hw, fontweight="bold", color="#1E293B", zorder=11,
+                box_x0 + 0.012, y_r1, hdr_txt,
+                ha="left", va="center", fontsize=13.0, fontweight="bold", color="#0F172A", zorder=11,
             )
+            n_r1 = 1 if n_hw_it == 3 else 2
+            r1_items = hw_summary_items[:n_r1]
+            r1_x_starts = [0.420] if n_r1 == 1 else [0.365, 0.678]
+            for idx_r1, (m_short, m_col, m_peak, m_mean) in enumerate(r1_items):
+                ix = r1_x_starts[idx_r1]
+                fig.patches.append(Rectangle(
+                    (ix, y_r1 - 0.5 * sw_h), sw_w, sw_h,
+                    transform=fig.transFigure, facecolor=m_col, edgecolor="#0F172A", linewidth=0.7, zorder=11,
+                ))
+                fig.text(
+                    ix + sw_w + 0.006, y_r1,
+                    f"{m_short}: peak {m_peak:.1f}%, mean {m_mean:.1f}%",
+                    ha="left", va="center", fontsize=fs_hw, fontweight="bold", color="#1E293B", zorder=11,
+                )
+            # Row 2: Remaining 2 or 3 hardware metrics evenly distributed across box width
+            r2_items = hw_summary_items[n_r1:]
+            n_r2 = max(1, len(r2_items))
+            r2_x0 = box_x0 + 0.012
+            r2_avail = (box_x1 - 0.012) - r2_x0
+            r2_slot = r2_avail / n_r2
+            for idx_r2, (m_short, m_col, m_peak, m_mean) in enumerate(r2_items):
+                ix = r2_x0 + idx_r2 * r2_slot
+                fig.patches.append(Rectangle(
+                    (ix, y_r2 - 0.5 * sw_h), sw_w, sw_h,
+                    transform=fig.transFigure, facecolor=m_col, edgecolor="#0F172A", linewidth=0.7, zorder=11,
+                ))
+                fig.text(
+                    ix + sw_w + 0.006, y_r2,
+                    f"{m_short}: peak {m_peak:.1f}%, mean {m_mean:.1f}%",
+                    ha="left", va="center", fontsize=fs_hw, fontweight="bold", color="#1E293B", zorder=11,
+                )
+        else:
+            box_h = 0.042 if has_zoom else 0.052
+            box_yc = box_y0 + 0.5 * box_h
+            fig.patches.append(FancyBboxPatch(
+                (box_x0, box_y0), box_w, box_h,
+                boxstyle="round,pad=0.004,rounding_size=0.007",
+                transform=fig.transFigure,
+                facecolor="#F8FAFC", edgecolor="#334155", linewidth=1.45, zorder=10,
+            ))
+            hdr_x = box_x0 + 0.012
+            fig.text(
+                hdr_x, box_yc, hdr_txt,
+                ha="left", va="center", fontsize=12.6, fontweight="bold", color="#0F172A", zorder=11,
+            )
+            items_x0 = hdr_x + 0.305
+            avail_w = max(0.10, (box_x1 - 0.010) - items_x0)
+            slot_w = avail_w / max(1, n_hw_it)
+            sw_h = box_h * 0.44
+            sw_w = 0.0102
+            for idx_h, (m_short, m_col, m_peak, m_mean) in enumerate(hw_summary_items):
+                ix = items_x0 + idx_h * slot_w
+                fig.patches.append(Rectangle(
+                    (ix, box_yc - 0.5 * sw_h), sw_w, sw_h,
+                    transform=fig.transFigure, facecolor=m_col, edgecolor="#0F172A", linewidth=0.7, zorder=11,
+                ))
+                fig.text(
+                    ix + sw_w + 0.006, box_yc,
+                    f"{m_short}: peak {m_peak:.1f}%, mean {m_mean:.1f}%",
+                    ha="left", va="center", fontsize=12.0, fontweight="bold", color="#1E293B", zorder=11,
+                )
 
     # Programmatic collision and canvas-bounds check over all visible text artists
     from matplotlib.text import Text as _MplText
