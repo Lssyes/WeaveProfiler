@@ -39,6 +39,13 @@ from weaveprof.harness import (
 from weaveprof.workspace import ShadowWorkspace
 
 
+def _record_timing(name: str, val: float, thr: float, unit: str = "s") -> bool:
+    strict = os.environ.get("WEAVEPROF_STRICT_TIMING") == "1"
+    mode = "enforced" if strict else "not enforced"
+    print(f"[timing] {name}: {val:.3f} {unit} (threshold {thr} {unit}, {mode})", file=sys.stderr)
+    return strict
+
+
 def _load(rel: str, name: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / rel)
     assert spec is not None and spec.loader is not None
@@ -291,10 +298,8 @@ class DeterministicHarnessTests(unittest.TestCase):
                 min(e for _, e in off_intervals),
                 f"Off-region work did not overlap across workers: {off_intervals}",
             )
-            print(
-                f"[timing] DeterministicHarnessTests.krex_off_region.total_wall_s: {total_wall:.3f} s (not enforced)",
-                file=sys.stderr,
-            )
+            if _record_timing("DeterministicHarnessTests.krex_off_region.total_wall_s", total_wall, 0.58):
+                self.assertLess(total_wall, 0.58, f"Off-region concurrency too slow: {total_wall:.3f}s")
 
     def test_failed_timeline_export_sealing_and_fsm_escalation_end_to_end(self):
         """Full closed-loop Supervisor test:
