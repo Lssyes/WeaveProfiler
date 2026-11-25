@@ -1824,6 +1824,7 @@ def run_megakernel_audit(
                     blockers.append(f"NSYS_SAME_RUN_DUMP_FALLBACK: {exc}"[:160])
         except (RuntimeError, OSError, TimeoutError, ValueError, PolicyViolation) as exc:
             blockers.append(f"NSYS_CAPTURE_FAILED: {exc}"[:200])
+            hard_fail = True
 
     # Reclaim duplicated shadow workspace trees immediately after bench/nsys (prevents inode bloat).
     shadow_root_str = shadow_info.get("shadow")
@@ -1939,20 +1940,6 @@ def run_megakernel_audit(
     feedback_path = out / "feedback.json"
     verify_path = out / "verify.json"
     trace_path = out / "trace.perfetto.json.gz"
-    write_json(feedback_path, {
-        "schema": MEGAKERNEL_SCHEMA, "status": status, "mode": mode, "megakernel_skew": skew,
-        "causal": causal, "fidelity_gates": gates, "structural_blockers": blockers, "round_diff": round_diff,
-        "decode_summary": {k: summary.get(k) for k in ("span_us", "records", "spans", "lanes", "gran", "wpc", "n_ctas",
-                                                        "overflow", "errors", "events", "roles", "magic", "arch")},
-        "nsys": {k: v for k, v in hw.items() if k != "hw_series"} if hw else None,
-        "l0_cache": shadow_info.get("l0_cache"),
-        "round": round_number or 1,
-    })
-    write_json(verify_path, {
-        "schema": MEGAKERNEL_SCHEMA, "status": status, "checks": checks, "failed": failed, "limit": float(limit),
-        "overhead_ratio": g_overhead.get("overhead_ratio"), "source_sha256": source_sha,
-        "fidelity_gates": gates, "region_lock": region_lock,
-    })
     trace_doc = _merge_hw_trace(trace, hw, summary=summary, names=names_doc,
                                 tensor_scale=hw.get("tensor_active_scale") if hw else None)
     wrote_gz = False
@@ -1985,6 +1972,22 @@ def run_megakernel_audit(
                 hard_fail = True
                 blockers.append("MISSING_OVERVIEW_PNG: render_overview_png=True requires a valid non-empty overview.png")
 
+    feedback_doc = {
+        "schema": MEGAKERNEL_SCHEMA, "status": status, "mode": mode, "megakernel_skew": skew,
+        "causal": causal, "fidelity_gates": gates, "structural_blockers": blockers, "round_diff": round_diff,
+        "decode_summary": {k: summary.get(k) for k in ("span_us", "records", "spans", "lanes", "gran", "wpc", "n_ctas",
+                                                        "overflow", "errors", "events", "roles", "magic", "arch")},
+        "nsys": {k: v for k, v in hw.items() if k != "hw_series"} if hw else None,
+        "l0_cache": shadow_info.get("l0_cache"),
+        "round": round_number or 1,
+    }
+    verify_doc = {
+        "schema": MEGAKERNEL_SCHEMA, "status": status, "checks": checks, "failed": failed, "limit": float(limit),
+        "overhead_ratio": g_overhead.get("overhead_ratio"), "source_sha256": source_sha,
+        "fidelity_gates": gates, "region_lock": region_lock,
+    }
+    write_json(feedback_path, feedback_doc)
+    write_json(verify_path, verify_doc)
     result = {"status": status, "checks": checks, "failed": failed + (["structural"] if hard_fail else []),
               "metrics": {"overhead_ratio": g_overhead.get("overhead_ratio"), "region_lock": region_lock}}
     primary_visual = (
@@ -2014,6 +2017,10 @@ def run_megakernel_audit(
     if status == "PASS" and not seal_verified:
         status = "FAIL"
         blockers.append(("SEAL_VERIFY_FAILED: " + "; ".join(seal_errors))[:200])
+        feedback_doc["status"] = status
+        verify_doc["status"] = status
+        write_json(feedback_path, feedback_doc)
+        write_json(verify_path, verify_doc)
 
     neg_pert = any("NEGATIVE_OVERHEAD_PERTURBATION" in str(e) for e in (g_overhead.get("errors") or []))
     if neg_pert:
