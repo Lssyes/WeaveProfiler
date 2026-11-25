@@ -257,32 +257,44 @@ class DeterministicHarnessTests(unittest.TestCase):
         """Off-region work runs in parallel across 4 workers; in-region timing is 100% mutually exclusive."""
         with tempfile.TemporaryDirectory() as td:
             lock_dir = Path(td) / "locks"
+            off_intervals = []
             intervals = []
 
             def worker(idx: int):
                 # Off-region work (simulating LLM + compile + AST rewrite): runs concurrently
+                off_start = time.perf_counter()
                 time.sleep(0.12)
+                off_end = time.perf_counter()
                 # In-region GPU measurement: strictly exclusive per GPU ID
                 with gpu_critical_region(gpu_id="h20_0", timeout_s=15.0, lock_dir=lock_dir, label=f"w{idx}") as lease:
                     t_start = time.perf_counter()
                     time.sleep(0.05)
                     t_end = time.perf_counter()
-                return idx, t_start, t_end, lease
+                return idx, (off_start, off_end), t_start, t_end, lease
 
             t0 = time.perf_counter()
             with ThreadPoolExecutor(max_workers=4) as pool:
                 results = list(pool.map(worker, range(4)))
             total_wall = time.perf_counter() - t0
 
-            for _, s, e, lease in results:
+            for _, off_span, s, e, lease in results:
+                off_intervals.append(off_span)
                 intervals.append((s, e))
                 self.assertGreaterEqual(lease.hold_ms, 35.0)
             intervals.sort()
             # Assert ZERO overlap between critical regions
             for (_, prev_end), (next_start, _) in zip(intervals, intervals[1:]):
                 self.assertGreaterEqual(next_start, prev_end - 1e-4, "KREX critical regions overlapped!")
-            # Serial would take 4 * (0.12 + 0.05) = 0.68s; concurrent off-region should finish well under 0.55s
-            self.assertLess(total_wall, 0.58, f"Off-region concurrency too slow: {total_wall:.3f}s")
+            # Off-region sleep intervals across all 4 workers must overlap pairwise (max start < min end)
+            self.assertLess(
+                max(s for s, _ in off_intervals),
+                min(e for _, e in off_intervals),
+                f"Off-region work did not overlap across workers: {off_intervals}",
+            )
+            print(
+                f"[timing] DeterministicHarnessTests.krex_off_region.total_wall_s: {total_wall:.3f} s (not enforced)",
+                file=sys.stderr,
+            )
 
     def test_failed_timeline_export_sealing_and_fsm_escalation_end_to_end(self):
         """Full closed-loop Supervisor test:
