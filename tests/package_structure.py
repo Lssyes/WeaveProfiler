@@ -44,7 +44,7 @@ REQUIRED_FILES = [
     "configs/templates/gemm_probe/names.json",
     "configs/templates/gemm_probe/metrics.json",
     "configs/templates/gemm_probe/gemm_h20.config",
-    "weaveprof/pipeline/capture/build_perfetto.py", "weaveprof/pipeline/capture/build_hw_perfetto.py",
+    "weaveprof/pipeline/capture/build_perfetto.py",
     "weaveprof/pipeline/capture/extract_gpu_metrics.py",
     "weaveprof/pipeline/capture/build_rocprof_sw_hw.py", "weaveprof/pipeline/capture/build_rocprof_sys_sw_hw.py",
     "weaveprof/pipeline/capture/hardware_utilization.py", "weaveprof/pipeline/capture/merge_hw_into_perfetto.py",

@@ -19,7 +19,6 @@ PROFILE = ROOT / 'weaveprof/pipeline/capture'
 if str(PROFILE) not in sys.path:
     sys.path.insert(0, str(PROFILE))
 
-import build_hw_perfetto  # noqa: E402
 import merge_hw_into_perfetto  # noqa: E402
 from hardware_utilization import (  # noqa: E402
     CANONICAL_METRIC_IDS, evaluate_hardware_utilization,
@@ -224,31 +223,6 @@ class CanonicalSummaryTests(unittest.TestCase):
         self.assertEqual(filtered['simd_util']['samples'], [[1000, 10.0], [1500, 30.0]])
         self.assertTrue(filtered['tensor_util']['_window_filtered'])
         self.assertTrue(filtered['simd_util']['_window_filtered'])
-
-
-class EmitterTests(unittest.TestCase):
-    def test_standalone_hw_trace_contains_summary_and_canonical_curve(self):
-        document = {
-            'schema': 'gpu-hw-metrics/v1',
-            'platform': 'nv',
-            'communication_scope': 'same_host',
-            'device': 0,
-            'kernel_launches': [{'start_ns': 1000, 'end_ns': 3000}],
-            'counters': [
-                counter('GPU Throughput', [10, 20, 30]),
-                counter('DRAM Read Bandwidth', [20, 30, 40]),
-                counter('SMs Active', [50, 60, 70]),
-            ],
-        }
-        trace, summary = build_hw_perfetto.build_trace(document)
-        hardware = trace['otherData']['hardware_summary']
-        self.assertEqual(set(hardware['metrics']), set(CANONICAL_METRIC_IDS))
-        self.assertEqual(hardware['metrics']['compute_util']['value'], 20.0)
-        self.assertIsNone(hardware['metrics']['communication_util']['value'])
-        event_names = {event['name'] for event in trace['traceEvents']
-                       if event.get('cat') == 'hardware_utilization'}
-        self.assertEqual(event_names, {'compute_util', 'memory_util', 'sm_active'})
-        self.assertEqual(summary['hardware_summary'], hardware)
 
 
 class ExtractIntegrationTests(unittest.TestCase):
