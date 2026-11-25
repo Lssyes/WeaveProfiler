@@ -1587,18 +1587,25 @@ class WpProfileReplayTest(unittest.TestCase):
 
 
 def _make_real_case_test(case_name: str):
-    suffix = (
-        "_suspected_bug_A4_A6"
-        if case_name == "wpprofile_h20_handoff_no_window_samples"
-        else ""
-    )
+    is_no_window = case_name == "wpprofile_h20_handoff_no_window_samples"
+    suffix = "_suspected_bug_A4_A6" if is_no_window else ""
     test_name = f"test_real_{case_name}{suffix}"
 
     def _test(self: WpProfileReplayTest):
         self._check_case_dir(CASES / case_name, self._root / f"real_{case_name}", update=UPDATE)
 
     _test.__name__ = test_name
-    _test.__doc__ = f"golden wp.profile replay of tests/golden/cases/{case_name}"
+    if is_no_window:
+        _test.__doc__ = (
+            "Pins current behavior of known suspected bugs A4 and A6 from the refactor "
+            "suspected-bug list: when a counter-enabled run has 0 hardware samples inside "
+            "the kernel window, wp.profile still returns PASS and falls back to preview.py "
+            "for PNG rendering. This is NOT intended behavior to preserve; it is scheduled "
+            "to be fixed after the slimming phase completes, and this case's expected.json "
+            "must be updated when fixed."
+        )
+    else:
+        _test.__doc__ = f"golden wp.profile replay of tests/golden/cases/{case_name}"
     return _test
 
 

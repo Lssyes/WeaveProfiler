@@ -3,7 +3,7 @@
   "capture_bench": "cuda_bench_hw.py",
   "card": "h20",
   "case": "wpprofile_h20_handoff_no_window_samples",
-  "description": "Hoisted mma probe (L22..27) at K=4096 with 200 kHz GPU_METRICS sampling buffer overflow (0 in-window samples): PASS via preview.py fallback (pins current behavior of suspected bugs A4 and A6)",
+  "description": "Hoisted mma probe (L22..27) at K=4096 with 200 kHz GPU_METRICS sampling buffer overflow (0 in-window samples): PASS via preview.py fallback (pins current behavior of known suspected bugs A4 and A6 from the refactor suspected-bug list: when a counter-enabled run has 0 in-window hardware samples, wp.profile still returns PASS and falls back to preview.py; this is NOT intended behavior to preserve and is scheduled to be fixed after slimming completes, when expected.json must be updated)",
   "entry_source": "handoff.cu",
   "inputs_sha256": {
     "baseline.bin": "b11ecb7901f1cd115f36f6e4f9ba170bc9a3783bb0949a93a5b0c2e4c488f6ed",
