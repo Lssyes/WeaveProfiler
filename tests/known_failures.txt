@@ -1,0 +1,4 @@
+# Tests in tests/run_all.sh that already fail at baseline/pre-refactor (ae39cc4).
+# Format: <test path as printed by run_all.sh>  <reason>
+# tests/ci_offline.sh fails on any failure not listed here, and on any listed test that starts passing.
+tests/test_probe_pipeline.py  test_closed_loop_scheme_a_coarsening_convergence: OVERHEAD_EXCEEDED_COARSEN_SCHEME_A missing from the repair prompt (regression at baseline)

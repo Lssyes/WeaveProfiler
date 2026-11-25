@@ -1,0 +1,1342 @@
+{
+ "feedback": {
+  "causal": {
+   "arch": "sm_90a",
+   "bottleneck_hint": "Kernel is TENSOR_SATURATED (Tensor=78.4%, DRAM_Rd=3.6%, SM=94.5%).",
+   "caliber": {
+    "effective_mfu_pct": null,
+    "emp_rf_pct": 81.63,
+    "nom_rf_pct": 78.36,
+    "padding_waste_pct": null,
+    "roofline_axis": "TENSOR"
+   },
+   "causal_opportunities": [],
+   "counterfactual_upper_bound_us": 0.0,
+   "global_hw_regime": "TENSOR_SATURATED",
+   "gpu": "NVIDIA H20",
+   "hw_summary": {
+    "dram_read_mean_pct": 3.59,
+    "dram_read_peak_pct": 13.0,
+    "dram_write_mean_pct": 5.21,
+    "sm_active_mean_pct": 94.47,
+    "tensor_active_cal_mean_pct": 78.36,
+    "tensor_active_cal_peak_pct": 96.0,
+    "warp_issue_mean_pct": 27.08
+   },
+   "interleaving_waste_us": 0.0,
+   "kernel_us": 306.145,
+   "observed_ctas": 1024,
+   "observed_sms": 78,
+   "overlap_recommendations": [],
+   "phases": [
+    {
+     "bound_type": "SYNC",
+     "dram_rw_pct": 8.84,
+     "duration_us": 0.54,
+     "idle_resource": "SM",
+     "phase": "wait",
+     "reg_per_thr": null,
+     "sm_active_pct": 94.47,
+     "smem_bytes": null,
+     "tensor_pct": 79.6
+    }
+   ],
+   "refinement_summary": {
+    "cause_explained": [
+     "wait"
+    ],
+    "need_substage_drilldown": [],
+    "padding_waste_opportunities": [],
+    "saturated_stop_refining": [],
+    "suspect_empty_stubs": []
+   },
+   "schema": "weaveprof.causal-report/v1",
+   "stage_validity": [
+    {
+     "hw_regime": "TENSOR_SATURATED",
+     "is_wait": true,
+     "median_us": 0.54,
+     "reason": "Explicit synchronization/wait boundary separating physical stall from active compute.",
+     "refinement_verdict": "CAUSE_EXPLAINED",
+     "share_pct": 0.18,
+     "skew_us": 2.003,
+     "stage": "wait",
+     "window_dram_read_mean_pct": 3.63,
+     "window_tensor_mean_pct": 79.6
+    }
+   ],
+   "straggler_walls": [],
+   "structural_blockers": [
+    {
+     "blocked_actions": [
+      "fine_grained_ready_signaling",
+      "extra_load_latency_hiding"
+     ],
+     "code": "LOW_MATH_WAIT_NO_LATENCY_HIDING",
+     "metric": {
+      "math_warp_wait_pct": 0.18,
+      "threshold_pct": 5.5
+     },
+     "reason": "Math warp wait is only 0.18% (<5.5%); load-latency hiding yields negligible/negative ROI."
+    }
+   ],
+   "sw_span_us": 303.25,
+   "target": "matmul-v3.cu",
+   "tensor_calibration_factor": 4.0,
+   "total_sms": 78,
+   "verdict": "SATURATED_STOP_REFINING",
+   "warp_tail_imbalance": null
+  },
+  "decode_summary": {
+   "arch": "sm_90a",
+   "errors": {},
+   "events": {
+    "compute": {
+     "max_us": 1.326,
+     "mean_us": 0.462,
+     "n": 262144,
+     "p50_us": 0.452,
+     "total_us": 121226.89
+    },
+    "epilogue": {
+     "max_us": 1.899,
+     "mean_us": 0.977,
+     "n": 4096,
+     "p50_us": 0.896,
+     "total_us": 4001.342
+    },
+    "load": {
+     "max_us": 2.98,
+     "mean_us": 1.223,
+     "n": 262144,
+     "p50_us": 1.212,
+     "total_us": 320543.663
+    },
+    "mma": {
+     "max_us": 1.695,
+     "mean_us": 0.11,
+     "n": 262144,
+     "p50_us": 0.1,
+     "total_us": 28742.18
+    },
+    "wait": {
+     "max_us": 2.195,
+     "mean_us": 0.553,
+     "n": 62464,
+     "p50_us": 0.54,
+     "total_us": 34516.17
+    }
+   },
+   "gran": 0,
+   "lanes": 8192,
+   "magic": "FILITE02",
+   "n_ctas": 1024,
+   "overflow": 0,
+   "records": 1525760,
+   "roles": {
+    "Consumer (WGMMA)": {
+     "ctas": 1024,
+     "end_max_us": 303.456,
+     "end_median_us": 171.04,
+     "end_min_us": 41.12,
+     "tail_us": 132.416
+    },
+    "Producer (TMA issue)": {
+     "ctas": 1024,
+     "end_max_us": 300.768,
+     "end_median_us": 168.048,
+     "end_min_us": 38.336,
+     "tail_us": 132.72
+    },
+    "Producer WG idle": {
+     "ctas": 1024,
+     "end_max_us": 262.112,
+     "end_median_us": 129.904,
+     "end_min_us": 0.384,
+     "tail_us": 132.208
+    }
+   },
+   "span_us": 303.25,
+   "spans": 852992,
+   "wpc": 8
+  },
+  "fidelity_gates": {
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 9,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": 0,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": 0,
+     "inst_regs": 92,
+     "l0_regs": 96
+    },
+    "ok": false,
+    "register_count_blind_spot": true,
+    "remediation": [
+     "enable_WP_CTX_SMEM (-DWP_CTX_SMEM, 16B SMEM + __noinline__ cold path)"
+    ],
+    "violations": [
+     {
+      "code": "SASS_LDL_EXPLOSION",
+      "delta": 9,
+      "limit": 4,
+      "message": "SASS LDL (local load) instructions jumped by +9 (16 -> 25)."
+     }
+    ]
+   },
+   "event_gate": {
+    "decoder_errors": {},
+    "granularity_gate": {
+     "code": null,
+     "distinct_active_stages": 4,
+     "dominant_share_pct": 67.55,
+     "dominant_stage": "load",
+     "has_compute_stage": true,
+     "has_memory_stage": true,
+     "message": "",
+     "ok": true,
+     "overall_spans_per_lane": 193.0,
+     "per_lane_us": 78.258,
+     "spans_per_lane": 64.0
+    },
+    "ok": true,
+    "overflow": 0,
+    "pairing_errors": 0,
+    "spans": 852992,
+    "stub_gate": {
+     "ok": true,
+     "stub_count": 0,
+     "stubs": [],
+     "valid_stages": [
+      "load",
+      "mma",
+      "store"
+     ]
+    },
+    "warp_gate": {
+     "code": null,
+     "expected_warps": 8,
+     "hollow_warps": [],
+     "message": "",
+     "missing_warps": [],
+     "observed_warps": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "ok": true
+    }
+   },
+   "output_gate": {
+    "evidence": "output_sha256",
+    "ok": true
+   },
+   "overhead_gate": {
+    "abba": {
+     "baseline_half_drift_pct": 0.0111,
+     "baseline_median_ns": 288896.0,
+     "instrumented_median_ns": 310960.0,
+     "median_overhead_ratio": 0.076374,
+     "paired_ratio_mad": 0.002268,
+     "paired_ratio_median": 0.076356,
+     "paired_samples": 30,
+     "protocol": "ABBA"
+    },
+    "errors": [],
+    "limit": 0.1,
+    "ok": true,
+    "overhead_ratio": 0.076374
+   },
+   "sw_hw_coverage": {
+    "expected_samples": 61.2,
+    "hw_kernel_us": 306.145,
+    "in_window_samples": 61,
+    "ok": true,
+    "pmu_density": 0.9963,
+    "span_delta_ratio": 0.00946,
+    "sw_span_us": 303.25,
+    "violations": []
+   }
+  },
+  "l0_cache": null,
+  "megakernel_skew": {
+   "busy_basis": "lane_lifetime_minus_wait",
+   "counterfactual_balanced_us": 36.645,
+   "dynamic_role_switches": 0,
+   "early_finishing": {
+    "barrier_starved": 1,
+    "busy_us_max": 35.095,
+    "busy_us_median": 35.095,
+    "busy_us_min": 35.095,
+    "count": 1,
+    "idle_tail_us_median": 6.341,
+    "sm_ids": [
+     16
+    ]
+   },
+   "hints": [
+    {
+     "action": "Rebalance producer/consumer warp groups (setmaxnreg split, stage count, or move work from the late role) so all warp roles finish together.",
+     "code": "WARP_GROUP_REBALANCE",
+     "evidence": "role_skew_ratio=0.24, max role CTA tail=132.7us",
+     "severity": "medium"
+    },
+    {
+     "action": "Drill into 'load' with sub-stage probes before tuning other phases.",
+     "code": "OPTIMIZE_DOMINANT_STAGE",
+     "evidence": "'load' = 63.0% of instrumented stage time",
+     "severity": "low"
+    }
+   ],
+   "idle_sm_fraction": 0.0128,
+   "kernel_us": 303.25,
+   "max_role_tail_us": 132.72,
+   "observed_sms": 78,
+   "per_sm": [
+    {
+     "busy_us": 38.122,
+     "ctas": 13,
+     "life_us": 297.792,
+     "sm": 0,
+     "wait_us": 36.533
+    },
+    {
+     "busy_us": 37.952,
+     "ctas": 14,
+     "life_us": 301.664,
+     "sm": 1,
+     "wait_us": 35.17
+    },
+    {
+     "busy_us": 36.787,
+     "ctas": 14,
+     "life_us": 303.264,
+     "sm": 2,
+     "wait_us": 35.21
+    },
+    {
+     "busy_us": 36.215,
+     "ctas": 12,
+     "life_us": 263.008,
+     "sm": 3,
+     "wait_us": 35.567
+    },
+    {
+     "busy_us": 37.217,
+     "ctas": 12,
+     "life_us": 263.616,
+     "sm": 4,
+     "wait_us": 36.089
+    },
+    {
+     "busy_us": 36.015,
+     "ctas": 14,
+     "life_us": 301.92,
+     "sm": 5,
+     "wait_us": 34.912
+    },
+    {
+     "busy_us": 35.967,
+     "ctas": 14,
+     "life_us": 303.36,
+     "sm": 6,
+     "wait_us": 34.675
+    },
+    {
+     "busy_us": 36.529,
+     "ctas": 14,
+     "life_us": 301.664,
+     "sm": 7,
+     "wait_us": 35.171
+    },
+    {
+     "busy_us": 38.976,
+     "ctas": 12,
+     "life_us": 262.4,
+     "sm": 8,
+     "wait_us": 37.67
+    },
+    {
+     "busy_us": 36.893,
+     "ctas": 12,
+     "life_us": 262.24,
+     "sm": 9,
+     "wait_us": 35.618
+    },
+    {
+     "busy_us": 35.354,
+     "ctas": 14,
+     "life_us": 299.296,
+     "sm": 10,
+     "wait_us": 34.096
+    },
+    {
+     "busy_us": 35.917,
+     "ctas": 14,
+     "life_us": 303.296,
+     "sm": 11,
+     "wait_us": 34.819
+    },
+    {
+     "busy_us": 35.431,
+     "ctas": 14,
+     "life_us": 298.784,
+     "sm": 12,
+     "wait_us": 34.159
+    },
+    {
+     "busy_us": 38.389,
+     "ctas": 12,
+     "life_us": 264.512,
+     "sm": 13,
+     "wait_us": 37.323
+    },
+    {
+     "busy_us": 36.298,
+     "ctas": 14,
+     "life_us": 303.136,
+     "sm": 14,
+     "wait_us": 34.887
+    },
+    {
+     "busy_us": 35.445,
+     "ctas": 14,
+     "life_us": 296.768,
+     "sm": 15,
+     "wait_us": 33.878
+    },
+    {
+     "busy_us": 35.095,
+     "ctas": 14,
+     "life_us": 298.592,
+     "sm": 16,
+     "wait_us": 33.975
+    },
+    {
+     "busy_us": 36.927,
+     "ctas": 13,
+     "life_us": 297.376,
+     "sm": 17,
+     "wait_us": 35.588
+    },
+    {
+     "busy_us": 36.291,
+     "ctas": 14,
+     "life_us": 301.76,
+     "sm": 18,
+     "wait_us": 35.073
+    },
+    {
+     "busy_us": 36.728,
+     "ctas": 12,
+     "life_us": 261.472,
+     "sm": 19,
+     "wait_us": 35.536
+    },
+    {
+     "busy_us": 37.396,
+     "ctas": 13,
+     "life_us": 298.016,
+     "sm": 20,
+     "wait_us": 36.06
+    },
+    {
+     "busy_us": 36.27,
+     "ctas": 14,
+     "life_us": 301.312,
+     "sm": 21,
+     "wait_us": 35.32
+    },
+    {
+     "busy_us": 36.776,
+     "ctas": 12,
+     "life_us": 260.448,
+     "sm": 22,
+     "wait_us": 35.602
+    },
+    {
+     "busy_us": 36.707,
+     "ctas": 14,
+     "life_us": 301.088,
+     "sm": 23,
+     "wait_us": 35.786
+    },
+    {
+     "busy_us": 36.516,
+     "ctas": 13,
+     "life_us": 297.536,
+     "sm": 24,
+     "wait_us": 35.358
+    },
+    {
+     "busy_us": 35.759,
+     "ctas": 13,
+     "life_us": 297.088,
+     "sm": 25,
+     "wait_us": 34.938
+    },
+    {
+     "busy_us": 36.824,
+     "ctas": 14,
+     "life_us": 302.304,
+     "sm": 26,
+     "wait_us": 35.383
+    },
+    {
+     "busy_us": 35.492,
+     "ctas": 14,
+     "life_us": 299.552,
+     "sm": 27,
+     "wait_us": 33.86
+    },
+    {
+     "busy_us": 36.15,
+     "ctas": 14,
+     "life_us": 301.728,
+     "sm": 28,
+     "wait_us": 34.731
+    },
+    {
+     "busy_us": 41.436,
+     "ctas": 12,
+     "life_us": 264.864,
+     "sm": 29,
+     "wait_us": 39.014
+    },
+    {
+     "busy_us": 37.783,
+     "ctas": 12,
+     "life_us": 264.384,
+     "sm": 30,
+     "wait_us": 36.508
+    },
+    {
+     "busy_us": 35.787,
+     "ctas": 14,
+     "life_us": 302.016,
+     "sm": 31,
+     "wait_us": 34.293
+    },
+    {
+     "busy_us": 36.989,
+     "ctas": 13,
+     "life_us": 297.088,
+     "sm": 32,
+     "wait_us": 35.334
+    },
+    {
+     "busy_us": 36.119,
+     "ctas": 13,
+     "life_us": 297.248,
+     "sm": 33,
+     "wait_us": 34.858
+    },
+    {
+     "busy_us": 37.586,
+     "ctas": 13,
+     "life_us": 297.312,
+     "sm": 34,
+     "wait_us": 36.549
+    },
+    {
+     "busy_us": 37.081,
+     "ctas": 12,
+     "life_us": 262.752,
+     "sm": 35,
+     "wait_us": 35.071
+    },
+    {
+     "busy_us": 38.401,
+     "ctas": 12,
+     "life_us": 266.88,
+     "sm": 36,
+     "wait_us": 36.958
+    },
+    {
+     "busy_us": 36.61,
+     "ctas": 13,
+     "life_us": 298.016,
+     "sm": 37,
+     "wait_us": 35.276
+    },
+    {
+     "busy_us": 36.371,
+     "ctas": 13,
+     "life_us": 297.792,
+     "sm": 38,
+     "wait_us": 34.993
+    },
+    {
+     "busy_us": 35.656,
+     "ctas": 13,
+     "life_us": 297.76,
+     "sm": 39,
+     "wait_us": 34.713
+    },
+    {
+     "busy_us": 37.681,
+     "ctas": 13,
+     "life_us": 298.688,
+     "sm": 40,
+     "wait_us": 36.207
+    },
+    {
+     "busy_us": 36.739,
+     "ctas": 12,
+     "life_us": 262.016,
+     "sm": 41,
+     "wait_us": 35.469
+    },
+    {
+     "busy_us": 37.856,
+     "ctas": 13,
+     "life_us": 297.024,
+     "sm": 42,
+     "wait_us": 36.08
+    },
+    {
+     "busy_us": 37.256,
+     "ctas": 12,
+     "life_us": 264.0,
+     "sm": 43,
+     "wait_us": 35.54
+    },
+    {
+     "busy_us": 35.616,
+     "ctas": 14,
+     "life_us": 302.368,
+     "sm": 44,
+     "wait_us": 34.334
+    },
+    {
+     "busy_us": 35.863,
+     "ctas": 12,
+     "life_us": 262.368,
+     "sm": 45,
+     "wait_us": 34.316
+    },
+    {
+     "busy_us": 36.728,
+     "ctas": 12,
+     "life_us": 261.408,
+     "sm": 46,
+     "wait_us": 35.59
+    },
+    {
+     "busy_us": 36.392,
+     "ctas": 13,
+     "life_us": 296.64,
+     "sm": 47,
+     "wait_us": 34.933
+    },
+    {
+     "busy_us": 36.696,
+     "ctas": 14,
+     "life_us": 301.216,
+     "sm": 48,
+     "wait_us": 34.999
+    },
+    {
+     "busy_us": 36.312,
+     "ctas": 12,
+     "life_us": 262.368,
+     "sm": 49,
+     "wait_us": 34.637
+    },
+    {
+     "busy_us": 35.387,
+     "ctas": 14,
+     "life_us": 301.344,
+     "sm": 50,
+     "wait_us": 34.261
+    },
+    {
+     "busy_us": 36.006,
+     "ctas": 13,
+     "life_us": 297.12,
+     "sm": 51,
+     "wait_us": 34.96
+    },
+    {
+     "busy_us": 37.463,
+     "ctas": 12,
+     "life_us": 262.112,
+     "sm": 52,
+     "wait_us": 35.541
+    },
+    {
+     "busy_us": 36.607,
+     "ctas": 12,
+     "life_us": 261.632,
+     "sm": 53,
+     "wait_us": 35.039
+    },
+    {
+     "busy_us": 37.193,
+     "ctas": 14,
+     "life_us": 303.36,
+     "sm": 54,
+     "wait_us": 36.116
+    },
+    {
+     "busy_us": 35.824,
+     "ctas": 14,
+     "life_us": 302.304,
+     "sm": 55,
+     "wait_us": 34.444
+    },
+    {
+     "busy_us": 37.371,
+     "ctas": 13,
+     "life_us": 297.152,
+     "sm": 56,
+     "wait_us": 35.726
+    },
+    {
+     "busy_us": 39.163,
+     "ctas": 12,
+     "life_us": 263.744,
+     "sm": 57,
+     "wait_us": 38.637
+    },
+    {
+     "busy_us": 36.608,
+     "ctas": 12,
+     "life_us": 261.344,
+     "sm": 58,
+     "wait_us": 35.245
+    },
+    {
+     "busy_us": 36.192,
+     "ctas": 12,
+     "life_us": 261.536,
+     "sm": 59,
+     "wait_us": 34.828
+    },
+    {
+     "busy_us": 37.126,
+     "ctas": 12,
+     "life_us": 262.688,
+     "sm": 60,
+     "wait_us": 35.731
+    },
+    {
+     "busy_us": 36.65,
+     "ctas": 14,
+     "life_us": 301.152,
+     "sm": 61,
+     "wait_us": 35.584
+    },
+    {
+     "busy_us": 35.259,
+     "ctas": 14,
+     "life_us": 299.904,
+     "sm": 62,
+     "wait_us": 34.079
+    },
+    {
+     "busy_us": 35.536,
+     "ctas": 14,
+     "life_us": 302.08,
+     "sm": 63,
+     "wait_us": 34.667
+    },
+    {
+     "busy_us": 36.949,
+     "ctas": 14,
+     "life_us": 302.208,
+     "sm": 64,
+     "wait_us": 35.578
+    },
+    {
+     "busy_us": 35.663,
+     "ctas": 14,
+     "life_us": 303.328,
+     "sm": 65,
+     "wait_us": 34.202
+    },
+    {
+     "busy_us": 36.037,
+     "ctas": 13,
+     "life_us": 298.016,
+     "sm": 66,
+     "wait_us": 34.376
+    },
+    {
+     "busy_us": 35.656,
+     "ctas": 14,
+     "life_us": 302.624,
+     "sm": 67,
+     "wait_us": 34.587
+    },
+    {
+     "busy_us": 36.702,
+     "ctas": 14,
+     "life_us": 301.568,
+     "sm": 68,
+     "wait_us": 35.146
+    },
+    {
+     "busy_us": 35.26,
+     "ctas": 14,
+     "life_us": 299.968,
+     "sm": 69,
+     "wait_us": 33.908
+    },
+    {
+     "busy_us": 35.777,
+     "ctas": 13,
+     "life_us": 296.992,
+     "sm": 70,
+     "wait_us": 34.32
+    },
+    {
+     "busy_us": 35.994,
+     "ctas": 14,
+     "life_us": 300.8,
+     "sm": 71,
+     "wait_us": 34.663
+    },
+    {
+     "busy_us": 36.367,
+     "ctas": 13,
+     "life_us": 295.712,
+     "sm": 72,
+     "wait_us": 35.532
+    },
+    {
+     "busy_us": 37.422,
+     "ctas": 12,
+     "life_us": 262.752,
+     "sm": 73,
+     "wait_us": 35.878
+    },
+    {
+     "busy_us": 37.012,
+     "ctas": 13,
+     "life_us": 298.08,
+     "sm": 74,
+     "wait_us": 35.474
+    },
+    {
+     "busy_us": 38.182,
+     "ctas": 12,
+     "life_us": 263.552,
+     "sm": 75,
+     "wait_us": 37.325
+    },
+    {
+     "busy_us": 35.607,
+     "ctas": 14,
+     "life_us": 300.832,
+     "sm": 76,
+     "wait_us": 34.376
+    },
+    {
+     "busy_us": 35.879,
+     "ctas": 14,
+     "life_us": 301.12,
+     "sm": 77,
+     "wait_us": 34.99
+    }
+   ],
+   "role_skew_ratio": 0.2405,
+   "role_stats": {
+    "Consumer (WGMMA)": {
+     "ctas": 1024,
+     "end_max_us": 303.456,
+     "end_median_us": 171.04,
+     "lanes": 4096,
+     "tail_us": 132.416,
+     "work_median_us": 34.58
+    },
+    "Producer (TMA issue)": {
+     "ctas": 1024,
+     "end_max_us": 300.768,
+     "end_median_us": 168.048,
+     "lanes": 1024,
+     "tail_us": 132.72,
+     "work_median_us": 4.977
+    },
+    "Producer WG idle": {
+     "ctas": 1024,
+     "end_max_us": 262.112,
+     "end_median_us": 129.904,
+     "lanes": 3072,
+     "tail_us": 132.208,
+     "work_median_us": 0.288
+    }
+   },
+   "schema": "weaveprof.megakernel-skew/v1",
+   "sm_busy": {
+    "imbalance_pct": 11.56,
+    "max_us": 41.436,
+    "mean_us": 36.645,
+    "median_us": 36.568,
+    "min_us": 35.095,
+    "p90_us": 37.952,
+    "spread_us": 6.341
+   },
+   "sm_spread_ratio": 0.153,
+   "split_cut_us": null,
+   "split_mode": "tail_threshold",
+   "stages": [
+    {
+     "fires": 262144,
+     "is_wait": false,
+     "max_us": 2.98,
+     "median_us": 1.212,
+     "share_pct": 62.97,
+     "stage": "load"
+    },
+    {
+     "fires": 262144,
+     "is_wait": false,
+     "max_us": 1.326,
+     "median_us": 0.452,
+     "share_pct": 23.82,
+     "stage": "compute"
+    },
+    {
+     "fires": 62464,
+     "is_wait": true,
+     "max_us": 2.195,
+     "median_us": 0.54,
+     "share_pct": 6.78,
+     "stage": "wait"
+    },
+    {
+     "fires": 262144,
+     "is_wait": false,
+     "max_us": 1.695,
+     "median_us": 0.1,
+     "share_pct": 5.65,
+     "stage": "mma"
+    },
+    {
+     "fires": 4096,
+     "is_wait": false,
+     "max_us": 1.899,
+     "median_us": 0.896,
+     "share_pct": 0.79,
+     "stage": "epilogue"
+    }
+   ],
+   "stragglers": {
+    "busy_us_max": 41.436,
+    "busy_us_median": 41.436,
+    "busy_us_min": 41.436,
+    "count": 1,
+    "sm_ids": [
+     29
+    ]
+   },
+   "total_sms": 78,
+   "unknown_sm_lanes": 0,
+   "unused_sms": 0,
+   "wait_share": 0.0678
+  },
+  "mode": "precaptured",
+  "nsys": {
+   "gpu_chip": "GH100",
+   "gpu_name": "NVIDIA H20",
+   "in_window_samples": 61,
+   "kernel": {
+    "device": 0,
+    "duration_us": 306.145,
+    "end_ns": 43823876,
+    "launches": 1,
+    "name": "kernel(CUtensorMap_st, CUtensorMap_st, float *, int, int, int)",
+    "start_ns": 43517731,
+    "warm_selection": "single_launch"
+   },
+   "sample_freq_hz": 200320.5,
+   "sample_interval_us": 4.992,
+   "schema": "weaveprof.nsys-sqlite-fast/v1",
+   "tensor_active_scale": {
+    "applied": true,
+    "card_factor": 4.0,
+    "raw_ceiling_pct": 29.0,
+    "raw_max_pct": 24.0,
+    "raw_mean_pct": 19.59,
+    "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4 (causal.ARCH_PROFILES)",
+    "scale": 4.0,
+    "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+   }
+  },
+  "round": 1,
+  "round_diff": null,
+  "schema": "weaveprof.megakernel-audit/v1",
+  "status": "FAIL",
+  "structural_blockers": [
+   "LOW_MATH_WAIT_NO_LATENCY_HIDING"
+  ]
+ },
+ "nsys": {
+  "gpu_chip": "GH100",
+  "gpu_name": "NVIDIA H20",
+  "in_window_samples": 61,
+  "kernel": {
+   "device": 0,
+   "duration_us": 306.145,
+   "end_ns": 43823876,
+   "launches": 1,
+   "name": "kernel(CUtensorMap_st, CUtensorMap_st, float *, int, int, int)",
+   "start_ns": 43517731,
+   "warm_selection": "single_launch"
+  },
+  "sample_freq_hz": 200320.5,
+  "sample_interval_us": 4.992,
+  "schema": "weaveprof.nsys-sqlite-fast/v1",
+  "tensor_active_scale": {
+   "applied": true,
+   "card_factor": 4.0,
+   "raw_ceiling_pct": 29.0,
+   "raw_max_pct": 24.0,
+   "raw_mean_pct": 19.59,
+   "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4 (causal.ARCH_PROFILES)",
+   "scale": 4.0,
+   "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+  }
+ },
+ "nsys_series": {
+  "dram_read": {
+   "metric_name": "DRAM Read Bandwidth [Throughput %]",
+   "n": 61,
+   "sha256": "20548f813e04490b4a2fec99c09a5ecbf51f53063a02db330316ad04075533af"
+  },
+  "dram_write": {
+   "metric_name": "DRAM Write Bandwidth [Throughput %]",
+   "n": 61,
+   "sha256": "29f4609845ec352408dec3c6e3c8808ec7f576585cea8598182562dbb5c9dda2"
+  },
+  "nvlink_rx_req": {
+   "metric_name": "NVLink RX Requests User Data [Throughput %]",
+   "n": 61,
+   "sha256": "4bfc8c4832be537b886df5727c0d4f7dd9dc4332a50c4868e95188b30a13a46c"
+  },
+  "nvlink_rx_rsp": {
+   "metric_name": "NVLink RX Responses User Data [Throughput %]",
+   "n": 61,
+   "sha256": "4bfc8c4832be537b886df5727c0d4f7dd9dc4332a50c4868e95188b30a13a46c"
+  },
+  "nvlink_tx_req": {
+   "metric_name": "NVLink TX Requests User Data [Throughput %]",
+   "n": 61,
+   "sha256": "4bfc8c4832be537b886df5727c0d4f7dd9dc4332a50c4868e95188b30a13a46c"
+  },
+  "nvlink_tx_rsp": {
+   "metric_name": "NVLink TX Responses User Data [Throughput %]",
+   "n": 61,
+   "sha256": "4bfc8c4832be537b886df5727c0d4f7dd9dc4332a50c4868e95188b30a13a46c"
+  },
+  "sm_active": {
+   "metric_name": "SMs Active [Throughput %]",
+   "n": 61,
+   "sha256": "4dadb756585986919eecfd53542920036384ecbda4eed165d6246ffa56bf07a0"
+  },
+  "tensor_active": {
+   "metric_name": "Tensor Active [Throughput %]",
+   "n": 61,
+   "sha256": "333a84382186960ec6cfa11d29b5ede52986770ec22450f85bb2671cf84681dc"
+  },
+  "warp_issue": {
+   "metric_name": "SM Issue [Throughput %]",
+   "n": 61,
+   "sha256": "7da8628a88ec6d3af863dbfb37f4df630c1282dd96c73e15684d6f83c7a33b53"
+  }
+ },
+ "png": {
+  "checked": true,
+  "valid": true
+ },
+ "report": {
+  "artifacts": {
+   "files": [
+    "feedback.json",
+    "verify.json",
+    "overview.png",
+    "trace.perfetto.json.gz"
+   ]
+  },
+  "causal_opportunities": [],
+  "fidelity_gates": {
+   "compiler_spill": {
+    "codes": [
+     "SASS_LDL_EXPLOSION"
+    ],
+    "ok": false,
+    "reg_blind_spot": true
+   },
+   "granularity": {
+    "ok": true
+   },
+   "output": {
+    "ok": true
+   },
+   "overflow": 0,
+   "overhead": {
+    "ok": true,
+    "ratio": 0.07637
+   },
+   "pairing_errors": 0,
+   "stub": {
+    "ok": true,
+    "stubs": []
+   },
+   "warps": {
+    "ok": true
+   }
+  },
+  "hw_quartiles": {
+   "dram_read": [
+    7.7,
+    2.7,
+    2.5,
+    1.5
+   ],
+   "dram_write": [
+    8.9,
+    4.5,
+    4.4,
+    3.1
+   ],
+   "sm_active": [
+    100.0,
+    100.0,
+    100.0,
+    77.5
+   ],
+   "tensor_active": [
+    86.7,
+    83.2,
+    82.7,
+    60.5
+   ],
+   "warp_issue": [
+    29.3,
+    29.1,
+    29.0,
+    20.8
+   ]
+  },
+  "kernel_us": 306.145,
+  "megakernel_skew": {
+   "barrier_starved": 1,
+   "early": [
+    1,
+    35.095
+   ],
+   "hints": [
+    "WARP_GROUP_REBALANCE",
+    "OPTIMIZE_DOMINANT_STAGE"
+   ],
+   "idle_sm_fraction": 0.0128,
+   "imbalance_pct": 11.56,
+   "role_skew_ratio": 0.2405,
+   "sm_busy_us": {
+    "max": 41.436,
+    "median": 36.568,
+    "min": 35.095,
+    "p90": 37.952,
+    "spread": 6.341
+   },
+   "sm_spread_ratio": 0.153,
+   "stragglers": [
+    1,
+    41.436
+   ]
+  },
+  "mode": "precaptured",
+  "overhead_pct": 7.637,
+  "round_diff": null,
+  "schema": "weaveprof.megakernel-audit/v1",
+  "seal_integrity_only": true,
+  "seal_verified": true,
+  "stage_summary": {
+   "compute": [
+    262144,
+    0.46,
+    23.8
+   ],
+   "epilogue": [
+    4096,
+    0.98,
+    0.8
+   ],
+   "load": [
+    262144,
+    1.22,
+    63.0
+   ],
+   "mma": [
+    262144,
+    0.11,
+    5.6
+   ],
+   "wait": [
+    62464,
+    0.55,
+    6.8
+   ]
+  },
+  "status": "FAIL",
+  "structural_blockers": [
+   "LOW_MATH_WAIT_NO_LATENCY_HIDING"
+  ],
+  "tensor_active_scale": 4.0
+ },
+ "trace": {
+  "by_name": {
+   "DRAM Read Bandwidth [Throughput %]": 61,
+   "DRAM Write Bandwidth [Throughput %]": 61,
+   "NVLink RX Requests User Data [Throughput %]": 61,
+   "NVLink RX Responses User Data [Throughput %]": 61,
+   "NVLink TX Requests User Data [Throughput %]": 61,
+   "NVLink TX Responses User Data [Throughput %]": 61,
+   "SM Issue [Throughput %]": 61,
+   "SMs Active [Throughput %]": 61,
+   "compute": 262144,
+   "epilogue": 4096,
+   "kernel(CUtensorMap_st, CUtensorMap_st, float *, int, int, int)": 1,
+   "load": 262144,
+   "mma": 262144,
+   "tensor_active [Tensor Active x4 (H20 die-normalization corrected)]": 61,
+   "wait": 62464
+  },
+  "by_ph": {
+   "C": 549,
+   "M": 34738,
+   "X": 852993
+  },
+  "events": 888280,
+  "other_data_sha256": "45047867043e01af50a5e9f329df61e7c8a05292278a8017f6083cfe24c2b857",
+  "sha256": "41cbd21f38995fe749354a29947624f1bea395b6770f56d6b3549ae71f17370d"
+ },
+ "verify": {
+  "checks": {
+   "assembly": false,
+   "events": true,
+   "output": true,
+   "overhead": true
+  },
+  "failed": [
+   "assembly"
+  ],
+  "fidelity_gates": {
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 9,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": 0,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": 0,
+     "inst_regs": 92,
+     "l0_regs": 96
+    },
+    "ok": false,
+    "register_count_blind_spot": true,
+    "remediation": [
+     "enable_WP_CTX_SMEM (-DWP_CTX_SMEM, 16B SMEM + __noinline__ cold path)"
+    ],
+    "violations": [
+     {
+      "code": "SASS_LDL_EXPLOSION",
+      "delta": 9,
+      "limit": 4,
+      "message": "SASS LDL (local load) instructions jumped by +9 (16 -> 25)."
+     }
+    ]
+   },
+   "event_gate": {
+    "decoder_errors": {},
+    "granularity_gate": {
+     "code": null,
+     "distinct_active_stages": 4,
+     "dominant_share_pct": 67.55,
+     "dominant_stage": "load",
+     "has_compute_stage": true,
+     "has_memory_stage": true,
+     "message": "",
+     "ok": true,
+     "overall_spans_per_lane": 193.0,
+     "per_lane_us": 78.258,
+     "spans_per_lane": 64.0
+    },
+    "ok": true,
+    "overflow": 0,
+    "pairing_errors": 0,
+    "spans": 852992,
+    "stub_gate": {
+     "ok": true,
+     "stub_count": 0,
+     "stubs": [],
+     "valid_stages": [
+      "load",
+      "mma",
+      "store"
+     ]
+    },
+    "warp_gate": {
+     "code": null,
+     "expected_warps": 8,
+     "hollow_warps": [],
+     "message": "",
+     "missing_warps": [],
+     "observed_warps": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "ok": true
+    }
+   },
+   "output_gate": {
+    "evidence": "output_sha256",
+    "ok": true
+   },
+   "overhead_gate": {
+    "abba": {
+     "baseline_half_drift_pct": 0.0111,
+     "baseline_median_ns": 288896.0,
+     "instrumented_median_ns": 310960.0,
+     "median_overhead_ratio": 0.076374,
+     "paired_ratio_mad": 0.002268,
+     "paired_ratio_median": 0.076356,
+     "paired_samples": 30,
+     "protocol": "ABBA"
+    },
+    "errors": [],
+    "limit": 0.1,
+    "ok": true,
+    "overhead_ratio": 0.076374
+   },
+   "sw_hw_coverage": {
+    "expected_samples": 61.2,
+    "hw_kernel_us": 306.145,
+    "in_window_samples": 61,
+    "ok": true,
+    "pmu_density": 0.9963,
+    "span_delta_ratio": 0.00946,
+    "sw_span_us": 303.25,
+    "violations": []
+   }
+  },
+  "limit": 0.1,
+  "overhead_ratio": 0.076374,
+  "schema": "weaveprof.megakernel-audit/v1",
+  "source_sha256": "5cf46c983e907262d4b3b1008ce6f7148abf4606089ff6fdd9b93e2bce1b3416",
+  "status": "FAIL"
+ }
+}

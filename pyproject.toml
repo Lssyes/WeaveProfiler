@@ -7,6 +7,16 @@ name = "weaveprof"
 version = "0.4.0"
 description = "WeaveProfiler (wp): low-overhead intra-kernel GPU profiling with deterministic 4-gate verification"
 requires-python = ">=3.10"
+# numpy + matplotlib render overview.png (the primary deliverable); perfetto is only needed for the native
+# .perfetto-trace exporter.
+dependencies = [
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+perfetto = ["perfetto>=0.59,<1"]
+dev = ["perfetto>=0.59,<1", "coverage>=7"]
 
 [project.scripts]
 weaveprof = "weaveprof.cli:main"

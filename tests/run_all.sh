@@ -207,7 +207,7 @@ make_python_launcher() {
     ln -sfn "$site" "$root/lib/$pyver/site-packages"
   fi
   {
-    printf '#!/bin/sh\n'
+    printf '#!/bin/bash\n'
     printf 'exec -a "$0" %q -B "$@"\n' "$real"
   } >"$launcher"
   chmod +x "$launcher"

@@ -1,0 +1,1443 @@
+{
+ "feedback": {
+  "causal": {
+   "arch": "sm_90a",
+   "bottleneck_hint": "Kernel is TENSOR_SATURATED (Tensor=82.6%, DRAM_Rd=6.3%, SM=93.2%).",
+   "caliber": {
+    "effective_mfu_pct": null,
+    "emp_rf_pct": 86.06,
+    "nom_rf_pct": 82.62,
+    "padding_waste_pct": null,
+    "roofline_axis": "TENSOR"
+   },
+   "causal_opportunities": [],
+   "counterfactual_upper_bound_us": 0.0,
+   "global_hw_regime": "TENSOR_SATURATED",
+   "gpu": "NVIDIA H20",
+   "hw_summary": {
+    "dram_read_mean_pct": 6.33,
+    "dram_read_peak_pct": 14.0,
+    "dram_write_mean_pct": 4.99,
+    "sm_active_mean_pct": 93.19,
+    "tensor_active_cal_mean_pct": 82.62,
+    "tensor_active_cal_peak_pct": 100.0,
+    "warp_issue_mean_pct": 10.14
+   },
+   "interleaving_waste_us": 0.0,
+   "kernel_us": 1140.579,
+   "observed_ctas": 78,
+   "observed_sms": 78,
+   "overlap_recommendations": [],
+   "phases": [
+    {
+     "bound_type": "COMP",
+     "dram_rw_pct": 11.34,
+     "duration_us": 7.499,
+     "idle_resource": "HBM",
+     "phase": "store",
+     "reg_per_thr": null,
+     "sm_active_pct": 93.19,
+     "smem_bytes": null,
+     "tensor_pct": 82.58
+    },
+    {
+     "bound_type": "SYNC",
+     "dram_rw_pct": 11.45,
+     "duration_us": 2.173,
+     "idle_resource": "SM",
+     "phase": "wait",
+     "reg_per_thr": null,
+     "sm_active_pct": 93.19,
+     "smem_bytes": null,
+     "tensor_pct": 83.91
+    }
+   ],
+   "refinement_summary": {
+    "cause_explained": [
+     "wait"
+    ],
+    "need_substage_drilldown": [],
+    "padding_waste_opportunities": [],
+    "saturated_stop_refining": [
+     "store"
+    ],
+    "suspect_empty_stubs": []
+   },
+   "schema": "weaveprof.causal-report/v1",
+   "stage_validity": [
+    {
+     "hw_regime": "TENSOR_SATURATED",
+     "is_wait": false,
+     "median_us": 7.499,
+     "reason": "Hardware unit saturated (TENSOR_SATURATED: Tensor=82.6%, DRAM_Rd=6.3%); subdividing this span has minimal optimization ROI.",
+     "refinement_verdict": "SATURATED_STOP_REFINING",
+     "share_pct": 0.66,
+     "skew_us": 14.773,
+     "stage": "store",
+     "window_dram_read_mean_pct": 6.35,
+     "window_tensor_mean_pct": 82.58
+    },
+    {
+     "hw_regime": "TENSOR_SATURATED",
+     "is_wait": true,
+     "median_us": 2.173,
+     "reason": "Explicit synchronization/wait boundary separating physical stall from active compute.",
+     "refinement_verdict": "CAUSE_EXPLAINED",
+     "share_pct": 0.19,
+     "skew_us": 3.652,
+     "stage": "wait",
+     "window_dram_read_mean_pct": 6.46,
+     "window_tensor_mean_pct": 83.91
+    }
+   ],
+   "straggler_walls": [],
+   "structural_blockers": [
+    {
+     "blocked_actions": [
+      "fine_grained_ready_signaling",
+      "extra_load_latency_hiding"
+     ],
+     "code": "LOW_MATH_WAIT_NO_LATENCY_HIDING",
+     "metric": {
+      "math_warp_wait_pct": 0.19,
+      "threshold_pct": 5.5
+     },
+     "reason": "Math warp wait is only 0.19% (<5.5%); load-latency hiding yields negligible/negative ROI."
+    }
+   ],
+   "sw_span_us": 1138.5,
+   "target": "matmul-v6.cu",
+   "tensor_calibration_factor": 4.0,
+   "total_sms": 78,
+   "verdict": "SATURATED_STOP_REFINING",
+   "warp_tail_imbalance": null
+  },
+  "decode_summary": {
+   "arch": "sm_90a",
+   "errors": {},
+   "events": {
+    "compute": {
+     "max_us": 2.493,
+     "mean_us": 1.87,
+     "n": 262144,
+     "p50_us": 1.877,
+     "total_us": 490088.004
+    },
+    "epilogue": {
+     "max_us": 10.714,
+     "mean_us": 8.5,
+     "n": 4096,
+     "p50_us": 8.525,
+     "total_us": 34817.243
+    },
+    "load": {
+     "max_us": 5.25,
+     "mean_us": 1.725,
+     "n": 262144,
+     "p50_us": 2.002,
+     "total_us": 452296.369
+    },
+    "mma": {
+     "max_us": 2.93,
+     "mean_us": 0.13,
+     "n": 262144,
+     "p50_us": 0.109,
+     "total_us": 34056.317
+    },
+    "store": {
+     "max_us": 159.69,
+     "mean_us": 21.459,
+     "n": 12288,
+     "p50_us": 1.455,
+     "total_us": 263685.564
+    },
+    "wait": {
+     "max_us": 5.223,
+     "mean_us": 2.192,
+     "n": 31744,
+     "p50_us": 2.173,
+     "total_us": 69573.848
+    }
+   },
+   "gran": 0,
+   "lanes": 936,
+   "magic": "FILITE02",
+   "n_ctas": 78,
+   "overflow": 0,
+   "records": 1441616,
+   "roles": {
+    "Math WG1/WG2 (WGMMA)": {
+     "ctas": 78,
+     "end_max_us": 1138.4,
+     "end_median_us": 1135.968,
+     "end_min_us": 974.048,
+     "tail_us": 2.432
+    },
+    "Producer (TMA issue)": {
+     "ctas": 78,
+     "end_max_us": 1138.496,
+     "end_median_us": 1136.032,
+     "end_min_us": 974.112,
+     "tail_us": 2.464
+    },
+    "Producer WG idle": {
+     "ctas": 78,
+     "end_max_us": 1138.4,
+     "end_median_us": 1135.952,
+     "end_min_us": 974.048,
+     "tail_us": 2.448
+    }
+   },
+   "span_us": 1138.5,
+   "spans": 834560,
+   "wpc": 12
+  },
+  "fidelity_gates": {
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 16,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": 0,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": 0,
+     "inst_regs": 168,
+     "l0_regs": 154
+    },
+    "ok": false,
+    "register_count_blind_spot": false,
+    "remediation": [
+     "enable_WP_CTX_SMEM (-DWP_CTX_SMEM, 16B SMEM + __noinline__ cold path)"
+    ],
+    "violations": [
+     {
+      "code": "SASS_LDL_EXPLOSION",
+      "delta": 16,
+      "limit": 4,
+      "message": "SASS LDL (local load) instructions jumped by +16 (20 -> 36)."
+     }
+    ]
+   },
+   "event_gate": {
+    "decoder_errors": {},
+    "granularity_gate": {
+     "code": null,
+     "distinct_active_stages": 4,
+     "dominant_share_pct": 38.44,
+     "dominant_stage": "mma",
+     "has_compute_stage": true,
+     "has_memory_stage": true,
+     "message": "",
+     "ok": true,
+     "overall_spans_per_lane": 857.709,
+     "per_lane_us": 785.397,
+     "spans_per_lane": 420.103
+    },
+    "ok": true,
+    "overflow": 0,
+    "pairing_errors": 0,
+    "spans": 834560,
+    "stub_gate": {
+     "ok": true,
+     "stub_count": 0,
+     "stubs": [],
+     "valid_stages": [
+      "load",
+      "mma",
+      "store"
+     ]
+    },
+    "warp_gate": {
+     "code": null,
+     "expected_warps": 12,
+     "hollow_warps": [],
+     "message": "",
+     "missing_warps": [],
+     "observed_warps": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "ok": true
+    }
+   },
+   "output_gate": {
+    "evidence": "output_sha256",
+    "ok": true
+   },
+   "overhead_gate": {
+    "abba": {
+     "baseline_half_drift_pct": 0.0142,
+     "baseline_median_ns": 1126352.0,
+     "instrumented_median_ns": 1145552.0,
+     "median_overhead_ratio": 0.017046,
+     "paired_ratio_mad": 0.000517,
+     "paired_ratio_median": 0.016981,
+     "paired_samples": 30,
+     "protocol": "ABBA"
+    },
+    "errors": [],
+    "limit": 0.1,
+    "ok": true,
+    "overhead_ratio": 0.017046
+   },
+   "sw_hw_coverage": {
+    "expected_samples": 228.1,
+    "hw_kernel_us": 1140.579,
+    "in_window_samples": 229,
+    "ok": true,
+    "pmu_density": 1.0039,
+    "span_delta_ratio": 0.00182,
+    "sw_span_us": 1138.5,
+    "violations": []
+   }
+  },
+  "l0_cache": null,
+  "megakernel_skew": {
+   "busy_basis": "lane_lifetime_minus_wait",
+   "counterfactual_balanced_us": 998.835,
+   "dynamic_role_switches": 0,
+   "early_finishing": {
+    "barrier_starved": 34,
+    "busy_us_max": 918.543,
+    "busy_us_median": 913.87,
+    "busy_us_min": 906.389,
+    "count": 34,
+    "idle_tail_us_median": 156.304,
+    "sm_ids": [
+     28,
+     29,
+     30,
+     31,
+     32,
+     33,
+     34,
+     35,
+     36,
+     37,
+     38,
+     39,
+     42,
+     43,
+     44,
+     45,
+     46,
+     47,
+     48,
+     49,
+     50,
+     51,
+     52,
+     53
+    ]
+   },
+   "hints": [
+    {
+     "action": "Split long KV/TopK rows across CTAs (split-KV + combine) or replace static head/tile modulo assignment with an atomic dynamic tile queue so early SMs steal work before grid_sync.",
+     "code": "SPLIT_KV_OR_DYNAMIC_TILE_QUEUE",
+     "evidence": "44 SMs @ 1065us vs 34 SMs @ 914us; idle_sm_fraction=0.44, sm_spread_ratio=0.15",
+     "severity": "high",
+     "upper_bound_gain_us": 71.339
+    },
+    {
+     "action": "Overlap the barrier with next-phase prefetch or replace grid_sync with per-tile ready flags.",
+     "code": "GRID_SYNC_WAIT_DOMINANT",
+     "evidence": "wait/barrier share=5.2%, barrier-starved SMs=34",
+     "severity": "medium"
+    }
+   ],
+   "idle_sm_fraction": 0.4359,
+   "kernel_us": 1138.5,
+   "max_role_tail_us": 2.464,
+   "observed_sms": 78,
+   "per_sm": [
+    {
+     "busy_us": 1060.709,
+     "ctas": 1,
+     "life_us": 1135.2,
+     "sm": 0,
+     "wait_us": 1113.609
+    },
+    {
+     "busy_us": 1060.362,
+     "ctas": 1,
+     "life_us": 1135.2,
+     "sm": 1,
+     "wait_us": 1113.747
+    },
+    {
+     "busy_us": 1066.956,
+     "ctas": 1,
+     "life_us": 1136.736,
+     "sm": 2,
+     "wait_us": 1115.41
+    },
+    {
+     "busy_us": 1067.221,
+     "ctas": 1,
+     "life_us": 1136.704,
+     "sm": 3,
+     "wait_us": 1114.486
+    },
+    {
+     "busy_us": 1066.373,
+     "ctas": 1,
+     "life_us": 1138.432,
+     "sm": 4,
+     "wait_us": 1117.422
+    },
+    {
+     "busy_us": 1063.151,
+     "ctas": 1,
+     "life_us": 1138.464,
+     "sm": 5,
+     "wait_us": 1116.653
+    },
+    {
+     "busy_us": 1063.912,
+     "ctas": 1,
+     "life_us": 1136.864,
+     "sm": 6,
+     "wait_us": 1114.199
+    },
+    {
+     "busy_us": 1063.66,
+     "ctas": 1,
+     "life_us": 1136.896,
+     "sm": 7,
+     "wait_us": 1113.526
+    },
+    {
+     "busy_us": 1064.718,
+     "ctas": 1,
+     "life_us": 1138.048,
+     "sm": 8,
+     "wait_us": 1116.111
+    },
+    {
+     "busy_us": 1064.846,
+     "ctas": 1,
+     "life_us": 1138.08,
+     "sm": 9,
+     "wait_us": 1117.031
+    },
+    {
+     "busy_us": 1068.894,
+     "ctas": 1,
+     "life_us": 1137.632,
+     "sm": 10,
+     "wait_us": 1115.407
+    },
+    {
+     "busy_us": 1070.174,
+     "ctas": 1,
+     "life_us": 1137.6,
+     "sm": 11,
+     "wait_us": 1115.392
+    },
+    {
+     "busy_us": 1065.277,
+     "ctas": 1,
+     "life_us": 1136.8,
+     "sm": 12,
+     "wait_us": 1115.151
+    },
+    {
+     "busy_us": 1064.659,
+     "ctas": 1,
+     "life_us": 1136.768,
+     "sm": 13,
+     "wait_us": 1114.625
+    },
+    {
+     "busy_us": 1059.002,
+     "ctas": 1,
+     "life_us": 1137.504,
+     "sm": 14,
+     "wait_us": 1115.685
+    },
+    {
+     "busy_us": 1062.666,
+     "ctas": 1,
+     "life_us": 1137.536,
+     "sm": 15,
+     "wait_us": 1115.39
+    },
+    {
+     "busy_us": 1067.995,
+     "ctas": 1,
+     "life_us": 1136.896,
+     "sm": 16,
+     "wait_us": 1115.317
+    },
+    {
+     "busy_us": 1067.306,
+     "ctas": 1,
+     "life_us": 1136.864,
+     "sm": 17,
+     "wait_us": 1114.85
+    },
+    {
+     "busy_us": 1065.396,
+     "ctas": 1,
+     "life_us": 1137.824,
+     "sm": 18,
+     "wait_us": 1115.999
+    },
+    {
+     "busy_us": 1066.434,
+     "ctas": 1,
+     "life_us": 1137.856,
+     "sm": 19,
+     "wait_us": 1115.72
+    },
+    {
+     "busy_us": 1062.23,
+     "ctas": 1,
+     "life_us": 1135.968,
+     "sm": 20,
+     "wait_us": 1114.602
+    },
+    {
+     "busy_us": 1058.422,
+     "ctas": 1,
+     "life_us": 1135.968,
+     "sm": 21,
+     "wait_us": 1114.372
+    },
+    {
+     "busy_us": 1067.523,
+     "ctas": 1,
+     "life_us": 1137.824,
+     "sm": 22,
+     "wait_us": 1116.394
+    },
+    {
+     "busy_us": 1067.237,
+     "ctas": 1,
+     "life_us": 1137.824,
+     "sm": 23,
+     "wait_us": 1116.178
+    },
+    {
+     "busy_us": 1066.327,
+     "ctas": 1,
+     "life_us": 1137.728,
+     "sm": 24,
+     "wait_us": 1115.935
+    },
+    {
+     "busy_us": 1063.862,
+     "ctas": 1,
+     "life_us": 1137.728,
+     "sm": 25,
+     "wait_us": 1116.194
+    },
+    {
+     "busy_us": 1064.256,
+     "ctas": 1,
+     "life_us": 1137.184,
+     "sm": 26,
+     "wait_us": 1115.005
+    },
+    {
+     "busy_us": 1067.17,
+     "ctas": 1,
+     "life_us": 1137.152,
+     "sm": 27,
+     "wait_us": 1115.439
+    },
+    {
+     "busy_us": 911.402,
+     "ctas": 1,
+     "life_us": 974.272,
+     "sm": 28,
+     "wait_us": 955.997
+    },
+    {
+     "busy_us": 906.389,
+     "ctas": 1,
+     "life_us": 974.272,
+     "sm": 29,
+     "wait_us": 955.081
+    },
+    {
+     "busy_us": 910.876,
+     "ctas": 1,
+     "life_us": 975.584,
+     "sm": 30,
+     "wait_us": 956.099
+    },
+    {
+     "busy_us": 914.885,
+     "ctas": 1,
+     "life_us": 975.584,
+     "sm": 31,
+     "wait_us": 956.989
+    },
+    {
+     "busy_us": 915.778,
+     "ctas": 1,
+     "life_us": 974.592,
+     "sm": 32,
+     "wait_us": 956.536
+    },
+    {
+     "busy_us": 913.643,
+     "ctas": 1,
+     "life_us": 974.592,
+     "sm": 33,
+     "wait_us": 956.014
+    },
+    {
+     "busy_us": 907.199,
+     "ctas": 1,
+     "life_us": 974.016,
+     "sm": 34,
+     "wait_us": 955.842
+    },
+    {
+     "busy_us": 913.758,
+     "ctas": 1,
+     "life_us": 974.016,
+     "sm": 35,
+     "wait_us": 955.113
+    },
+    {
+     "busy_us": 913.908,
+     "ctas": 1,
+     "life_us": 976.608,
+     "sm": 36,
+     "wait_us": 957.919
+    },
+    {
+     "busy_us": 916.165,
+     "ctas": 1,
+     "life_us": 976.608,
+     "sm": 37,
+     "wait_us": 958.507
+    },
+    {
+     "busy_us": 917.042,
+     "ctas": 1,
+     "life_us": 976.896,
+     "sm": 38,
+     "wait_us": 957.554
+    },
+    {
+     "busy_us": 915.645,
+     "ctas": 1,
+     "life_us": 976.864,
+     "sm": 39,
+     "wait_us": 958.74
+    },
+    {
+     "busy_us": 1066.389,
+     "ctas": 1,
+     "life_us": 1138.208,
+     "sm": 40,
+     "wait_us": 1116.134
+    },
+    {
+     "busy_us": 1063.694,
+     "ctas": 1,
+     "life_us": 1138.208,
+     "sm": 41,
+     "wait_us": 1116.747
+    },
+    {
+     "busy_us": 913.832,
+     "ctas": 1,
+     "life_us": 974.24,
+     "sm": 42,
+     "wait_us": 955.499
+    },
+    {
+     "busy_us": 911.391,
+     "ctas": 1,
+     "life_us": 974.272,
+     "sm": 43,
+     "wait_us": 955.778
+    },
+    {
+     "busy_us": 917.067,
+     "ctas": 1,
+     "life_us": 974.944,
+     "sm": 44,
+     "wait_us": 956.342
+    },
+    {
+     "busy_us": 913.157,
+     "ctas": 1,
+     "life_us": 974.976,
+     "sm": 45,
+     "wait_us": 956.303
+    },
+    {
+     "busy_us": 918.543,
+     "ctas": 1,
+     "life_us": 975.584,
+     "sm": 46,
+     "wait_us": 957.326
+    },
+    {
+     "busy_us": 915.007,
+     "ctas": 1,
+     "life_us": 975.616,
+     "sm": 47,
+     "wait_us": 957.497
+    },
+    {
+     "busy_us": 912.99,
+     "ctas": 1,
+     "life_us": 974.464,
+     "sm": 48,
+     "wait_us": 953.769
+    },
+    {
+     "busy_us": 910.407,
+     "ctas": 1,
+     "life_us": 974.464,
+     "sm": 49,
+     "wait_us": 954.636
+    },
+    {
+     "busy_us": 915.062,
+     "ctas": 1,
+     "life_us": 976.32,
+     "sm": 50,
+     "wait_us": 957.997
+    },
+    {
+     "busy_us": 915.111,
+     "ctas": 1,
+     "life_us": 976.32,
+     "sm": 51,
+     "wait_us": 957.74
+    },
+    {
+     "busy_us": 918.288,
+     "ctas": 1,
+     "life_us": 976.192,
+     "sm": 52,
+     "wait_us": 957.646
+    },
+    {
+     "busy_us": 913.331,
+     "ctas": 1,
+     "life_us": 976.192,
+     "sm": 53,
+     "wait_us": 957.311
+    },
+    {
+     "busy_us": 911.847,
+     "ctas": 1,
+     "life_us": 977.12,
+     "sm": 54,
+     "wait_us": 958.382
+    },
+    {
+     "busy_us": 911.807,
+     "ctas": 1,
+     "life_us": 977.088,
+     "sm": 55,
+     "wait_us": 958.578
+    },
+    {
+     "busy_us": 914.192,
+     "ctas": 1,
+     "life_us": 975.584,
+     "sm": 56,
+     "wait_us": 957.552
+    },
+    {
+     "busy_us": 913.04,
+     "ctas": 1,
+     "life_us": 975.584,
+     "sm": 57,
+     "wait_us": 956.628
+    },
+    {
+     "busy_us": 917.774,
+     "ctas": 1,
+     "life_us": 975.808,
+     "sm": 58,
+     "wait_us": 957.362
+    },
+    {
+     "busy_us": 916.791,
+     "ctas": 1,
+     "life_us": 975.776,
+     "sm": 59,
+     "wait_us": 956.786
+    },
+    {
+     "busy_us": 909.57,
+     "ctas": 1,
+     "life_us": 975.168,
+     "sm": 60,
+     "wait_us": 956.109
+    },
+    {
+     "busy_us": 908.867,
+     "ctas": 1,
+     "life_us": 975.2,
+     "sm": 61,
+     "wait_us": 956.773
+    },
+    {
+     "busy_us": 914.595,
+     "ctas": 1,
+     "life_us": 974.144,
+     "sm": 62,
+     "wait_us": 955.752
+    },
+    {
+     "busy_us": 914.944,
+     "ctas": 1,
+     "life_us": 974.144,
+     "sm": 63,
+     "wait_us": 955.012
+    },
+    {
+     "busy_us": 1061.589,
+     "ctas": 1,
+     "life_us": 1134.88,
+     "sm": 64,
+     "wait_us": 1114.759
+    },
+    {
+     "busy_us": 1059.367,
+     "ctas": 1,
+     "life_us": 1134.88,
+     "sm": 65,
+     "wait_us": 1112.791
+    },
+    {
+     "busy_us": 1064.896,
+     "ctas": 1,
+     "life_us": 1137.92,
+     "sm": 66,
+     "wait_us": 1116.677
+    },
+    {
+     "busy_us": 1066.837,
+     "ctas": 1,
+     "life_us": 1137.888,
+     "sm": 67,
+     "wait_us": 1115.741
+    },
+    {
+     "busy_us": 1067.426,
+     "ctas": 1,
+     "life_us": 1137.76,
+     "sm": 68,
+     "wait_us": 1115.484
+    },
+    {
+     "busy_us": 1060.752,
+     "ctas": 1,
+     "life_us": 1137.76,
+     "sm": 69,
+     "wait_us": 1115.461
+    },
+    {
+     "busy_us": 1061.009,
+     "ctas": 1,
+     "life_us": 1136.672,
+     "sm": 70,
+     "wait_us": 1114.748
+    },
+    {
+     "busy_us": 1064.172,
+     "ctas": 1,
+     "life_us": 1136.704,
+     "sm": 71,
+     "wait_us": 1114.878
+    },
+    {
+     "busy_us": 1067.321,
+     "ctas": 1,
+     "life_us": 1136.672,
+     "sm": 72,
+     "wait_us": 1115.099
+    },
+    {
+     "busy_us": 1065.443,
+     "ctas": 1,
+     "life_us": 1136.672,
+     "sm": 73,
+     "wait_us": 1115.779
+    },
+    {
+     "busy_us": 1066.617,
+     "ctas": 1,
+     "life_us": 1138.112,
+     "sm": 74,
+     "wait_us": 1116.968
+    },
+    {
+     "busy_us": 1068.342,
+     "ctas": 1,
+     "life_us": 1138.08,
+     "sm": 75,
+     "wait_us": 1116.612
+    },
+    {
+     "busy_us": 1064.54,
+     "ctas": 1,
+     "life_us": 1137.504,
+     "sm": 76,
+     "wait_us": 1115.137
+    },
+    {
+     "busy_us": 1059.725,
+     "ctas": 1,
+     "life_us": 1137.536,
+     "sm": 77,
+     "wait_us": 1113.777
+    }
+   ],
+   "role_skew_ratio": 0.0001,
+   "role_stats": {
+    "Math WG1/WG2 (WGMMA)": {
+     "ctas": 78,
+     "end_max_us": 1138.4,
+     "end_median_us": 1135.968,
+     "lanes": 624,
+     "tail_us": 2.432,
+     "work_median_us": 1052.536
+    },
+    "Producer (TMA issue)": {
+     "ctas": 78,
+     "end_max_us": 1138.496,
+     "end_median_us": 1136.032,
+     "lanes": 78,
+     "tail_us": 2.464,
+     "work_median_us": 78.036
+    },
+    "Producer WG idle": {
+     "ctas": 78,
+     "end_max_us": 1138.4,
+     "end_median_us": 1135.952,
+     "lanes": 234,
+     "tail_us": 2.448,
+     "work_median_us": 21.448
+    }
+   },
+   "schema": "weaveprof.megakernel-skew/v1",
+   "sm_busy": {
+    "imbalance_pct": 6.67,
+    "max_us": 1070.174,
+    "mean_us": 998.835,
+    "median_us": 1060.536,
+    "min_us": 906.389,
+    "p90_us": 1067.306,
+    "spread_us": 163.785
+   },
+   "sm_spread_ratio": 0.153,
+   "split_cut_us": 988.482,
+   "split_mode": "bimodal_gap",
+   "stages": [
+    {
+     "fires": 262144,
+     "is_wait": false,
+     "max_us": 2.493,
+     "median_us": 1.877,
+     "share_pct": 36.45,
+     "stage": "compute"
+    },
+    {
+     "fires": 262144,
+     "is_wait": false,
+     "max_us": 5.25,
+     "median_us": 2.002,
+     "share_pct": 33.64,
+     "stage": "load"
+    },
+    {
+     "fires": 12288,
+     "is_wait": false,
+     "max_us": 159.69,
+     "median_us": 1.455,
+     "share_pct": 19.61,
+     "stage": "store"
+    },
+    {
+     "fires": 31744,
+     "is_wait": true,
+     "max_us": 5.223,
+     "median_us": 2.173,
+     "share_pct": 5.17,
+     "stage": "wait"
+    },
+    {
+     "fires": 4096,
+     "is_wait": false,
+     "max_us": 10.714,
+     "median_us": 8.525,
+     "share_pct": 2.59,
+     "stage": "epilogue"
+    },
+    {
+     "fires": 262144,
+     "is_wait": false,
+     "max_us": 2.93,
+     "median_us": 0.109,
+     "share_pct": 2.53,
+     "stage": "mma"
+    }
+   ],
+   "stragglers": {
+    "busy_us_max": 1070.174,
+    "busy_us_median": 1064.871,
+    "busy_us_min": 1058.422,
+    "count": 44,
+    "sm_ids": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23
+    ]
+   },
+   "total_sms": 78,
+   "unknown_sm_lanes": 0,
+   "unused_sms": 0,
+   "wait_share": 0.0517
+  },
+  "mode": "precaptured",
+  "nsys": {
+   "gpu_chip": "GH100",
+   "gpu_name": "NVIDIA H20",
+   "in_window_samples": 229,
+   "kernel": {
+    "device": 0,
+    "duration_us": 1140.579,
+    "end_ns": 41205944,
+    "launches": 1,
+    "name": "kernel(CUtensorMap_st, CUtensorMap_st, float *, int, int, int, int, int)",
+    "start_ns": 40065365,
+    "warm_selection": "single_launch"
+   },
+   "sample_freq_hz": 200320.5,
+   "sample_interval_us": 4.992,
+   "schema": "weaveprof.nsys-sqlite-fast/v1",
+   "tensor_active_scale": {
+    "applied": true,
+    "card_factor": 4.0,
+    "raw_ceiling_pct": 29.0,
+    "raw_max_pct": 26.0,
+    "raw_mean_pct": 20.655,
+    "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4 (causal.ARCH_PROFILES)",
+    "scale": 4.0,
+    "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+   }
+  },
+  "round": 1,
+  "round_diff": null,
+  "schema": "weaveprof.megakernel-audit/v1",
+  "status": "FAIL",
+  "structural_blockers": [
+   "LOW_MATH_WAIT_NO_LATENCY_HIDING"
+  ]
+ },
+ "nsys": {
+  "gpu_chip": "GH100",
+  "gpu_name": "NVIDIA H20",
+  "in_window_samples": 229,
+  "kernel": {
+   "device": 0,
+   "duration_us": 1140.579,
+   "end_ns": 41205944,
+   "launches": 1,
+   "name": "kernel(CUtensorMap_st, CUtensorMap_st, float *, int, int, int, int, int)",
+   "start_ns": 40065365,
+   "warm_selection": "single_launch"
+  },
+  "sample_freq_hz": 200320.5,
+  "sample_interval_us": 4.992,
+  "schema": "weaveprof.nsys-sqlite-fast/v1",
+  "tensor_active_scale": {
+   "applied": true,
+   "card_factor": 4.0,
+   "raw_ceiling_pct": 29.0,
+   "raw_max_pct": 26.0,
+   "raw_mean_pct": 20.655,
+   "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4 (causal.ARCH_PROFILES)",
+   "scale": 4.0,
+   "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+  }
+ },
+ "nsys_series": {
+  "dram_read": {
+   "metric_name": "DRAM Read Bandwidth [Throughput %]",
+   "n": 229,
+   "sha256": "5cf5c359a0048576fab6a81225d2a0463db5d2a8a6381db0d91534bdc6bdd725"
+  },
+  "dram_write": {
+   "metric_name": "DRAM Write Bandwidth [Throughput %]",
+   "n": 229,
+   "sha256": "188860abd10461498a274c07040775d5d2e4c39dedf136b6cf5f57f5b1e1d515"
+  },
+  "nvlink_rx_req": {
+   "metric_name": "NVLink RX Requests User Data [Throughput %]",
+   "n": 229,
+   "sha256": "b64b1870c11d9a013112521f14aa0d1fb58f407782768467afbea05f0dadbe6c"
+  },
+  "nvlink_rx_rsp": {
+   "metric_name": "NVLink RX Responses User Data [Throughput %]",
+   "n": 229,
+   "sha256": "b64b1870c11d9a013112521f14aa0d1fb58f407782768467afbea05f0dadbe6c"
+  },
+  "nvlink_tx_req": {
+   "metric_name": "NVLink TX Requests User Data [Throughput %]",
+   "n": 229,
+   "sha256": "b64b1870c11d9a013112521f14aa0d1fb58f407782768467afbea05f0dadbe6c"
+  },
+  "nvlink_tx_rsp": {
+   "metric_name": "NVLink TX Responses User Data [Throughput %]",
+   "n": 229,
+   "sha256": "b64b1870c11d9a013112521f14aa0d1fb58f407782768467afbea05f0dadbe6c"
+  },
+  "sm_active": {
+   "metric_name": "SMs Active [Throughput %]",
+   "n": 229,
+   "sha256": "bb47e0c208153cb6b571796c0e64ec9181af53d243b9ce89c0535e31f58cdef2"
+  },
+  "tensor_active": {
+   "metric_name": "Tensor Active [Throughput %]",
+   "n": 229,
+   "sha256": "976384836afdd246a8a2c4404207f266a0536796297b5b757ba6fddff5e58584"
+  },
+  "warp_issue": {
+   "metric_name": "SM Issue [Throughput %]",
+   "n": 229,
+   "sha256": "ae17549d2b688f77533051b06eb3ff97ab75c6a3c6a1a2b54f243ab5022259b2"
+  }
+ },
+ "png": {
+  "checked": true,
+  "valid": true
+ },
+ "report": {
+  "artifacts": {
+   "files": [
+    "feedback.json",
+    "verify.json",
+    "overview.png",
+    "trace.perfetto.json.gz"
+   ]
+  },
+  "causal_opportunities": [],
+  "fidelity_gates": {
+   "compiler_spill": {
+    "codes": [
+     "SASS_LDL_EXPLOSION"
+    ],
+    "ok": false,
+    "reg_blind_spot": false
+   },
+   "granularity": {
+    "ok": true
+   },
+   "output": {
+    "ok": true
+   },
+   "overflow": 0,
+   "overhead": {
+    "ok": true,
+    "ratio": 0.01705
+   },
+   "pairing_errors": 0,
+   "stub": {
+    "ok": true,
+    "stubs": []
+   },
+   "warps": {
+    "ok": true
+   }
+  },
+  "hw_quartiles": {
+   "dram_read": [
+    6.3,
+    6.5,
+    6.6,
+    5.9
+   ],
+   "dram_write": [
+    6.6,
+    4.6,
+    4.6,
+    4.1
+   ],
+   "sm_active": [
+    100.0,
+    100.0,
+    100.0,
+    73.1
+   ],
+   "tensor_active": [
+    89.8,
+    86.7,
+    86.9,
+    65.7
+   ],
+   "warp_issue": [
+    10.4,
+    11.0,
+    10.9,
+    8.3
+   ]
+  },
+  "kernel_us": 1140.579,
+  "megakernel_skew": {
+   "barrier_starved": 34,
+   "early": [
+    34,
+    913.87
+   ],
+   "hints": [
+    "SPLIT_KV_OR_DYNAMIC_TILE_QUEUE",
+    "GRID_SYNC_WAIT_DOMINANT"
+   ],
+   "idle_sm_fraction": 0.4359,
+   "imbalance_pct": 6.67,
+   "role_skew_ratio": 0.0001,
+   "sm_busy_us": {
+    "max": 1070.174,
+    "median": 1060.536,
+    "min": 906.389,
+    "p90": 1067.306,
+    "spread": 163.785
+   },
+   "sm_spread_ratio": 0.153,
+   "stragglers": [
+    44,
+    1064.871
+   ]
+  },
+  "mode": "precaptured",
+  "overhead_pct": 1.705,
+  "round_diff": null,
+  "schema": "weaveprof.megakernel-audit/v1",
+  "seal_integrity_only": true,
+  "seal_verified": true,
+  "stage_summary": {
+   "compute": [
+    262144,
+    1.87,
+    36.5
+   ],
+   "epilogue": [
+    4096,
+    8.5,
+    2.6
+   ],
+   "load": [
+    262144,
+    1.73,
+    33.6
+   ],
+   "mma": [
+    262144,
+    0.13,
+    2.5
+   ],
+   "store": [
+    12288,
+    21.46,
+    19.6
+   ],
+   "wait": [
+    31744,
+    2.19,
+    5.2
+   ]
+  },
+  "status": "FAIL",
+  "structural_blockers": [
+   "LOW_MATH_WAIT_NO_LATENCY_HIDING"
+  ],
+  "tensor_active_scale": 4.0
+ },
+ "trace": {
+  "by_name": {
+   "DRAM Read Bandwidth [Throughput %]": 229,
+   "DRAM Write Bandwidth [Throughput %]": 229,
+   "NVLink RX Requests User Data [Throughput %]": 229,
+   "NVLink RX Responses User Data [Throughput %]": 229,
+   "NVLink TX Requests User Data [Throughput %]": 229,
+   "NVLink TX Responses User Data [Throughput %]": 229,
+   "SM Issue [Throughput %]": 229,
+   "SMs Active [Throughput %]": 229,
+   "compute": 262144,
+   "epilogue": 4096,
+   "kernel(CUtensorMap_st, CUtensorMap_st, float *, int, int, int, int, int)": 1,
+   "load": 262144,
+   "mma": 262144,
+   "store": 12288,
+   "tensor_active [Tensor Active x4 (H20 die-normalization corrected)]": 229,
+   "wait": 31744
+  },
+  "by_ph": {
+   "C": 2061,
+   "M": 4100,
+   "X": 834561
+  },
+  "events": 840722,
+  "other_data_sha256": "c962660a138862740b8b037e570322b2e7cee219c0b53659066e67e819ca8fdc",
+  "sha256": "688cf812e81281f2ad439404164bff2575ed9916c8a969178ab598e9db462c35"
+ },
+ "verify": {
+  "checks": {
+   "assembly": false,
+   "events": true,
+   "output": true,
+   "overhead": true
+  },
+  "failed": [
+   "assembly"
+  ],
+  "fidelity_gates": {
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 16,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": 0,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": 0,
+     "inst_regs": 168,
+     "l0_regs": 154
+    },
+    "ok": false,
+    "register_count_blind_spot": false,
+    "remediation": [
+     "enable_WP_CTX_SMEM (-DWP_CTX_SMEM, 16B SMEM + __noinline__ cold path)"
+    ],
+    "violations": [
+     {
+      "code": "SASS_LDL_EXPLOSION",
+      "delta": 16,
+      "limit": 4,
+      "message": "SASS LDL (local load) instructions jumped by +16 (20 -> 36)."
+     }
+    ]
+   },
+   "event_gate": {
+    "decoder_errors": {},
+    "granularity_gate": {
+     "code": null,
+     "distinct_active_stages": 4,
+     "dominant_share_pct": 38.44,
+     "dominant_stage": "mma",
+     "has_compute_stage": true,
+     "has_memory_stage": true,
+     "message": "",
+     "ok": true,
+     "overall_spans_per_lane": 857.709,
+     "per_lane_us": 785.397,
+     "spans_per_lane": 420.103
+    },
+    "ok": true,
+    "overflow": 0,
+    "pairing_errors": 0,
+    "spans": 834560,
+    "stub_gate": {
+     "ok": true,
+     "stub_count": 0,
+     "stubs": [],
+     "valid_stages": [
+      "load",
+      "mma",
+      "store"
+     ]
+    },
+    "warp_gate": {
+     "code": null,
+     "expected_warps": 12,
+     "hollow_warps": [],
+     "message": "",
+     "missing_warps": [],
+     "observed_warps": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "ok": true
+    }
+   },
+   "output_gate": {
+    "evidence": "output_sha256",
+    "ok": true
+   },
+   "overhead_gate": {
+    "abba": {
+     "baseline_half_drift_pct": 0.0142,
+     "baseline_median_ns": 1126352.0,
+     "instrumented_median_ns": 1145552.0,
+     "median_overhead_ratio": 0.017046,
+     "paired_ratio_mad": 0.000517,
+     "paired_ratio_median": 0.016981,
+     "paired_samples": 30,
+     "protocol": "ABBA"
+    },
+    "errors": [],
+    "limit": 0.1,
+    "ok": true,
+    "overhead_ratio": 0.017046
+   },
+   "sw_hw_coverage": {
+    "expected_samples": 228.1,
+    "hw_kernel_us": 1140.579,
+    "in_window_samples": 229,
+    "ok": true,
+    "pmu_density": 1.0039,
+    "span_delta_ratio": 0.00182,
+    "sw_span_us": 1138.5,
+    "violations": []
+   }
+  },
+  "limit": 0.1,
+  "overhead_ratio": 0.017046,
+  "schema": "weaveprof.megakernel-audit/v1",
+  "source_sha256": "3071ce013ff8c37549f47b9b240cc968b0b1770d90fbb5ac69b4730b75193c01",
+  "status": "FAIL"
+ }
+}
