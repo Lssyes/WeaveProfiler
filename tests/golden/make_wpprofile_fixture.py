@@ -105,7 +105,11 @@ CASE_SPECS: tuple[dict, ...] = (
         "description": (
             "Hoisted mma probe (L22..27) at K=4096 with 200 kHz GPU_METRICS sampling "
             "buffer overflow (0 in-window samples): PASS via preview.py fallback "
-            "(pins current behavior of suspected bugs A4 and A6)"
+            "(pins current behavior of known suspected bugs A4 and A6 from the refactor "
+            "suspected-bug list: when a counter-enabled run has 0 in-window hardware "
+            "samples, wp.profile still returns PASS and falls back to preview.py; this "
+            "is NOT intended behavior to preserve and is scheduled to be fixed after "
+            "slimming completes, when expected.json must be updated)"
         ),
     },
     {
