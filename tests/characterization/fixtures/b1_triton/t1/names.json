@@ -1,0 +1,34 @@
+{
+  "events": {
+    "10": "gemm",
+    "3": "mma",
+    "5": "epilogue",
+    "6": "store"
+  },
+  "roles": {
+    "0": "gemm_warp"
+  },
+  "aux": {
+    "10": "cta_id",
+    "3": "cta_id",
+    "5": "cta_id",
+    "6": "cta_id"
+  },
+  "group": "role",
+  "pair": "stack",
+  "label_aux": true,
+  "semantics": {
+    "10": {
+      "semantic_id": "gemm"
+    },
+    "3": {
+      "semantic_id": "mma"
+    },
+    "5": {
+      "semantic_id": "epilogue"
+    },
+    "6": {
+      "semantic_id": "store"
+    }
+  }
+}
