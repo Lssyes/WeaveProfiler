@@ -28,7 +28,7 @@ ALLOWED_TOP = {
 REQUIRED_TOP = ALLOWED_TOP - {"README.md", "README_EN.md", "plugin.json"}
 REQUIRED_FILES = [
     "weaveprof/__init__.py", "weaveprof/__main__.py", "weaveprof/replay.py",
-    "run.py", "weaveprof/pipeline/core/registry.py", "weaveprof/pipeline/core/semantics.py", "weaveprof/pipeline/core/fast_path.py", "weaveprof/pipeline/core/run_measurement.py",
+    "run.py", "weaveprof/pipeline/core/registry.py", "weaveprof/pipeline/core/semantics.py", "weaveprof/pipeline/core/run_measurement.py",
     "weaveprof/pipeline/scan/scan.py", "weaveprof/pipeline/scan/quick_scan.py", "weaveprof/pipeline/scan/validate_preflight.py",
     "weaveprof/pipeline/instrument/apply_plan.py", "weaveprof/pipeline/instrument/generate_edits.py",
     "recorders/cuda_cpp/wp_lite.cuh",
@@ -75,7 +75,7 @@ LANGUAGE_FILES = [
 CURVES = {"compute_util", "memory_util", "communication_util", "sm_active"}
 CHECKS = {"correctness", "overhead", "assembly_change_rate", "alignment",
           "buffer_completeness", "overflow"}
-REQUIRED_COMMANDS = {"scan", "instrument", "capture", "validate", "check", "fast", "deliver", "gemm-probe", "template"}
+REQUIRED_COMMANDS = {"scan", "instrument", "capture", "validate", "check", "deliver", "gemm-probe"}
 LINK_RX = re.compile(r"\[[^\]]+\]\(([^)#]+)(?:#[^)]+)?\)")
 PATH_REF_RX = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|cuh|h|cpp|cu|json|sh|md|config))`")
 
@@ -270,11 +270,6 @@ def _check_run_interface(fails: list[str]) -> None:
                   'heartbeat', '--deadline', 'delivery_evidence'):
         if token not in text and token != 'delivery_evidence':
             fails.append("run.py/capture integration missing {}".format(token))
-    fast = (PKG / "weaveprof/pipeline/core/fast_path.py").read_text(encoding="utf-8")
-    if '"delivery_evidence": False' not in fast:
-        fails.append("weaveprof/pipeline/core/fast_path.py must stamp delivery_evidence=false")
-    if "_execute_builds" not in fast or "cache_root" not in fast:
-        fails.append("weaveprof/pipeline/core/fast_path.py must retain content-addressed build cache")
     print("  CLI and fast-cache contract checked")
 
 

@@ -5,7 +5,7 @@
 The public workflow is:
     scan -> instrument -> capture -> validate
 
-Fast development falls back to ``fast``; the complete receipt path is ``deliver``.
+The complete receipt path is ``deliver``.
 Every internal tool remains callable directly, but this file gives all supported
 cards one stable command surface.
 """
@@ -337,14 +337,6 @@ def _deliver(argv: Sequence[str]) -> int:
     return _run_python("weaveprof/pipeline/core/run_measurement.py", list(argv))
 
 
-def _fast(argv: Sequence[str]) -> int:
-    # weaveprof/pipeline/core/fast_path.py owns a ``fast`` subcommand; run.py already dispatched that
-    # token.  Reinsert it so the public ``run.py fast --job ...`` entry is
-    # identical to the standalone CLI instead of forwarding a bare --job.
-    return _load("weaveprof/pipeline/core/fast_path.py", "weaveprofiler_fast_path").main(
-        ["fast", *list(argv)])
-
-
 def _gemm_probe(argv: Sequence[str]) -> int:
     return _run_python("weaveprof/pipeline/capture/gemm_probe.py", argv)
 
@@ -385,55 +377,6 @@ def _mcp_server(argv: Sequence[str]) -> int:
     return _run_python("weaveprof/mcp_server.py", argv)
 
 
-def _template(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(description="Print a command template")
-    parser.add_argument("--mode", choices=("fast", "scan", "instrument", "capture", "validate", "check", "deliver",
-                                            "gemm-probe", "auto-gemm", "probe-place", "probe-reuse", "probe-inject",
-                                            "auto-profile", "install-agent", "guard-exec"),
-                        default="fast")
-    args = parser.parse_args(list(argv))
-    if args.mode == "fast":
-        _json_print(_load("weaveprof/pipeline/core/fast_path.py", "weaveprofiler_fast_path").template())
-        return 0
-    python_example = "/opt/venv/python3.14.4/bin/python3"
-    examples = {
-        "install-agent": {"argv": ["python3", "-B", "run.py", "install-agent", "--workspace", "KERNEL_DIR",
-                                    "--protect", "kernel.cu", "--card", "h20"]},
-        "guard-exec": {"argv": ["python3", "-B", "run.py", "guard-exec", "--workspace", "KERNEL_DIR",
-                                 "--", "codex", "exec", "optimize the protected kernel with WeaveProfiler"]},
-        "auto-profile": {"argv": ["python3", "-B", "run.py", "auto-profile", "--source", "gemm.cu",
-                                   "--card", "h20", "--arch", "sm_90a", "--model", "qwen4-max", "--out-dir", "AUTO_PROFILE"]},
-        "probe-place": {"argv": ["python3", "-B", "run.py", "probe-place", "--source", "gemm.cu",
-                                  "--card", "h20", "--arch", "sm_90a", "--model", "qwen4-max", "--out", "probe_spec.json"]},
-        "probe-reuse": {"argv": ["python3", "-B", "run.py", "probe-reuse", "--prev-source", "v0.cu",
-                                  "--prev-spec", "probe_spec.json", "--new-source", "v1.cu", "--out-spec", "probe_spec_v1.json"]},
-        "probe-inject": {"argv": ["python3", "-B", "run.py", "probe-inject", "--source", "gemm.cu",
-                                   "--spec", "probe_spec.json", "--out-source", "inst_gemm.cu"]},
-        "auto-gemm": {"argv": ["python3", "-B", "run.py", "auto-gemm", "--source", "gemm.cu",
-                                "--card", "h20", "--arch", "sm_90a", "--phase", "prep", "--out-dir", "AUTO_RUN"]},
-        "gemm-probe": {"argv": [python_example, "-B", "run.py", "gemm-probe", "--card", "h20",
-                                 "--arch", "sm_90", "--profile", "full",
-                                 "--gpu", "auto", "--out", "RUN", "--deadline-sec", "1800"],
-                        "quick": [python_example, "-B", "run.py", "gemm-probe", "--card", "h20",
-                                  "--arch", "sm_90", "--profile", "quick",
-                                  "--gpu", "auto", "--out", "QUICK_RUN", "--deadline-sec", "300"]},
-        "scan": {"argv": ["python3", "-B", "run.py", "scan", "--project", "P", "--card", "h20",
-                           "--arch", "sm_90", "--language", "cuda_cpp", "--source", "F", "--out", "SCAN.json"]},
-        "instrument": {"argv": ["python3", "-B", "run.py", "instrument", "--scan", "SCAN.json",
-                                 "--selection", "SELECTION.json", "--plan", "EDITS.json"],
-                       "apply": ["python3", "-B", "run.py", "instrument", "--plan", "EDITS.json", "--apply"]},
-        "capture": {"argv": ["python3", "-B", "run.py", "capture", "--card", "h20", "--arch", "sm_90",
-                              "--project", "P", "--out", "RUN", "--deadline", "2026-11-14T20:00:00Z",
-                              "--heartbeat", "RUN/heartbeat.json", "--payload", "python3", "app.py"]},
-        "validate": {"argv": ["python3", "-B", "run.py", "validate", "--run-dir", "RUN"]},
-        "check": {"argv": ["python3", "-B", "run.py", "check", "--run-dir", "RUN"]},
-        "deliver": {"argv": ["python3", "-B", "run.py", "deliver", "--contract", "RUN/CONTRACT.lock.json",
-                              "--run-dir", "RUN", "--trace-processor", "TRACE_PROCESSOR"]},
-    }
-    _json_print({"schema": "weaveprofiler-template/v1", "mode": args.mode, **examples[args.mode]})
-    return 0
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help", "help"):
@@ -441,7 +384,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     command, rest = args[0], args[1:]
     handlers = {"scan": _scan, "instrument": _instrument, "capture": _capture,
-                "validate": _validate, "check": _check, "fast": _fast,
+                "validate": _validate, "check": _check,
                 "deliver": _deliver, "gemm-probe": _gemm_probe,
                 "auto-gemm": _auto_gemm,
                 "probe-place": _probe_place, "probe-reuse": _probe_reuse,
@@ -455,8 +398,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "doctor": lambda a: _cli(["doctor", *a]),
                 "causal": lambda a: _cli(["causal", *a]),
                 "render": lambda a: _cli(["render", *a]),
-                "seal-check": lambda a: _cli(["seal-check", *a]),
-                "template": _template}
+                "seal-check": lambda a: _cli(["seal-check", *a])}
     handler = handlers.get(command)
     if handler is None:
         print("unknown command {!r}; use {}".format(command, ", ".join(handlers)), file=sys.stderr)

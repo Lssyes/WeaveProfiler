@@ -288,7 +288,6 @@
   "check",
   "deliver",
   "doctor",
-  "fast",
   "gemm-probe",
   "guard-exec",
   "identify",
@@ -303,7 +302,6 @@
   "render",
   "scan",
   "seal-check",
-  "template",
   "validate",
   "verify"
  ],
