@@ -847,7 +847,13 @@ class WpTritonCpuCharacterizationTests(unittest.TestCase):
 
 
 class TritonPtxAsyncHookCharacterizationTests(unittest.TestCase):
-    """Pure-CPU characterization tests for `triton_ptx_async_hook` (`006.md` item 3 exception)."""
+    """Pure-CPU characterization tests for `triton_ptx_async_hook` (`006.md` item 3 exception).
+
+    This test class puts a minimal fake `triton.backends.nvidia.compiler.CUDABackend` into
+    `sys.modules`. It only checks how `triton_ptx_async_hook` swaps and restores `make_cubin`;
+    it does not verify the behavior of real Triton. Real behavior is covered by the GPU capture
+    round run by impl-b.
+    """
 
     def tearDown(self) -> None:
         self.assertEqual(_NON_LOOPBACK_ATTEMPTS, [])
@@ -860,6 +866,7 @@ class TritonPtxAsyncHookCharacterizationTests(unittest.TestCase):
         self.assertIn("triton", str(ctx.exception))
 
     def test_hook_replaces_and_restores_make_cubin_on_normal_and_exception_exit(self) -> None:
+        """Uses a fake triton module; real Triton is not exercised."""
         recorded_calls: list[tuple[object, object, object, object]] = []
 
         class FakeCUDABackend:
