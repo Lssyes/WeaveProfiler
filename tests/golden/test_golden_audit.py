@@ -52,16 +52,33 @@ _VOLATILE = {
 }
 
 
+def _path_tokens(tmp: str):
+    """(real path, placeholder) pairs, longest first, so that no machine-specific path reaches the golden."""
+    pairs = {(str(ROOT), "<REPO>"), (os.path.realpath(str(ROOT)), "<REPO>")}
+    if tmp:
+        pairs |= {(tmp, "<TMP>"), (os.path.realpath(tmp), "<TMP>")}  # macOS: /var -> /private/var
+    return sorted(pairs, key=lambda p: -len(p[0]))
+
+
+_TOKENS_CACHE: dict = {}
+
+
 def _norm(obj, tmp: str):
-    """Drop volatile keys, replace the temp dir with <TMP>, round floats (platform noise)."""
+    """Drop volatile keys, replace the temp dir with <TMP> and the checkout root with <REPO>, round floats."""
+    if isinstance(obj, str):
+        tokens = _TOKENS_CACHE.get(tmp)
+        if tokens is None:
+            tokens = _TOKENS_CACHE[tmp] = _path_tokens(tmp)
+        for real, token in tokens:
+            if real in obj:
+                obj = obj.replace(real, token)
+        return obj
     if isinstance(obj, dict):
         return {k: _norm(v, tmp) for k, v in sorted(obj.items()) if k not in _VOLATILE}
     if isinstance(obj, list):
         return [_norm(v, tmp) for v in obj]
     if isinstance(obj, float):
         return round(obj, 6)
-    if isinstance(obj, str) and tmp and tmp in obj:
-        return obj.replace(tmp, "<TMP>")
     return obj
 
 
