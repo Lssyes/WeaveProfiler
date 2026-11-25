@@ -1587,6 +1587,32 @@ def _render_warp_panel(
     return row_stats
 
 
+# Cap measured left-margin rescue so <=60-char Panel C role labels fit at 10.2 pt (~0.3217 on pingpong)
+# while keeping >=75.0% of the default Panel C plot width (678.7 px vs 905.5 px at 100 dpi, right_m=0.754).
+LEFT_M_MAX = 0.35
+LEFT_RESCUE_MAX_EXTRA_DRAWS = 2
+
+
+def _truncate_text_to_px(probe: Any, rnd: Any, text: str, min_keep: int, max_width_px: float) -> str:
+    probe.set_text(text)
+    if probe.get_window_extent(rnd).width <= max_width_px or min_keep <= 0 or min_keep >= len(text) or max_width_px <= 0.0:
+        return text
+    probe.set_text(text[:min_keep] + "\u2026")
+    if probe.get_window_extent(rnd).width > max_width_px:
+        return text
+    lo, hi = min_keep, len(text) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        cand = text[:mid].rstrip()
+        probe.set_text((cand if len(cand) >= min_keep else text[:min_keep]) + "\u2026")
+        if probe.get_window_extent(rnd).width <= max_width_px:
+            lo = mid
+        else:
+            hi = mid - 1
+    cand = text[:lo].rstrip()
+    return (cand if len(cand) >= min_keep else text[:min_keep]) + "\u2026"
+
+
 def render_swhw_overview_png(
     trace_or_path: Mapping[str, Any] | str | Path,
     out_png: str | Path,
@@ -1601,6 +1627,9 @@ def render_swhw_overview_png(
     subplot_lr: Optional[Tuple[float, float]] = None,
 ) -> Path:
     """Render a publication-grade SW+HW overview PNG (with on-demand async depth strips, ▼ issue pins & micro-zoom)."""
+    render_swhw_overview_png.last_left_rescue_px = 0.0
+    render_swhw_overview_png.last_extra_draws = 0
+    render_swhw_overview_png.last_panel_c_title_truncated = False
     import matplotlib
     matplotlib.use("Agg")
     if sys.version_info >= (3, 14):
@@ -2397,6 +2426,69 @@ def render_swhw_overview_png(
     fig.canvas.draw()
     _rnd = fig.canvas.get_renderer()
     _cw, _ch = fig.canvas.get_width_height()
+    if subplot_lr is None:
+        # (1) Widen left_m up to LEFT_M_MAX only when a y-axis title starts left of x0 = 2.0 px
+        _yl_x0s = [_a.yaxis.label.get_window_extent(_rnd).x0 for _a in fig.axes
+                   if _a.yaxis.label.get_visible() and str(_a.yaxis.label.get_text() or "").strip()]
+        _min_x0 = min(_yl_x0s) if _yl_x0s else 2.0
+        if _min_x0 < 2.0:
+            _new_left_m = min(LEFT_M_MAX, left_m + (3.0 - _min_x0) / fig.bbox.width)
+            if _new_left_m > left_m:
+                render_swhw_overview_png.last_left_rescue_px = float((_new_left_m - left_m) * fig.bbox.width)
+                left_m = _new_left_m
+                fig.subplots_adjust(left=left_m)
+                fig.canvas.draw()
+                _rnd = fig.canvas.get_renderer()
+                render_swhw_overview_png.last_extra_draws += 1
+            _yl_x0s = [_a.yaxis.label.get_window_extent(_rnd).x0 for _a in fig.axes
+                       if _a.yaxis.label.get_visible() and str(_a.yaxis.label.get_text() or "").strip()]
+            _min_x0 = min(_yl_x0s) if _yl_x0s else 2.0
+        # (2) Truncate Panel C/D tick labels at LEFT_M_MAX & (3) Panel C title if out of canvas bounds
+        _ct_txt = str(ax_wp.get_title() or "")
+        _ct_bb = ax_wp.title.get_window_extent(_rnd) if _ct_txt.strip() else None
+        _ct_clip = bool(_ct_bb is not None and (_ct_bb.x0 < 2.0 or _ct_bb.x1 > _cw - 2.0))
+        if (_min_x0 < 2.0 or _ct_clip) and render_swhw_overview_png.last_extra_draws < LEFT_RESCUE_MAX_EXTRA_DRAWS:
+            _need_redraw = False
+            if _min_x0 < 2.0:
+                _lane_axes = [ax_wp] + ([ax_zoom] if (has_zoom and zoom_win is not None and ax_zoom is not None) else [])
+                _budgets = [
+                    max((_t.get_window_extent(_rnd).width for _t in _a.get_yticklabels() if _t.get_text()), default=0.0)
+                    - (3.0 - _a.yaxis.label.get_window_extent(_rnd).x0)
+                    for _a in _lane_axes
+                    if _a.yaxis.label.get_visible() and str(_a.yaxis.label.get_text() or "").strip()
+                    and _a.yaxis.label.get_window_extent(_rnd).x0 < 2.0
+                ]
+                _probe_tk = next((_t for _t in ax_wp.get_yticklabels() if _t.get_text()), None)
+                if _budgets and _probe_tk is not None:
+                    _max_tw = min(_budgets)
+                    _probe = _MplText(0.0, 0.0, "", fontproperties=_probe_tk.get_fontproperties())
+                    _probe.set_figure(fig)
+                    _new_yticks = [
+                        _truncate_text_to_px(_probe, _rnd, _lbl, _m.end() if _m else 0, _max_tw)
+                        for _lbl in c_yticks
+                        for _m in (re.match(r"^(?:W\d+|Slot\s+\d+)(?:\s*·\s*|\s+\()", _lbl),)
+                    ]
+                    if _new_yticks != list(c_yticks):
+                        c_yticks = _new_yticks
+                        for _a in _lane_axes:
+                            _a.set_yticklabels(c_yticks, fontsize=yt_fs)
+                        _need_redraw = True
+            if _ct_clip:
+                _ct_pfx = (f"(C) Representative {unit_nm} {rep_sm} \u2014 " if _ct_txt.startswith("(C) Representative ")
+                           else f"(C) {unit_nm} {rep_sm} \u2014 ")
+                _cx = 0.5 * (ax_wp.bbox.x0 + ax_wp.bbox.x1)
+                _max_ct_w = 2.0 * min(_cx - 3.0, (_cw - 3.0) - _cx)
+                _p_ct = _MplText(0.0, 0.0, "", fontproperties=ax_wp.title.get_fontproperties())
+                _p_ct.set_figure(fig)
+                _new_ct = _truncate_text_to_px(_p_ct, _rnd, _ct_txt, len(_ct_pfx) if _ct_txt.startswith(_ct_pfx) else 0, _max_ct_w)
+                if _new_ct != _ct_txt:
+                    ax_wp.title.set_text(_new_ct)
+                    render_swhw_overview_png.last_panel_c_title_truncated = True
+                    _need_redraw = True
+            if _need_redraw:
+                fig.canvas.draw()
+                _rnd = fig.canvas.get_renderer()
+                render_swhw_overview_png.last_extra_draws += 1
     _oob_ticks = set()
     for _ax_i in fig.axes:
         _xl0, _xl1 = sorted(_ax_i.get_xlim())
