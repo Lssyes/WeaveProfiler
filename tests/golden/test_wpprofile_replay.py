@@ -64,12 +64,13 @@ if str(ROOT) not in sys.path:
 CASES = HERE / "cases"
 REPLAY_BENCH = HERE / "wpprofile_replay_bench.py"
 
-# Active real cases checked into tests/golden/cases/.
-# Planned H20 capture cases to populate here when real fixtures arrive:
-#   - "wpprofile_h20_handoff_round1_fail"   (A1: inner-loop probe -> assembly + overhead FAIL)
-#   - "wpprofile_h20_handoff_collapse_fail" (A1': hoisted probe, K=8192 -> SINGLE_STAGE_LOOP_COLLAPSE FAIL)
-#   - "wpprofile_h20_handoff_round2_pass"   (B: hoisted probe, K=4096 + GPU_METRICS -> PASS)
-EXPECTED_REAL_CASES: tuple[str, ...] = ()
+# Active real H20 capture cases checked into tests/golden/cases/.
+EXPECTED_REAL_CASES: tuple[str, ...] = (
+    "wpprofile_h20_handoff_round1_fail",
+    "wpprofile_h20_handoff_collapse_fail",
+    "wpprofile_h20_handoff_no_window_samples",
+    "wpprofile_h20_handoff_round2_pass",
+)
 
 UPDATE_ENV = "WEAVEPROF_WPPROFILE_REPLAY_UPDATE"
 UPDATE = os.environ.get(UPDATE_ENV) == "1"
@@ -1586,16 +1587,24 @@ class WpProfileReplayTest(unittest.TestCase):
 
 
 def _make_real_case_test(case_name: str):
+    suffix = (
+        "_suspected_bug_A4_A6"
+        if case_name == "wpprofile_h20_handoff_no_window_samples"
+        else ""
+    )
+    test_name = f"test_real_{case_name}{suffix}"
+
     def _test(self: WpProfileReplayTest):
         self._check_case_dir(CASES / case_name, self._root / f"real_{case_name}", update=UPDATE)
 
-    _test.__name__ = f"test_real_{case_name}"
+    _test.__name__ = test_name
     _test.__doc__ = f"golden wp.profile replay of tests/golden/cases/{case_name}"
     return _test
 
 
 for _real_case in discover_cases(CASES):
-    setattr(WpProfileReplayTest, f"test_real_{_real_case}", _make_real_case_test(_real_case))
+    _real_test_fn = _make_real_case_test(_real_case)
+    setattr(WpProfileReplayTest, _real_test_fn.__name__, _real_test_fn)
 
 
 if __name__ == "__main__":

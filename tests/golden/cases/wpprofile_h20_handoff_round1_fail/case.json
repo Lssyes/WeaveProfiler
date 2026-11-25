@@ -1,0 +1,42 @@
+{
+  "arch": "sm_90a",
+  "capture_bench": "cuda_bench.py",
+  "card": "h20",
+  "case": "wpprofile_h20_handoff_round1_fail",
+  "description": "Initial inner-loop mma probe (L23..26) at K=8192: FAIL on assembly and overhead checks",
+  "entry_source": "handoff.cu",
+  "inputs_sha256": {
+    "baseline.bin": "460ac780390fca630718ea986658ef2f3dbfe93a28e5af2e08505b61b7d90ccf",
+    "baseline_source": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+    "capture.fi02.bin": "7f82b425056b9def453c61d16dac43817e1121b0040e0c9a66443f5c0246a493",
+    "capture.sqlite(sanitized)": "efa82c42ac4672c947b2035d90de47fec85c049ad8d3805a57b8383bc56910e8",
+    "capture_bench": "4d7d1f68ce253549477e6b9a9372c1e2646ca7025238ae37d4e9154d9dd3501f",
+    "entry_source": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+    "inst.sass": "21a7eaa0c0f468e554cb4bca3708ccc21e34192d6e041e164df47febc5600aae",
+    "instrumented.bin": "460ac780390fca630718ea986658ef2f3dbfe93a28e5af2e08505b61b7d90ccf",
+    "instrumented_source": "a10a325b58701a160542ebc0e777850bb89dc713e87fd1f0ecb5f58dd301ec37",
+    "l0.sass": "2a0f9de7f750d5ebe215a9e6aee517caf5fd51e36ae4cfa7ac507cea1ccd504d",
+    "probe.json(source)": "551dbab28d77e15c1ed6052233fecdbe58804933ac8c9ce9af19e50e98bc1e5a",
+    "runtime.json(sanitized)": "39bf241149d90d2ba5cac5604bb99d5dc69090c5e698c64ec81645906f5b8e6a"
+  },
+  "k_steps": 8192,
+  "limit": 0.1,
+  "max_rounds": 1,
+  "out_name": "overview.png",
+  "probe": "probe.json",
+  "provenance": {
+    "base_commit": "2933fb1548806549ba934844b758d58cd565c7ad",
+    "capture_host": "<CAPTURE_HOST>",
+    "capture_run_dir": "<REMOTE_RUN_DIR>/runs/A1",
+    "gpu_model": "NVIDIA H20",
+    "hw_counters_enabled": false,
+    "run_tag": "A1"
+  },
+  "sizes": {
+    "capture_fi02_raw_bytes": 2097728,
+    "capture_fi02_xz_bytes": 40668,
+    "capture_sqlite_sanitized_bytes": 24576,
+    "capture_sqlite_xz_bytes": 2288
+  },
+  "suspected_bugs_pinned": []
+}

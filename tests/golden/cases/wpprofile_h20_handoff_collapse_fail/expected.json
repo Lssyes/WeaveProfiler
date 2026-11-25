@@ -1,0 +1,579 @@
+{
+ "aligned_trace": null,
+ "cli_returncode": 1,
+ "cli_stdout_last_line": "",
+ "failed_timeline": {
+  "bytes": 8984,
+  "exists": true,
+  "sha256": "d9464fed9385caa7a485a67abd67189fdb6abc8ca951f0b640cb389657fa7914"
+ },
+ "feedback": {
+  "checks": {
+   "assembly": true,
+   "event": false,
+   "events": false,
+   "output": true,
+   "overhead": true
+  },
+  "enclosing_loop": null,
+  "failed": [
+   "pairing"
+  ],
+  "failed_trace": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+  "fires": {
+   "load": 1,
+   "mma": 1
+  },
+  "metrics": {
+   "abba": {
+    "baseline_half_drift_pct": 0.4443,
+    "baseline_median_ns": 122448.0,
+    "instrumented_median_ns": 123408.0,
+    "median_overhead_ratio": 0.00784,
+    "paired_ratio_mad": 0.005917,
+    "paired_ratio_median": 0.008387,
+    "paired_samples": 30,
+    "protocol": "interleaved"
+   },
+   "assembly_change_rate": 0.087302,
+   "baseline_median_ns": 122448.0,
+   "baseline_spill_bytes": 0,
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 0,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": null,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": null,
+     "inst_regs": null,
+     "l0_regs": null
+    },
+    "ok": true,
+    "register_count_blind_spot": false,
+    "remediation": [],
+    "violations": []
+   },
+   "core_multiset_ratio": 1.0,
+   "core_retention_ratio": 1.0,
+   "delta_spill_bytes": 0,
+   "errors": {
+    "granularity": "Stage 'mma' absorbs 99.7% of active time in 1.00 spans/lane (115.7 us/lane): main loop collapsed into a single coarse bar; preserve per-tile stages (load/mma/softmax/epilogue) inside the loop."
+   },
+   "extra_smem_bytes": 0,
+   "failed_trace": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+   "granularity_gate": {
+    "code": "SINGLE_STAGE_LOOP_COLLAPSE",
+    "distinct_active_stages": 2,
+    "dominant_share_pct": 99.67,
+    "dominant_stage": "mma",
+    "has_compute_stage": true,
+    "has_memory_stage": true,
+    "message": "Stage 'mma' absorbs 99.7% of active time in 1.00 spans/lane (115.7 us/lane): main loop collapsed into a single coarse bar; preserve per-tile stages (load/mma/softmax/epilogue) inside the loop.",
+    "ok": false,
+    "overall_spans_per_lane": 2.0,
+    "per_lane_us": 115.712,
+    "spans_per_lane": 1.0
+   },
+   "instrumented_median_ns": 123408.0,
+   "instrumented_spill_bytes": 0,
+   "lcs_ratio": 0.912698,
+   "order_change_ratio": 0.087302,
+   "output_bytes": 4096,
+   "overflow": 0,
+   "overhead_ratio": 0.00784,
+   "paired_samples": 30,
+   "pairing_errors": {},
+   "timeline_summary": {
+    "failed_trace_bytes": 8984,
+    "failed_trace_path": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+    "failed_trace_sha256": "d9464fed9385caa7a485a67abd67189fdb6abc8ca951f0b640cb389657fa7914",
+    "hotspots": [
+     "math \"mma\" (L22-L27): 115.7120us x 1",
+     "dma \"load\" (L14-L18): 0.3840us x 1"
+    ],
+    "kernel_baseline_us": 122.448,
+    "kernel_instrumented_us": 123.408,
+    "overhead_pct": 0.784,
+    "stages": [
+     {
+      "avg_us": 115.712,
+      "cross_warp": false,
+      "enclosing_loop": null,
+      "end_role": "math",
+      "fires": 1,
+      "id": "mma",
+      "in_loop": false,
+      "lines": [
+       22,
+       27
+      ],
+      "max_us": 115.872,
+      "observed_slices": 8,
+      "role": "math",
+      "total_us": 925.696
+     },
+     {
+      "avg_us": 0.384,
+      "cross_warp": true,
+      "enclosing_loop": null,
+      "end_role": "math",
+      "fires": 1,
+      "id": "load",
+      "in_loop": false,
+      "lines": [
+       14,
+       18
+      ],
+      "max_us": 0.416,
+      "observed_slices": 8,
+      "role": "dma",
+      "total_us": 3.072
+     }
+    ]
+   },
+   "warp_gate": {
+    "code": null,
+    "expected_warps": 5,
+    "hollow_warps": [],
+    "message": "",
+    "missing_warps": [],
+    "observed_warps": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "ok": true
+   }
+  },
+  "status": "FAIL",
+  "timeline_summary": {
+   "failed_trace_bytes": 8984,
+   "failed_trace_path": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+   "failed_trace_sha256": "d9464fed9385caa7a485a67abd67189fdb6abc8ca951f0b640cb389657fa7914",
+   "hotspots": [
+    "math \"mma\" (L22-L27): 115.7120us x 1",
+    "dma \"load\" (L14-L18): 0.3840us x 1"
+   ],
+   "kernel_baseline_us": 122.448,
+   "kernel_instrumented_us": 123.408,
+   "overhead_pct": 0.784,
+   "stages": [
+    {
+     "avg_us": 115.712,
+     "cross_warp": false,
+     "enclosing_loop": null,
+     "end_role": "math",
+     "fires": 1,
+     "id": "mma",
+     "in_loop": false,
+     "lines": [
+      22,
+      27
+     ],
+     "max_us": 115.872,
+     "observed_slices": 8,
+     "role": "math",
+     "total_us": 925.696
+    },
+    {
+     "avg_us": 0.384,
+     "cross_warp": true,
+     "enclosing_loop": null,
+     "end_role": "math",
+     "fires": 1,
+     "id": "load",
+     "in_loop": false,
+     "lines": [
+      14,
+      18
+     ],
+     "max_us": 0.416,
+     "observed_slices": 8,
+     "role": "dma",
+     "total_us": 3.072
+    }
+   ]
+  }
+ },
+ "ledger": {
+  "fsm_transitions": [
+   {
+    "from": "INIT",
+    "round": 1,
+    "to": "POLICY_CHECK"
+   },
+   {
+    "from": "POLICY_CHECK",
+    "gpu_id": "auto",
+    "round": 1,
+    "to": "CRITICAL_REGION_MEASURE"
+   },
+   {
+    "from": "CRITICAL_REGION_MEASURE",
+    "reason": "max_rounds_exhausted",
+    "round": 1,
+    "to": "HALT_BLOCKED"
+   }
+  ],
+  "incumbent": {
+   "checks": {
+    "assembly": true,
+    "events": false,
+    "output": true,
+    "overhead": true
+   },
+   "escalation": null,
+   "failed": [
+    "pairing"
+   ],
+   "overhead_ratio": 0.00784,
+   "probe_fp": "1d3b80261b7ee67275e67a886a43587274bd9bb4166bab9f49868b698ec7dbbe",
+   "round_dir": "<WORK_RUN>/round-1",
+   "round_number": 1,
+   "status": "FAIL"
+  },
+  "limit": 0.1,
+  "max_rounds": 1,
+  "policy_digest": "f0977ae463c701d0dcdf606b35319ce1f427a794d03c62259d54a655821d777d",
+  "promoted_round": null,
+  "reason": "max_rounds_exhausted",
+  "rounds": [
+   {
+    "checks": {
+     "assembly": true,
+     "events": false,
+     "output": true,
+     "overhead": true
+    },
+    "escalation": null,
+    "failed": [
+     "pairing"
+    ],
+    "overhead_ratio": 0.00784,
+    "probe_fp": "1d3b80261b7ee67275e67a886a43587274bd9bb4166bab9f49868b698ec7dbbe",
+    "round_dir": "<WORK_RUN>/round-1",
+    "round_number": 1,
+    "status": "FAIL"
+   }
+  ],
+  "rounds_executed": 1,
+  "schema": "weaveprof.episode-ledger/v1",
+  "source_path": "<TMP>/kernel/handoff.cu",
+  "source_sha256": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+  "status": "FAIL"
+ },
+ "png": {
+  "checked": true,
+  "exists": false,
+  "has_auxiliary_warnings": false,
+  "renderer": null,
+  "valid": false
+ },
+ "promoted_seal": {
+  "errors": [],
+  "exists": false,
+  "ok": null
+ },
+ "rounds": [
+  {
+   "baseline_source_sha256": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+   "bound_probe": {
+    "arch": "sm_90a",
+    "card": "h20",
+    "language": "cuda_cpp",
+    "platform": "nv",
+    "probes": [
+     {
+      "begin": {
+       "line": 14,
+       "role": "dma"
+      },
+      "end": {
+       "line": 18,
+       "role": "math"
+      },
+      "id": "load",
+      "slot": "s"
+     },
+     {
+      "begin": {
+       "line": 22,
+       "role": "math"
+      },
+      "end": {
+       "line": 27,
+       "role": "math"
+      },
+      "id": "mma"
+     }
+    ],
+    "roles": {
+     "dma": "warp 4",
+     "math": "warps 0-3"
+    },
+    "source_path": "<TMP>/kernel/handoff.cu",
+    "source_sha256": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004"
+   },
+   "instrumented_source_sha256": "d7a8538f0739b66e3056cb5e0c2e3331c89fcd93c953e905945c58e74872dd45",
+   "names": {
+    "async_engines": {
+     "1": "mem"
+    },
+    "aux": {},
+    "cross_warp": {
+     "1": {
+      "begin_role": 0,
+      "end_role": 1,
+      "id": "load",
+      "slot": "s"
+     }
+    },
+    "events": {
+     "1": "load",
+     "10": "gemm",
+     "3": "mma"
+    },
+    "group": "role",
+    "label_aux": false,
+    "meta": {
+     "arch": "sm_90a",
+     "card": "h20",
+     "generator": "weaveprofiler/rule_engine/v1",
+     "kernel": null,
+     "language": "cuda_cpp",
+     "zero_signature_edits": true
+    },
+    "pair": "stack",
+    "probe_ids": {
+     "1": "load",
+     "3": "mma"
+    },
+    "roles": {
+     "0": "dma",
+     "1": "math"
+    },
+    "semantics": {
+     "1": {
+      "display_name": "load",
+      "semantic_id": "load"
+     },
+     "10": {
+      "display_name": "gemm",
+      "semantic_id": "gemm"
+     },
+     "3": {
+      "display_name": "mma",
+      "semantic_id": "mma"
+     }
+    },
+    "slotted_events": {
+     "1": {
+      "cross_warp": true,
+      "id": "load",
+      "slot": "s"
+     }
+    }
+   },
+   "round_number": 1,
+   "round_seal": {
+    "errors": [],
+    "exists": true,
+    "fsm_state": "VERIFY_AND_SEAL",
+    "ok": true,
+    "status": "FAIL"
+   }
+  }
+ ],
+ "verify": {
+  "checks": {
+   "assembly": true,
+   "event": false,
+   "events": false,
+   "output": true,
+   "overhead": true
+  },
+  "enclosing_loop": null,
+  "failed": [
+   "pairing"
+  ],
+  "failed_trace": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+  "fires": {
+   "load": 1,
+   "mma": 1
+  },
+  "metrics": {
+   "abba": {
+    "baseline_half_drift_pct": 0.4443,
+    "baseline_median_ns": 122448.0,
+    "instrumented_median_ns": 123408.0,
+    "median_overhead_ratio": 0.00784,
+    "paired_ratio_mad": 0.005917,
+    "paired_ratio_median": 0.008387,
+    "paired_samples": 30,
+    "protocol": "interleaved"
+   },
+   "assembly_change_rate": 0.087302,
+   "baseline_median_ns": 122448.0,
+   "baseline_spill_bytes": 0,
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 0,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": null,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": null,
+     "inst_regs": null,
+     "l0_regs": null
+    },
+    "ok": true,
+    "register_count_blind_spot": false,
+    "remediation": [],
+    "violations": []
+   },
+   "core_multiset_ratio": 1.0,
+   "core_retention_ratio": 1.0,
+   "delta_spill_bytes": 0,
+   "errors": {
+    "granularity": "Stage 'mma' absorbs 99.7% of active time in 1.00 spans/lane (115.7 us/lane): main loop collapsed into a single coarse bar; preserve per-tile stages (load/mma/softmax/epilogue) inside the loop."
+   },
+   "extra_smem_bytes": 0,
+   "failed_trace": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+   "granularity_gate": {
+    "code": "SINGLE_STAGE_LOOP_COLLAPSE",
+    "distinct_active_stages": 2,
+    "dominant_share_pct": 99.67,
+    "dominant_stage": "mma",
+    "has_compute_stage": true,
+    "has_memory_stage": true,
+    "message": "Stage 'mma' absorbs 99.7% of active time in 1.00 spans/lane (115.7 us/lane): main loop collapsed into a single coarse bar; preserve per-tile stages (load/mma/softmax/epilogue) inside the loop.",
+    "ok": false,
+    "overall_spans_per_lane": 2.0,
+    "per_lane_us": 115.712,
+    "spans_per_lane": 1.0
+   },
+   "instrumented_median_ns": 123408.0,
+   "instrumented_spill_bytes": 0,
+   "lcs_ratio": 0.912698,
+   "order_change_ratio": 0.087302,
+   "output_bytes": 4096,
+   "overflow": 0,
+   "overhead_ratio": 0.00784,
+   "paired_samples": 30,
+   "pairing_errors": {},
+   "timeline_summary": {
+    "failed_trace_bytes": 8984,
+    "failed_trace_path": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+    "failed_trace_sha256": "d9464fed9385caa7a485a67abd67189fdb6abc8ca951f0b640cb389657fa7914",
+    "hotspots": [
+     "math \"mma\" (L22-L27): 115.7120us x 1",
+     "dma \"load\" (L14-L18): 0.3840us x 1"
+    ],
+    "kernel_baseline_us": 122.448,
+    "kernel_instrumented_us": 123.408,
+    "overhead_pct": 0.784,
+    "stages": [
+     {
+      "avg_us": 115.712,
+      "cross_warp": false,
+      "enclosing_loop": null,
+      "end_role": "math",
+      "fires": 1,
+      "id": "mma",
+      "in_loop": false,
+      "lines": [
+       22,
+       27
+      ],
+      "max_us": 115.872,
+      "observed_slices": 8,
+      "role": "math",
+      "total_us": 925.696
+     },
+     {
+      "avg_us": 0.384,
+      "cross_warp": true,
+      "enclosing_loop": null,
+      "end_role": "math",
+      "fires": 1,
+      "id": "load",
+      "in_loop": false,
+      "lines": [
+       14,
+       18
+      ],
+      "max_us": 0.416,
+      "observed_slices": 8,
+      "role": "dma",
+      "total_us": 3.072
+     }
+    ]
+   },
+   "warp_gate": {
+    "code": null,
+    "expected_warps": 5,
+    "hollow_warps": [],
+    "message": "",
+    "missing_warps": [],
+    "observed_warps": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "ok": true
+   }
+  },
+  "status": "FAIL",
+  "timeline_summary": {
+   "failed_trace_bytes": 8984,
+   "failed_trace_path": "<WORK_RUN>/round-1/failed_trace.perfetto-trace",
+   "failed_trace_sha256": "d9464fed9385caa7a485a67abd67189fdb6abc8ca951f0b640cb389657fa7914",
+   "hotspots": [
+    "math \"mma\" (L22-L27): 115.7120us x 1",
+    "dma \"load\" (L14-L18): 0.3840us x 1"
+   ],
+   "kernel_baseline_us": 122.448,
+   "kernel_instrumented_us": 123.408,
+   "overhead_pct": 0.784,
+   "stages": [
+    {
+     "avg_us": 115.712,
+     "cross_warp": false,
+     "enclosing_loop": null,
+     "end_role": "math",
+     "fires": 1,
+     "id": "mma",
+     "in_loop": false,
+     "lines": [
+      22,
+      27
+     ],
+     "max_us": 115.872,
+     "observed_slices": 8,
+     "role": "math",
+     "total_us": 925.696
+    },
+    {
+     "avg_us": 0.384,
+     "cross_warp": true,
+     "enclosing_loop": null,
+     "end_role": "math",
+     "fires": 1,
+     "id": "load",
+     "in_loop": false,
+     "lines": [
+      14,
+      18
+     ],
+     "max_us": 0.416,
+     "observed_slices": 8,
+     "role": "dma",
+     "total_us": 3.072
+    }
+   ]
+  }
+ }
+}

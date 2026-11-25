@@ -1,0 +1,472 @@
+{
+ "aligned_trace": {
+  "by_name": {
+   "Active SM Residency (%) [78 SMs]": 32,
+   "Active SMs (%) [NSYS PMU]": 12,
+   "Compute Warps in Flight [Avg Warps per Cycle]": 12,
+   "Compute Warps in Flight [Avg]": 12,
+   "Compute Warps in Flight [Throughput %]": 12,
+   "DRAM Read Bandwidth [Throughput %]": 12,
+   "DRAM Write Bandwidth [Throughput %]": 12,
+   "GPC Clock Frequency [MHz]": 12,
+   "GR Active [Throughput %]": 12,
+   "Memory Util — HBM Read+Write (%) [NSYS PMU]": 12,
+   "NVLink RX Requests Protocol Data [Throughput %]": 12,
+   "NVLink RX Requests User Data [Throughput %]": 12,
+   "NVLink RX Responses Protocol Data [Throughput %]": 12,
+   "NVLink RX Responses User Data [Throughput %]": 12,
+   "NVLink RX User Data Total (%) [NSYS PMU]": 12,
+   "NVLink TX Requests Protocol Data [Throughput %]": 12,
+   "NVLink TX Requests User Data [Throughput %]": 12,
+   "NVLink TX Responses Protocol Data [Throughput %]": 12,
+   "NVLink TX Responses User Data [Throughput %]": 12,
+   "NVLink TX User Data Total (%) [NSYS PMU]": 12,
+   "PCIe RX Throughput [Throughput %]": 12,
+   "PCIe TX Throughput [Throughput %]": 12,
+   "Pixel Warps in Flight [Avg Warps per Cycle]": 12,
+   "Pixel Warps in Flight [Avg]": 12,
+   "Pixel Warps in Flight [Throughput %]": 12,
+   "SM Issue [Throughput %]": 12,
+   "SMs Active [Throughput %]": 12,
+   "SYS Clock Frequency [MHz]": 12,
+   "Unallocated Warps in Active SMs [Avg Warps per Cycle]": 12,
+   "Unallocated Warps in Active SMs [Avg]": 12,
+   "Unallocated Warps in Active SMs [Throughput %]": 12,
+   "Vertex/Tess/Geometry Warps in Flight [Avg Warps per Cycle]": 12,
+   "Vertex/Tess/Geometry Warps in Flight [Avg]": 12,
+   "Vertex/Tess/Geometry Warps in Flight [Throughput %]": 12,
+   "Warp residency": 10,
+   "load": 8,
+   "mma": 8,
+   "process_name": 3,
+   "process_sort_index": 3,
+   "tensor_active [Tensor Active x4 (H20 die-normalization corrected)]": 12,
+   "thread_name": 10,
+   "thread_sort_index": 10,
+   "warp_handoff": 1
+  },
+  "by_ph": {
+   "C": 440,
+   "M": 26,
+   "X": 27
+  },
+  "events": 493,
+  "sha256": "f993a6c5aa7457fec47a0bb9775168e55bca5fd84ab7eeb767c1f3629f7087ab"
+ },
+ "cli_returncode": 0,
+ "cli_stdout_last_line": "<TMP>/out/overview.png",
+ "failed_timeline": null,
+ "feedback": {
+  "checks": {
+   "assembly": true,
+   "event": true,
+   "events": true,
+   "output": true,
+   "overhead": true
+  },
+  "enclosing_loop": null,
+  "failed": [],
+  "fires": {
+   "load": 1,
+   "mma": 1
+  },
+  "metrics": {
+   "abba": {
+    "baseline_half_drift_pct": 0.0,
+    "baseline_median_ns": 63840.0,
+    "instrumented_median_ns": 64864.0,
+    "median_overhead_ratio": 0.01604,
+    "paired_ratio_mad": 0.006611,
+    "paired_ratio_median": 0.016554,
+    "paired_samples": 30,
+    "protocol": "interleaved"
+   },
+   "alignment": {
+    "cross_warp_spans": 8,
+    "ctas_observed": 2,
+    "first_open_ns": 1795635077041936416,
+    "hardware_samples": 360,
+    "has_compute_curve": true,
+    "has_memory_curve": true,
+    "has_sm_curve": true,
+    "kernel": "warp_handoff",
+    "kernel_duration_us": 60.289,
+    "kernel_end_ns": 3376635216,
+    "kernel_start_ns": 3376574927,
+    "offset_ns": -1795635073665360785,
+    "physical_units_observed": 2,
+    "tensor_active_scale": {
+     "applied": true,
+     "card_factor": 4.0,
+     "raw_ceiling_pct": 29.0,
+     "raw_max_pct": 1.0,
+     "raw_mean_pct": 1.0,
+     "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4",
+     "scale": 4.0,
+     "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+    },
+    "warps_per_cta": 5
+   },
+   "assembly_change_rate": 0.087302,
+   "baseline_median_ns": 63840.0,
+   "baseline_spill_bytes": 0,
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 0,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": null,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": null,
+     "inst_regs": null,
+     "l0_regs": null
+    },
+    "ok": true,
+    "register_count_blind_spot": false,
+    "remediation": [],
+    "violations": []
+   },
+   "core_multiset_ratio": 1.0,
+   "core_retention_ratio": 1.0,
+   "delta_spill_bytes": 0,
+   "extra_smem_bytes": 0,
+   "granularity_gate": {
+    "code": null,
+    "distinct_active_stages": 2,
+    "dominant_share_pct": 99.32,
+    "dominant_stage": "mma",
+    "has_compute_stage": true,
+    "has_memory_stage": true,
+    "message": "",
+    "ok": true,
+    "overall_spans_per_lane": 2.0,
+    "per_lane_us": 58.008,
+    "spans_per_lane": 1.0
+   },
+   "instrumented_median_ns": 64864.0,
+   "instrumented_spill_bytes": 0,
+   "lcs_ratio": 0.912698,
+   "order_change_ratio": 0.087302,
+   "output_bytes": 4096,
+   "overflow": 0,
+   "overhead_ratio": 0.01604,
+   "paired_samples": 30,
+   "pairing_errors": {},
+   "preview_png": "<TMP>/out/overview.png",
+   "warp_gate": {
+    "code": null,
+    "expected_warps": 5,
+    "hollow_warps": [],
+    "message": "",
+    "missing_warps": [],
+    "observed_warps": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "ok": true
+   }
+  },
+  "status": "PASS"
+ },
+ "ledger": {
+  "fsm_transitions": [
+   {
+    "from": "INIT",
+    "round": 1,
+    "to": "POLICY_CHECK"
+   },
+   {
+    "from": "POLICY_CHECK",
+    "gpu_id": "auto",
+    "round": 1,
+    "to": "CRITICAL_REGION_MEASURE"
+   },
+   {
+    "from": "CRITICAL_REGION_MEASURE",
+    "probe_fp": "1d3b80261b7e",
+    "round": 1,
+    "to": "PROMOTED"
+   }
+  ],
+  "incumbent": {
+   "checks": {
+    "assembly": true,
+    "events": true,
+    "output": true,
+    "overhead": true
+   },
+   "escalation": null,
+   "failed": [],
+   "overhead_ratio": 0.01604,
+   "probe_fp": "1d3b80261b7ee67275e67a886a43587274bd9bb4166bab9f49868b698ec7dbbe",
+   "round_dir": "<WORK_RUN>/round-1",
+   "round_number": 1,
+   "status": "PASS"
+  },
+  "limit": 0.1,
+  "max_rounds": 1,
+  "policy_digest": "f0977ae463c701d0dcdf606b35319ce1f427a794d03c62259d54a655821d777d",
+  "promoted_round": 1,
+  "reason": "all_gates_passed",
+  "rounds": [
+   {
+    "checks": {
+     "assembly": true,
+     "events": true,
+     "output": true,
+     "overhead": true
+    },
+    "escalation": null,
+    "failed": [],
+    "overhead_ratio": 0.01604,
+    "probe_fp": "1d3b80261b7ee67275e67a886a43587274bd9bb4166bab9f49868b698ec7dbbe",
+    "round_dir": "<WORK_RUN>/round-1",
+    "round_number": 1,
+    "status": "PASS"
+   }
+  ],
+  "rounds_executed": 1,
+  "schema": "weaveprof.episode-ledger/v1",
+  "source_path": "<TMP>/kernel/handoff.cu",
+  "source_sha256": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+  "status": "PASS"
+ },
+ "png": {
+  "checked": true,
+  "exists": true,
+  "has_auxiliary_warnings": false,
+  "renderer": "viz",
+  "valid": true
+ },
+ "promoted_seal": {
+  "errors": [],
+  "exists": true,
+  "ok": true
+ },
+ "rounds": [
+  {
+   "baseline_source_sha256": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+   "bound_probe": {
+    "arch": "sm_90a",
+    "card": "h20",
+    "language": "cuda_cpp",
+    "platform": "nv",
+    "probes": [
+     {
+      "begin": {
+       "line": 14,
+       "role": "dma"
+      },
+      "end": {
+       "line": 18,
+       "role": "math"
+      },
+      "id": "load",
+      "slot": "s"
+     },
+     {
+      "begin": {
+       "line": 22,
+       "role": "math"
+      },
+      "end": {
+       "line": 27,
+       "role": "math"
+      },
+      "id": "mma"
+     }
+    ],
+    "roles": {
+     "dma": "warp 4",
+     "math": "warps 0-3"
+    },
+    "source_path": "<TMP>/kernel/handoff.cu",
+    "source_sha256": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004"
+   },
+   "instrumented_source_sha256": "d7a8538f0739b66e3056cb5e0c2e3331c89fcd93c953e905945c58e74872dd45",
+   "names": {
+    "async_engines": {
+     "1": "mem"
+    },
+    "aux": {},
+    "cross_warp": {
+     "1": {
+      "begin_role": 0,
+      "end_role": 1,
+      "id": "load",
+      "slot": "s"
+     }
+    },
+    "events": {
+     "1": "load",
+     "10": "gemm",
+     "3": "mma"
+    },
+    "group": "role",
+    "label_aux": false,
+    "meta": {
+     "arch": "sm_90a",
+     "card": "h20",
+     "generator": "weaveprofiler/rule_engine/v1",
+     "kernel": null,
+     "language": "cuda_cpp",
+     "zero_signature_edits": true
+    },
+    "pair": "stack",
+    "probe_ids": {
+     "1": "load",
+     "3": "mma"
+    },
+    "roles": {
+     "0": "dma",
+     "1": "math"
+    },
+    "semantics": {
+     "1": {
+      "display_name": "load",
+      "semantic_id": "load"
+     },
+     "10": {
+      "display_name": "gemm",
+      "semantic_id": "gemm"
+     },
+     "3": {
+      "display_name": "mma",
+      "semantic_id": "mma"
+     }
+    },
+    "slotted_events": {
+     "1": {
+      "cross_warp": true,
+      "id": "load",
+      "slot": "s"
+     }
+    }
+   },
+   "round_number": 1,
+   "round_seal": {
+    "errors": [],
+    "exists": true,
+    "fsm_state": "VERIFY_AND_SEAL",
+    "ok": true,
+    "status": "PASS"
+   }
+  }
+ ],
+ "verify": {
+  "checks": {
+   "assembly": true,
+   "event": true,
+   "events": true,
+   "output": true,
+   "overhead": true
+  },
+  "enclosing_loop": null,
+  "failed": [],
+  "fires": {
+   "load": 1,
+   "mma": 1
+  },
+  "metrics": {
+   "abba": {
+    "baseline_half_drift_pct": 0.0,
+    "baseline_median_ns": 63840.0,
+    "instrumented_median_ns": 64864.0,
+    "median_overhead_ratio": 0.01604,
+    "paired_ratio_mad": 0.006611,
+    "paired_ratio_median": 0.016554,
+    "paired_samples": 30,
+    "protocol": "interleaved"
+   },
+   "alignment": {
+    "cross_warp_spans": 8,
+    "ctas_observed": 2,
+    "first_open_ns": 1795635077041936416,
+    "hardware_samples": 360,
+    "has_compute_curve": true,
+    "has_memory_curve": true,
+    "has_sm_curve": true,
+    "kernel": "warp_handoff",
+    "kernel_duration_us": 60.289,
+    "kernel_end_ns": 3376635216,
+    "kernel_start_ns": 3376574927,
+    "offset_ns": -1795635073665360785,
+    "physical_units_observed": 2,
+    "tensor_active_scale": {
+     "applied": true,
+     "card_factor": 4.0,
+     "raw_ceiling_pct": 29.0,
+     "raw_max_pct": 1.0,
+     "raw_mean_pct": 1.0,
+     "reason": "nsys normalizes Tensor Active to the full GH100 die; H20 Tensor throughput per SM is 1/4 of it, so values are multiplied by 4",
+     "scale": 4.0,
+     "source": "nsys TARGET_INFO_GPU name 'NVIDIA H20'"
+    },
+    "warps_per_cta": 5
+   },
+   "assembly_change_rate": 0.087302,
+   "baseline_median_ns": 63840.0,
+   "baseline_spill_bytes": 0,
+   "compiler_spill_gate": {
+    "metrics": {
+     "delta_sass_ldl": 0,
+     "delta_sass_stl": 0,
+     "delta_spill_loads_bytes": null,
+     "delta_spill_stores_bytes": 0,
+     "delta_stack_bytes": null,
+     "inst_regs": null,
+     "l0_regs": null
+    },
+    "ok": true,
+    "register_count_blind_spot": false,
+    "remediation": [],
+    "violations": []
+   },
+   "core_multiset_ratio": 1.0,
+   "core_retention_ratio": 1.0,
+   "delta_spill_bytes": 0,
+   "extra_smem_bytes": 0,
+   "granularity_gate": {
+    "code": null,
+    "distinct_active_stages": 2,
+    "dominant_share_pct": 99.32,
+    "dominant_stage": "mma",
+    "has_compute_stage": true,
+    "has_memory_stage": true,
+    "message": "",
+    "ok": true,
+    "overall_spans_per_lane": 2.0,
+    "per_lane_us": 58.008,
+    "spans_per_lane": 1.0
+   },
+   "instrumented_median_ns": 64864.0,
+   "instrumented_spill_bytes": 0,
+   "lcs_ratio": 0.912698,
+   "order_change_ratio": 0.087302,
+   "output_bytes": 4096,
+   "overflow": 0,
+   "overhead_ratio": 0.01604,
+   "paired_samples": 30,
+   "pairing_errors": {},
+   "preview_png": "<TMP>/out/overview.png",
+   "warp_gate": {
+    "code": null,
+    "expected_warps": 5,
+    "hollow_warps": [],
+    "message": "",
+    "missing_warps": [],
+    "observed_warps": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "ok": true
+   }
+  },
+  "status": "PASS"
+ }
+}

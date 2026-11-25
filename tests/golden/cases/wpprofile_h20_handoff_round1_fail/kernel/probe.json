@@ -1,0 +1,31 @@
+{
+  "probes": [
+    {
+      "begin": {
+        "line": 14,
+        "role": "dma"
+      },
+      "end": {
+        "line": 18,
+        "role": "math"
+      },
+      "id": "load",
+      "slot": "s"
+    },
+    {
+      "begin": {
+        "line": 23,
+        "role": "math"
+      },
+      "end": {
+        "line": 26,
+        "role": "math"
+      },
+      "id": "mma"
+    }
+  ],
+  "roles": {
+    "dma": "warp 4",
+    "math": "warps 0-3"
+  }
+}
