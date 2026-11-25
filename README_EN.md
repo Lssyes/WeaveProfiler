@@ -20,7 +20,7 @@ Existing hardware profilers and free-form LLM code edits hit three practical roa
 
 ---
 
-## 2. Core Idea & Three Key Designs
+## 2. Core Idea & Four Key Designs
 
 > **Core Idea**: Only **recognizing stage boundaries** requires an LLM to read source code; probe injection, async pairing, and trace checks can all run as **deterministic rules**. And because hardware async queues retire work in FIFO order, runtime probe state fits in **one 32-bit register** (`0 B` shared memory).
 
@@ -48,6 +48,14 @@ Protected Source (Read-Only) ──► Read-Only Stage Identification (LLM) ─�
 ### 2.3 Low-Overhead Recording & Unchanged Function Signatures
 - **Per-warp buffer slices + single-register state (`WP_CTX_REG`)**: Each `(CTA, warp/wave)` writes 16-byte records sequentially from `lane 0` with **zero atomics and zero cross-warp sync**. `WP_CTX_REG` packs slot ID and write cursor into **one 32-bit register and `0 B` shared memory** (initialized before `setmaxnreg`), with an optional `16 B` shared-memory fallback (`WP_CTX_SMEM`).
 - **Cycle-counter calibration + out-of-band binding**: Hot loops read fast local cycle counters (`%clock64` / `s_memtime`) anchored by open/close wall clocks, fusing back-to-back stage boundaries into one clock read; multi-header C++ kernels bind buffers via module-scope device symbols without changing any `__global__` / `__device__` function signature.
+
+### 2.4 Silicon-Calibrated Hardware Utilization Curves (Avoiding Static Datasheet Distortion)
+Raw vendor profiler percentages can severely misrepresent hardware headroom on regulated or derived GPU SKUs. WeaveProfiler calibrates Panel (A) curves against first-principles silicon microbenchmarks (pure-compute + full-memory GEMM):
+- **NVIDIA H20 (`sm_90a`) — `1/4` Die-Width Calibration (`×4.0`)**: `nsys` normalizes `Tensor Active` against the full GH100 die's Tensor pipe width, capping a 100%-saturated H20 kernel at `25%` raw; WeaveProfiler automatically detects H20 and restores `×4.0`.
+- **AMD Instinct MI308X (`gfx942`, 80 CUs) — Live Dynamic-Clock Cycle Duty (Eliminating the `398.7T` Denominator Trap)**:
+  - Unthrottled CDNA3 peak (`1.85 GHz`) is `606.2 TFLOPS`, while the MI308X datasheet lists `398.7 TFLOPS` FP8—**neither static figure is a valid denominator**. On MI308X silicon (`80×512 = 1 CTA/CU`, `0` spills), a pure `MFMA` microbenchmark (zero memory ops) sustains **`461.3+ TFLOPS`** (`451.0 TFLOPS` under `rocprof-sys`, **`97.6%–99.5%`** pipe duty), and a spill-free AGPR dense FP8 GEMM (`8192×8192×4096`, with HBM3 + blockwise scaling) sustains **`443.4 TFLOPS`** (`SQ_VALU_MFMA_BUSY_CYCLES = 2MNK / 1024` with `0.000%` error). This disproves any `398.7T` hardware wall: dividing by `398.7T` overflows real kernels to **`111.2% > 100%`**, whereas `376.7 TFLOPS` (`torch._scaled_mm`) genuinely reflects `376.7 / 461.3 = 81.7%` pipe duty.
+  - **Unified exact formula**: Across both per-dispatch `rocprof-sys` and intra-kernel `device_counting_service` sampling, WeaveProfiler uses **`100 × ΔSQ_VALU_MFMA_BUSY_CYCLES / (80 × ΔGRBM_GUI_ACTIVE)`** (`scale = 1.0`). Because `ΔGRBM_GUI_ACTIVE / 4` counts exact elapsed shader cycles per XCC at the live dynamic clock (`~1.38–1.42 GHz` → `451.5–465.3 TFLOPS` real-time pipe ceiling), frequency throttling cancels out in hardware and utilization stays strictly bounded in `[0, 100]%` (see [amd_mi308x.md](docs/amd_mi308x.md)).
+- **Full-Duplex Interconnect Split & Honest Missing-Counter Policy**: `NVLink TX / RX` and `xGMI TX / RX` are independent full-duplex links and are never summed or merged; host-bypassed GPU-initiated RDMA NIC counters are explicitly noted rather than zero-filled.
 
 ---
 
