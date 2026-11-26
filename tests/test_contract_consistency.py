@@ -7,7 +7,6 @@ example, or the instrumentation generator.
 """
 from __future__ import annotations
 
-import ast
 import json
 import re
 import sys
@@ -706,52 +705,6 @@ def check_host_specific_paths(failures: list[str]) -> None:
                 )
 
 
-def _selection_schema_constant() -> str:
-    path = PKG / "weaveprof/pipeline/instrument/generate_edits.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-            value_node = node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets = [node.target]
-            value_node = node.value
-        else:
-            continue
-        if any(isinstance(target, ast.Name) and target.id == "SELECTION_SCHEMA"
-               for target in targets):
-            value = ast.literal_eval(value_node)
-            if not isinstance(value, str) or not value:
-                raise ValueError("SELECTION_SCHEMA must be a non-empty string")
-            return value
-    raise ValueError("generate_edits.py does not define SELECTION_SCHEMA")
-
-
-def check_selection_schema_id(failures: list[str]) -> None:
-    """Join the JSON Schema payload id with generate_edits.SELECTION_SCHEMA."""
-    try:
-        constant = _selection_schema_constant()
-    except (OSError, SyntaxError, ValueError) as exc:
-        failures.append("generate_edits.py SELECTION_SCHEMA cannot be read: {}".format(exc))
-        return
-
-    relative = "configs/validation/schemas/scan-selection.schema.json"
-    schema = _load_json(relative, failures)
-    if not isinstance(schema, dict):
-        return
-    try:
-        schema_id = schema["properties"]["schema"]["const"]
-    except (KeyError, TypeError):
-        failures.append("{} has no properties.schema.const".format(relative))
-        return
-    if schema_id != constant:
-        failures.append(
-            "{} schema id {!r} differs from generate_edits.SELECTION_SCHEMA {!r}".format(
-                relative, schema_id, constant
-            )
-        )
-
-
 CHECKS = (
     check_semantic_id_authority,
     check_recipe_contracts,
@@ -761,7 +714,6 @@ CHECKS = (
     check_b300_cutedsl_evidence,
     check_fi_level_docs,
     check_host_specific_paths,
-    check_selection_schema_id,
 )
 
 
@@ -806,9 +758,6 @@ class ContractConsistencyTest(unittest.TestCase):
 
     def test_08_host_specific_paths(self) -> None:
         self._assert_clean(check_host_specific_paths)
-
-    def test_09_selection_schema_id(self) -> None:
-        self._assert_clean(check_selection_schema_id)
 
 
 def main() -> int:

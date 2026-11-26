@@ -327,8 +327,6 @@ run_item "CONTRACT tests/test_contract_consistency.py" \
 run_item "ROUTE tests/test_registry_language.py" "${PY_RUN[@]}" tests/test_registry_language.py
 
 # Scan and deterministic instrumentation.
-run_item "INSTRUMENT tests/test_generate_edits.py" "${PY_RUN[@]}" tests/test_generate_edits.py
-run_item "INSTRUMENT tests/test_apply_plan.py" "${PY_RUN[@]}" tests/test_apply_plan.py
 run_item "INSTRUMENT tests/test_card_schema.py" "${PY_RUN[@]}" tests/test_card_schema.py
 run_item "PROBE tests/test_probe_pipeline.py" "${PY_RUN[@]}" tests/test_probe_pipeline.py
 run_item "CLI tests/test_run_cli.py" "${PY_RUN[@]}" tests/test_run_cli.py

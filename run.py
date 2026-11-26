@@ -39,55 +39,6 @@ def _json_print(payload: Any) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
 
 
-def _instrument(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate and optionally apply SHA-bound instrumentation edits")
-    parser.add_argument("--scan", help="scan JSON from `run.py scan`")
-    parser.add_argument("--selection", help="explicit event selection JSON")
-    parser.add_argument("--plan", help="patch-plan path to write, or an existing plan with --apply/check")
-    parser.add_argument("--apply", action="store_true", help="apply the validated patch plan to source files")
-    parser.add_argument("--dry-run", action="store_true", help="validate only; never modify source")
-    parser.add_argument("--diff-output", help="write the validated unified diff here")
-    args = parser.parse_args(list(argv))
-
-    if args.apply and args.dry_run:
-        parser.error("--apply and --dry-run are mutually exclusive")
-    plan = Path(args.plan).expanduser().resolve() if args.plan else None
-    if args.scan or args.selection:
-        if not (args.scan and args.selection):
-            parser.error("generation mode requires both --scan and --selection")
-        if plan is None:
-            parser.error("generation mode requires --plan PATH")
-        gen_argv = ["--scan", str(Path(args.scan).expanduser().resolve()),
-                    "--selection", str(Path(args.selection).expanduser().resolve()),
-                    "--out", str(plan)]
-        rc = _run_python("weaveprof/pipeline/instrument/generate_edits.py", gen_argv)
-        if rc != 0:
-            return rc
-    elif plan is None:
-        parser.error("provide --scan/--selection to generate, or --plan to inspect/apply an existing plan")
-
-    if not plan.is_file():
-        _json_print({"ok": False, "error": {"code": "plan_missing", "path": str(plan)}})
-        return 2
-    apply_argv: List[str] = [str(plan)]
-    if not args.apply:
-        apply_argv.append("--check")
-    if args.diff_output:
-        apply_argv.extend(["--diff-output", str(Path(args.diff_output).expanduser().resolve())])
-    rc = _run_python("weaveprof/pipeline/instrument/apply_plan.py", apply_argv)
-    if rc != 0:
-        return rc
-    _json_print({
-        "ok": True,
-        "plan": str(plan),
-        "names": str(Path(str(plan) + ".names.json")),
-        "applied": bool(args.apply),
-        "dry_run": not bool(args.apply),
-    })
-    return 0
-
-
 def _parse_deadline(raw: Optional[str]) -> Optional[float]:
     if not raw:
         return None
@@ -275,10 +226,6 @@ def _probe_inject(argv: Sequence[str]) -> int:
     return _run_python("weaveprof/pipeline/instrument/rule_engine.py", argv)
 
 
-def _auto_profile(argv: Sequence[str]) -> int:
-    return _run_python("weaveprof/pipeline/validate/closed_loop_verifier.py", argv)
-
-
 def _install_agent(argv: Sequence[str]) -> int:
     return _run_python("weaveprof/agent_installer.py", ["install", *list(argv)])
 
@@ -301,11 +248,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(__doc__.strip())
         return 0
     command, rest = args[0], args[1:]
-    handlers = {"instrument": _instrument, "capture": _capture,
+    handlers = {"capture": _capture,
                 "gemm-probe": _gemm_probe,
                 "auto-gemm": _auto_gemm,
                 "probe-place": _probe_place, "probe-reuse": _probe_reuse,
-                "probe-inject": _probe_inject, "auto-profile": _auto_profile,
+                "probe-inject": _probe_inject,
                 "install-agent": _install_agent, "guard-exec": _guard_exec,
                 "agent-status": _agent_status, "mcp-server": _mcp_server,
                 "identify": lambda a: _cli(["identify", *a]),
