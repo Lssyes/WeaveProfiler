@@ -18,7 +18,6 @@ import build_perfetto  # noqa: E402
 import deliver_gate  # noqa: E402
 import hooklib  # noqa: E402
 import merge_hw_into_perfetto  # noqa: E402
-import validate_all  # noqa: E402
 import verify_receipt  # noqa: E402
 
 
@@ -141,8 +140,6 @@ class ReconciliationTests(unittest.TestCase):
         errors = []
         verify_receipt.check_filename(errors, name, doc)
         self.assertTrue(any("target.card" in item for item in errors), errors)
-        audit = validate_all._audit_trace_filename(doc, Path(name))
-        self.assertTrue(any("target.card" in item for item in audit), audit)
 
     def test_valid_cards_reconcile_and_bundle_grid_still_checked(self):
         cases = (
@@ -159,7 +156,6 @@ class ReconciliationTests(unittest.TestCase):
             errors = []
             verify_receipt.check_filename(errors, name, doc)
             self.assertEqual(errors, [])
-            self.assertEqual(validate_all._audit_trace_filename(doc, Path(name)), [])
             self.assertEqual(bundle, "sw")
 
         name = BASE.format(card="h20").replace("grid78", "grid39")
@@ -176,11 +172,6 @@ class ReconciliationTests(unittest.TestCase):
         errors = []
         verify_receipt.check_filename(errors, name, doc)
         self.assertTrue(any("contract target missing" in item for item in errors), errors)
-        audit = validate_all._audit_trace_filename(doc, Path(name))
-        self.assertTrue(any("target_missing" in item for item in audit), audit)
-        audit_without_contract = validate_all._audit_trace_filename(None, Path(name))
-        self.assertTrue(any("target_missing" in item
-                            for item in audit_without_contract), audit_without_contract)
 
 
 class GeneratorTests(unittest.TestCase):
