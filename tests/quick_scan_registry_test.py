@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Regression tests for registry-driven quick_scan and preflight routing."""
+"""Regression tests for registry-driven quick_scan routing."""
 from __future__ import annotations
 
-import contextlib
 import importlib.util
-import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,7 +30,6 @@ def load_module(name, relative_path):
 
 
 quick_scan = load_module("weaveprofiler_quick_scan_registry_test", "weaveprof/pipeline/scan/quick_scan.py")
-preflight = load_module("weaveprofiler_fi_preflight_registry_test", "weaveprof/pipeline/validate/tools/fi_preflight.py")
 
 
 HIP_SOURCE = """\
@@ -54,15 +49,6 @@ import triton.language as tl
 def gemm_kernel(x, y):
     return tl.dot(tl.load(x), tl.load(y))
 """
-
-
-def args(**overrides):
-    values = dict(card=None, arch=None, platform="auto", language=None,
-                  inspect_host=False, gpu=None, busy_util=5, busy_mem=1024,
-                  lock_dir=None, expect_lock_dir=None, need_nsys=False,
-                  rocm_llvm=None)
-    values.update(overrides)
-    return SimpleNamespace(**values)
 
 
 class FrameworkDetectionTests(unittest.TestCase):
@@ -158,67 +144,6 @@ class QuickScanRouteTests(unittest.TestCase):
         self.assertEqual(unresolved["decision"]["path"], "slow_path")
         self.assertEqual(unresolved["exit_code"], quick_scan.EXIT_SLOW)
         self.assertIsNotNone(unresolved["route_error"])
-
-
-class PreflightRouteTests(unittest.TestCase):
-    def test_legacy_host_probe_has_no_nvidia_default(self):
-        with mock.patch.object(preflight.shutil, "which", return_value=None):
-            self.assertIsNone(preflight.platform_of(None))
-
-    def test_three_supported_card_routes(self):
-        cases = (
-            (args(card="h20", arch="sm_90", language="cuda_cpp"), "nv", "nsys"),
-            (args(card="b300", arch="sm_100a", language="triton"), "nv", "nsys"),
-            (args(card="b300", arch="sm_103a", language="cuda_cpp"), "nv", "nsys"),
-            (args(card="mi308x", arch="gfx942", language="hip_cpp"), "amd", "rocprof-sys"),
-            (args(card="mi308x", arch="gfx942", language="triton"), "amd", "rocprof-sys"),
-        )
-        for namespace, platform, profiler in cases:
-            route = preflight.resolve_preflight_target(namespace)
-            self.assertEqual(route["target"]["platform"], platform)
-            self.assertEqual(route["target"]["card"], namespace.card)
-            self.assertEqual(route["target"]["arch"], namespace.arch)
-            self.assertEqual(route["profiler"]["primary"], profiler)
-            self.assertTrue(route["recorder"])
-            self.assertTrue(route["evidence_status"])
-
-    def test_missing_target_fails_closed_without_host_probe(self):
-        with mock.patch.object(preflight, "platform_of", side_effect=AssertionError("host probe")), \
-                mock.patch.object(preflight, "inspect_host_target", side_effect=AssertionError("host probe")):
-            with self.assertRaises(registry.UnsupportedTarget) as caught:
-                preflight.resolve_preflight_target(args())
-        self.assertEqual(caught.exception.kind, "target_required")
-
-        with self.assertRaises(registry.UnsupportedTarget) as caught:
-            preflight.resolve_preflight_target(args(platform="amd"))
-        self.assertEqual(caught.exception.kind, "target_required")
-
-    def test_inspect_host_is_an_explicit_opt_in(self):
-        host = {"platform": "nv", "card": "h20", "arch": "sm_90",
-                "evidence": ["fake nvidia-smi"]}
-        namespace = args(inspect_host=True)
-        with mock.patch.object(preflight, "inspect_host_target", return_value=host) as probe:
-            route = preflight.resolve_preflight_target(namespace)
-        probe.assert_called_once_with(None)
-        self.assertEqual(route["target"]["card"], "h20")
-        self.assertEqual(route["target"]["platform"], "nv")
-        self.assertEqual(route["target"]["arch"], "sm_90")
-        self.assertEqual(route["host_inspection"], host)
-
-    def test_cli_missing_target_writes_structured_failure(self):
-        with tempfile.TemporaryDirectory(prefix="wq_preflight_json_") as tmp:
-            output = Path(tmp) / "preflight.json"
-            argv = ["fi_preflight.py", "--json", str(output)]
-            stdout, stderr = io.StringIO(), io.StringIO()
-            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout), \
-                    contextlib.redirect_stderr(stderr):
-                rc = preflight.main()
-            self.assertEqual(rc, 1, (stdout.getvalue(), stderr.getvalue()))
-            doc = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(doc["verdict"], "FAIL")
-        self.assertEqual(doc["target_route_error"]["kind"], "target_required")
-        self.assertEqual(doc["target"], {"card": None, "platform": None, "arch": None})
-        self.assertEqual(doc["evidence_status"], "unverified")
 
 
 class QuickScanCliTests(unittest.TestCase):
