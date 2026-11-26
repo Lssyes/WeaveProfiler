@@ -285,8 +285,6 @@
   "auto-profile",
   "capture",
   "causal",
-  "check",
-  "deliver",
   "doctor",
   "gemm-probe",
   "guard-exec",
@@ -300,9 +298,7 @@
   "probe-reuse",
   "profile",
   "render",
-  "scan",
   "seal-check",
-  "validate",
   "verify"
  ],
  "weaveprof_cli_commands": [

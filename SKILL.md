@@ -84,10 +84,6 @@ Always follow these verified rules when capturing software + hardware timelines 
 
 ### Legacy Multi-Stage CLI (`run.py`)
 
-WeaveProfiler also preserves the stage-by-stage CLI workflow:
-
-`scan -> instrument -> capture -> validate`
-
 Resolve the card, exact architecture, and language before reading mode-specific knowledge. B300 `sm_100a` and `sm_103a` are separate routes. On MI308X, CUDA-style `.cu` source resolves to `hip_cpp`; there is no separate HIP project category.
 
 | Card / architecture | `cuda_cpp` | `hip_cpp` | `triton` | `cutedsl` | Capture |
@@ -105,16 +101,12 @@ Language knowledge: [CUDA C++](configs/languages/cuda_cpp/patterns.json), [HIP C
 All commands enter through [run.py](run.py). Use absolute project, run, and evidence paths.
 
 ```bash
-python3 -B run.py scan --project P --card h20|b300|mi308x|sm86 [--arch A] --language L --source F [--source F] [--glob G] [--out SCAN]
 python3 -B run.py instrument --scan SCAN --selection SELECTION --plan EDITS [--apply|--dry-run] [--diff-output DIFF]
 python3 -B run.py capture --card h20|b300|mi308x|sm86 [--arch A] --project P --out RUN [--collector auto|nsys|rocprof-sys|rocprofv3] [--deadline ISO8601_UTC] [--heartbeat PATH] --payload CMD [ARG...]
-python3 -B run.py validate --run-dir RUN [--trace TRACE]
-python3 -B run.py check --run-dir RUN
-python3 -B run.py deliver --contract CONTRACT --run-dir RUN --trace-processor TRACE_PROCESSOR [--resume] [--inherit OLD_RUN]
 python3 -B run.py gemm-probe --card h20 --arch sm_90 --profile full|quick [--shape MxNxK] --gpu auto --out RUN --deadline-sec 1800 [--trace-processor PATH]
 ```
 
-B300 commands must pass the exact `--arch`; H20 and MI308X may omit it when `--card` resolves one architecture. Repeat `--source`/`--glob` to select multiple inputs. All staged and agent commands route through `run.py` (24 registered subcommands); without `--apply`, `instrument` emits and checks a SHA-bound plan without changing source. `check` is only a quick check and never issues a receipt; only `deliver` can complete delivery evidence.
+B300 commands must pass the exact `--arch`; H20 and MI308X may omit it when `--card` resolves one architecture. Repeat `--source`/`--glob` to select multiple inputs. All staged and agent commands route through `run.py` (20 registered subcommands); without `--apply`, `instrument` emits and checks a SHA-bound plan without changing source.
 
 ## GEMM probe fast path
 

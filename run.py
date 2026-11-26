@@ -2,10 +2,6 @@
 # -*- coding: utf-8 -*-
 """weaveprofiler command entry.
 
-The public workflow is:
-    scan -> instrument -> capture -> validate
-
-The complete receipt path is ``deliver``.
 Every internal tool remains callable directly, but this file gives all supported
 cards one stable command surface.
 """
@@ -13,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import importlib.util
 import json
 import os
 import signal
@@ -26,18 +21,6 @@ from typing import Any, Dict, List, Optional, Sequence
 
 ROOT = Path(__file__).resolve().parent
 CARDS = ("h20", "b300", "mi308x", "sm86")
-
-
-def _load(relative: str, name: str):
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-    path = ROOT / relative
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot load {}".format(path))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _cli(argv: Sequence[str]) -> int:
@@ -54,10 +37,6 @@ def _run_python(relative: str, argv: Sequence[str], *, cwd: Optional[Path] = Non
 
 def _json_print(payload: Any) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
-
-
-def _scan(argv: Sequence[str]) -> int:
-    return _load("weaveprof/pipeline/scan/scan.py", "weaveprofiler_scan").main(list(argv))
 
 
 def _instrument(argv: Sequence[str]) -> int:
@@ -276,67 +255,6 @@ def _capture(argv: Sequence[str]) -> int:
                          phase="capture")
 
 
-def _find_single(pattern: str, run_dir: Path) -> Optional[Path]:
-    found = sorted(path for path in run_dir.rglob(pattern) if path.is_file())
-    return found[0] if len(found) == 1 else None
-
-
-def _validate(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(description="Run all contract-declared validation gates")
-    parser.add_argument("--contract")
-    parser.add_argument("--run-dir")
-    parser.add_argument("--trace")
-    parser.add_argument("--out")
-    parser.add_argument("--selftest", action="store_true")
-    args = parser.parse_args(list(argv))
-    if args.selftest:
-        return _run_python("weaveprof/pipeline/validate/validate_all.py", ["--selftest"])
-    if not args.run_dir:
-        parser.error("--run-dir is required")
-    run_dir = Path(args.run_dir).expanduser().resolve()
-    contract = Path(args.contract).expanduser().resolve() if args.contract else run_dir / "CONTRACT.lock.json"
-    trace = Path(args.trace).expanduser().resolve() if args.trace else (
-        _find_single("*.perfetto.json.gz", run_dir) or _find_single("*.pftrace", run_dir))
-    out = Path(args.out).expanduser().resolve() if args.out else run_dir / "validation" / "validate_all.json"
-    missing = [str(path) for path, label in ((contract, "contract"), (trace, "trace"))
-               if path is None or not path.is_file()]
-    if missing or trace is None:
-        _json_print({"ok": False, "error": "missing or ambiguous inputs",
-                     "missing": missing, "run_dir": str(run_dir)})
-        return 2
-    return _run_python("weaveprof/pipeline/validate/validate_all.py",
-                       ["--contract", str(contract), "--run-dir", str(run_dir),
-                        "--trace", str(trace), "--out", str(out)])
-
-
-def _check(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="Quick run check; never issues a delivery receipt")
-    parser.add_argument("--run-dir", required=True)
-    parser.add_argument("--trace")
-    parser.add_argument("--json")
-    parser.add_argument("rest", nargs=argparse.REMAINDER)
-    args = parser.parse_args(list(argv))
-    run_dir = Path(args.run_dir).expanduser().resolve()
-    if not run_dir.is_dir():
-        parser.error("--run-dir is not a directory: {}".format(run_dir))
-    trace = Path(args.trace).expanduser().resolve() if args.trace else _find_single("*.perfetto.json.gz", run_dir)
-    if trace is None or not trace.is_file():
-        _json_print({"ok": False, "error": "trace is required or must identify one file",
-                     "run_dir": str(run_dir)})
-        return 2
-    out = Path(args.json).expanduser().resolve() if args.json else run_dir / "validation" / "check.json"
-    rest = list(args.rest)
-    if rest and rest[0] == "--":
-        rest = rest[1:]
-    return _run_python("weaveprof/pipeline/validate/validate_run.py",
-                       [str(run_dir), str(trace), *rest, "--json", str(out)])
-
-
-def _deliver(argv: Sequence[str]) -> int:
-    return _run_python("weaveprof/pipeline/core/run_measurement.py", list(argv))
-
-
 def _gemm_probe(argv: Sequence[str]) -> int:
     return _run_python("weaveprof/pipeline/capture/gemm_probe.py", argv)
 
@@ -383,9 +301,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(__doc__.strip())
         return 0
     command, rest = args[0], args[1:]
-    handlers = {"scan": _scan, "instrument": _instrument, "capture": _capture,
-                "validate": _validate, "check": _check,
-                "deliver": _deliver, "gemm-probe": _gemm_probe,
+    handlers = {"instrument": _instrument, "capture": _capture,
+                "gemm-probe": _gemm_probe,
                 "auto-gemm": _auto_gemm,
                 "probe-place": _probe_place, "probe-reuse": _probe_reuse,
                 "probe-inject": _probe_inject, "auto-profile": _auto_profile,
