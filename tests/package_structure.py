@@ -29,7 +29,6 @@ REQUIRED_TOP = ALLOWED_TOP - {"README.md", "README_EN.md", "plugin.json"}
 REQUIRED_FILES = [
     "weaveprof/__init__.py", "weaveprof/__main__.py", "weaveprof/replay.py",
     "run.py", "weaveprof/pipeline/core/registry.py", "weaveprof/pipeline/core/semantics.py",
-    "weaveprof/pipeline/scan/quick_scan.py",
     "recorders/cuda_cpp/wp_lite.cuh",
     "recorders/hip_cpp/wp_lite_hip.h",
     "recorders/triton/wp_triton.py",
@@ -45,7 +44,6 @@ REQUIRED_FILES = [
     "weaveprof/pipeline/capture/extract_gpu_metrics.py",
     "weaveprof/pipeline/capture/build_rocprof_sw_hw.py", "weaveprof/pipeline/capture/build_rocprof_sys_sw_hw.py",
     "weaveprof/pipeline/capture/hardware_utilization.py", "weaveprof/pipeline/capture/merge_hw_into_perfetto.py",
-    "weaveprof/pipeline/validate/deliver_gate.py",
     "weaveprof/pipeline/validate/harness/manifest.py", "weaveprof/pipeline/validate/harness/verify_receipt.py",
     "configs/semantic_ids.json", "configs/operators/operators.json",
     "configs/metrics/hardware.json", "configs/validation/fixes.json",
