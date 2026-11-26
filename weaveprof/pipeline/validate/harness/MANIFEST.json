@@ -1,5 +1,5 @@
 {
-  "file_count": 325,
+  "file_count": 322,
   "files": {
     "README.md": "4839209f0fc3ac55427b3947c128d4fc4258e3c61ecb960b71bc3fa803b08707",
     "README_EN.md": "ae5b195a2d4625e90f59d971ef50449eb46e7496106de50af9a018b508b65b51",
@@ -252,7 +252,6 @@
     "weaveprof/pipeline/__init__.py": "1da20023978501de70bdf3ecbd04e63a387bd0f2b31f34068acc19b52a75f39c",
     "weaveprof/pipeline/capture/__init__.py": "c3c6ed80cacc23c12d3ab161f2c7e9bed0de33f949cfed68f4f8c72887f03f08",
     "weaveprof/pipeline/capture/auto_gemm.py": "b0811f3d245f39ca3dcf6cd155467191422dbbf99cd01d1f372cc1f88cc18a47",
-    "weaveprof/pipeline/capture/build_hw_perfetto.py": "ff4acc1debb7af81be4b8192e5dc248fdba7b943eefd2589d473c22c8df5c88c",
     "weaveprof/pipeline/capture/build_perfetto.py": "750d5a56a10946c99ddbecdedbbc9c2f703983acdac4e58ba413eaed1b1a7d9e",
     "weaveprof/pipeline/capture/build_rocprof_sw_hw.py": "bb391b55c8d950a1a705950f320a6daf67c23b4b7733cb3cfb5e13ba97ed5aa7",
     "weaveprof/pipeline/capture/build_rocprof_sys_sw_hw.py": "6cdd1b56d1af327b01410777c8e17f90f78e7e9b49cf91d3db66ae73c88293ef",
@@ -313,10 +312,8 @@
     "weaveprof/pipeline/validate/tools/fi_logcheck.py": "901809890140fa44ee486ea951a17363715d38b0dbbbadf3d2711f87aa12aa00",
     "weaveprof/pipeline/validate/tools/fi_merge_perfetto.py": "3ab480ef5098fd6e8cd3f32c8b06e59b3448134489aa87eaebde9556c04e7ae6",
     "weaveprof/pipeline/validate/tools/fi_metric_map.py": "6e23a64b97cb9c72f1a53c1478938b2edce9f3734398ceaae566b919c338c5e3",
-    "weaveprof/pipeline/validate/tools/fi_overview.py": "6dd32b7b14d90e77a11621386ac59070bcaea68093c994652dc6f3f6a6ad3619",
     "weaveprof/pipeline/validate/tools/fi_perfetto_proto.py": "13f74d6cedb9740a23deb82b2cfc80bf812f9383d7152deb4e0dbf7cc64af4d6",
     "weaveprof/pipeline/validate/tools/fi_preflight.py": "35a8e5540014a7ff96edd0326a9d4a96ce640daa4d26aa59f7cd7659eac09b8e",
-    "weaveprof/pipeline/validate/tools/fi_relane.py": "90f01bcd771924c032624c207f84595dad5ae1b03c723639c91d609c690ba754",
     "weaveprof/pipeline/validate/tools/fi_trace_gate.py": "08576b8705c61ffb9e2267c2a0496e68750168f3691666d2ce8ceb3e76939ce8",
     "weaveprof/pipeline/validate/tools/wp_decode.py": "fe93dec2b9c237b7380d60f38806fcda393a375b0b780323d249b89fd57bd1e6",
     "weaveprof/pipeline/validate/validate_all.py": "4d07108ad2f102aba5e142e66934ce4b3f7ae65d0664cf10575d1e20f1bac49e",
@@ -328,7 +325,7 @@
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
   "generated_at_utc": "2026-11-25T14:01:33.962168Z",
-  "root_sha256": "81330b4e17e28f83c136708ffd2dd007ede6ade234c6c6e91712e523aaaba085",
+  "root_sha256": "5c1ce0229da8497967eb1b3bd7547d833bd48f484813c8836b4f02cf3ad0211e",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }
