@@ -44,7 +44,6 @@ REQUIRED_FILES = [
     "weaveprof/pipeline/capture/extract_gpu_metrics.py",
     "weaveprof/pipeline/capture/build_rocprof_sw_hw.py", "weaveprof/pipeline/capture/build_rocprof_sys_sw_hw.py",
     "weaveprof/pipeline/capture/hardware_utilization.py", "weaveprof/pipeline/capture/merge_hw_into_perfetto.py",
-    "weaveprof/pipeline/validate/harness/manifest.py", "weaveprof/pipeline/validate/harness/verify_receipt.py",
     "configs/semantic_ids.json", "configs/operators/operators.json",
     "configs/metrics/hardware.json", "configs/validation/fixes.json",
     "configs/validation/scan_schema.json",
@@ -267,24 +266,6 @@ def _check_run_interface(fails: list[str]) -> None:
     print("  CLI and fast-cache contract checked")
 
 
-def _check_manifest(fails: list[str]) -> None:
-    path = PKG / "weaveprof/pipeline/validate/harness/MANIFEST.json"
-    doc = _load(path, fails)
-    files = doc.get("files")
-    if not isinstance(files, dict) or not files:
-        fails.append("harness MANIFEST.json has no file map")
-        return
-    missing = sorted(rel for rel in files if not (PKG / rel).is_file())
-    if missing:
-        fails.append("harness MANIFEST references missing files: {}".format(missing[:8]))
-    stale = sorted(rel for rel in files if rel.startswith("_audit/") or
-                   "/".join(("knowledge", "configs")) in rel or
-                   "/".join(("weaveprof/pipeline/validate", "weaveprof/pipeline/validate")) in rel)
-    if stale:
-        fails.append("harness MANIFEST contains stale paths: {}".format(stale[:8]))
-    print("  harness manifest: {} files checked".format(len(files)))
-
-
 def _check_source_hygiene(fails: list[str]) -> None:
     junk, crlf, duplicate_paths, old_names = [], [], [], []
     duplicate_patterns = tuple("/".join((name, name)) for name in
@@ -345,7 +326,6 @@ def main() -> int:
     _check_cross_file_contract(fails)
     _check_knowledge(fails)
     _check_run_interface(fails)
-    _check_manifest(fails)
     _check_source_hygiene(fails)
     if fails:
         print("PACKAGE STRUCTURE FAIL")

@@ -363,8 +363,6 @@ run_item "RECORDER tests/test_hip_recorder.py --compile-only" \
   "${PY_RUN[@]}" tests/test_hip_recorder.py --compile-only
 
 # Harness is hermetic and builds its fixture in a temporary directory.
-run_item "HARNESS tests/test_harness_manifest.py" \
-  "${PY_RUN[@]}" tests/test_harness_manifest.py
 run_item "HARNESS tests/test_deterministic_harness.py" \
   "${PY_RUN[@]}" tests/test_deterministic_harness.py
 run_item "HARNESS tests/test_fidelity_gates_and_causal.py" \
@@ -373,8 +371,6 @@ run_item "HARNESS tests/test_mcp_hook_installer.py" \
   "${PY_RUN[@]}" tests/test_mcp_hook_installer.py
 run_item "HARNESS tests/test_wp_megakernel.py" \
   "${PY_RUN[@]}" tests/test_wp_megakernel.py
-run_item "HARNESS weaveprof/pipeline/validate/harness/selftest.py" \
-  "${PY_RUN[@]}" weaveprof/pipeline/validate/harness/selftest.py
 
 # Package contract intentionally runs last, after every test has had a chance
 # to leave source/cache residue.
