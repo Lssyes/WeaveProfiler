@@ -14,7 +14,6 @@ for rel in ("weaveprof/pipeline/validate", "weaveprof/pipeline/scan", "weaveprof
     if path not in sys.path:
         sys.path.insert(0, path)
 
-import build_perfetto  # noqa: E402
 import deliver_gate  # noqa: E402
 import hooklib  # noqa: E402
 import merge_hw_into_perfetto  # noqa: E402
@@ -55,7 +54,6 @@ class FilenameSchemaTests(unittest.TestCase):
             name = BASE.format(card=card)
             for regex in (deliver_gate.CANONICAL_TRACE_FILENAME_RE,
                           verify_receipt.SPEC1, hooklib.SPEC1,
-                          build_perfetto.TRACE_FILENAME_RE,
                           merge_hw_into_perfetto.TRACE_FILENAME_RE):
                 self.assertIsNotNone(regex.match(name), (name, regex.pattern))
             self.assertEqual(deliver_gate.parse_trace_filename(name)["card"], card)
@@ -72,7 +70,6 @@ class FilenameSchemaTests(unittest.TestCase):
         for name in bad_names:
             for regex in (deliver_gate.CANONICAL_TRACE_FILENAME_RE,
                           verify_receipt.SPEC1, hooklib.SPEC1,
-                          build_perfetto.TRACE_FILENAME_RE,
                           merge_hw_into_perfetto.TRACE_FILENAME_RE):
                 self.assertIsNone(regex.match(name), (name, regex.pattern))
             failures, _ = deliver_gate.check_trace_filename_schema(Path(name), contract())
@@ -125,8 +122,6 @@ class TargetCardTests(unittest.TestCase):
     def test_b300_is_not_locked_to_one_architecture(self):
         self.assertEqual(deliver_gate.CARD_TARGETS["b300"]["arches"],
                          frozenset(("sm_100a", "sm_103a")))
-        self.assertEqual(build_perfetto.CARD_TARGETS["b300"]["arches"],
-                         frozenset(("sm_100a", "sm_103a")))
         self.assertEqual(merge_hw_into_perfetto.CARD_TARGETS["b300"]["arches"],
                          frozenset(("sm_100a", "sm_103a")))
 
@@ -175,37 +170,6 @@ class ReconciliationTests(unittest.TestCase):
 
 
 class GeneratorTests(unittest.TestCase):
-    def test_build_perfetto_emits_card_and_both_b300_arches(self):
-        expected = BASE.format(card="h20")
-        self.assertEqual(build_perfetto.build_trace_filename(contract()), expected)
-        for arch in ("sm_100a", "sm_103a"):
-            name = build_perfetto.build_trace_filename(contract("b300", "nv", arch))
-            self.assertEqual(name, BASE.format(card="b300"))
-            self.assertIsNotNone(build_perfetto.TRACE_FILENAME_RE.match(name))
-        name = build_perfetto.build_trace_filename(
-            contract("mi308x", "amd", "gfx942"))
-        self.assertEqual(name, BASE.format(card="mi308x"))
-
-    def test_build_perfetto_rejects_missing_or_conflicting_card(self):
-        missing = contract()
-        missing["target"].pop("card")
-        with self.assertRaises(build_perfetto.EventsSchemaError):
-            build_perfetto.build_trace_filename(missing)
-        with self.assertRaises(build_perfetto.EventsSchemaError):
-            build_perfetto.build_trace_filename(contract("b300", "nv", "sm_90"))
-
-    def test_build_perfetto_explicit_trace_names_are_strict(self):
-        good = Path(BASE.format(card="h20"))
-        build_perfetto.validate_explicit_trace_filename(good, contract())
-        old = Path(BASE.format(card="h20").replace("__card-h20", ""))
-        with self.assertRaises(build_perfetto.EventsSchemaError):
-            build_perfetto.validate_explicit_trace_filename(old, contract())
-        with self.assertRaises(build_perfetto.EventsSchemaError):
-            build_perfetto.validate_explicit_trace_filename(good, None)
-        wrong = Path(BASE.format(card="mi308x"))
-        with self.assertRaises(build_perfetto.EventsSchemaError):
-            build_perfetto.validate_explicit_trace_filename(wrong, contract())
-
     def test_merge_inherits_card_and_rejects_legacy_names(self):
         for card in ("h20", "b300", "mi308x", "sm86"):
             sw_name = BASE.format(card=card)

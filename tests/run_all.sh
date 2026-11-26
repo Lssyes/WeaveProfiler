@@ -341,8 +341,6 @@ run_item "VALIDATE tests/test_correctness_contract.py" \
   "${PY_RUN[@]}" tests/test_correctness_contract.py
 run_item "CAPTURE tests/test_hardware_utilization.py" \
   "${PY_RUN[@]}" tests/test_hardware_utilization.py
-run_item "CAPTURE tests/test_export_perfetto_native.py" \
-  "${PY_RUN[@]}" tests/test_export_perfetto_native.py
 run_item "CAPTURE tests/test_build_rocprof_sw_hw.py" \
   "${PY_RUN[@]}" tests/test_build_rocprof_sw_hw.py
 run_item "CAPTURE tests/test_build_rocprof_sys_sw_hw.py" \

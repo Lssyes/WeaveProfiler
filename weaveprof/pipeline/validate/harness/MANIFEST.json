@@ -1,5 +1,5 @@
 {
-  "file_count": 299,
+  "file_count": 295,
   "files": {
     "README.md": "4839209f0fc3ac55427b3947c128d4fc4258e3c61ecb960b71bc3fa803b08707",
     "README_EN.md": "ae5b195a2d4625e90f59d971ef50449eb46e7496106de50af9a018b508b65b51",
@@ -198,7 +198,6 @@
     "tests/test_correctness_contract.py": "4bf1837a744514676bc1138593efa54e58154caec050dc7171e06e0845d39c04",
     "tests/test_cute_recorder.py": "231a5901baa199af182c872463db69aca36f8ee659669c41dbb3583f57b606b0",
     "tests/test_deterministic_harness.py": "4f074f0e3f51b39b17f111b9d155579ed728d211af09f45f5366f849b9657418",
-    "tests/test_export_perfetto_native.py": "602ea2d2a03005ed2845a285e56899c8c614caa1c8d5aaa1840f4ff748d4aa1f",
     "tests/test_fidelity_gates_and_causal.py": "50b6cd2970a7920bc97dc05d4afb456575a216fdae08122f3005d933dff8a8c9",
     "tests/test_gemm_probe_unit.py": "5ff5bf8f456541fddb1b69b7e10ded398af706808c875624c88b0f344da570e4",
     "tests/test_hardware_utilization.py": "0171c64386fa639673169f5035618532932bc16cf8ae666d7e314de7b1b54405",
@@ -243,13 +242,10 @@
     "weaveprof/pipeline/__init__.py": "1da20023978501de70bdf3ecbd04e63a387bd0f2b31f34068acc19b52a75f39c",
     "weaveprof/pipeline/capture/__init__.py": "c3c6ed80cacc23c12d3ab161f2c7e9bed0de33f949cfed68f4f8c72887f03f08",
     "weaveprof/pipeline/capture/auto_gemm.py": "b0811f3d245f39ca3dcf6cd155467191422dbbf99cd01d1f372cc1f88cc18a47",
-    "weaveprof/pipeline/capture/build_perfetto.py": "750d5a56a10946c99ddbecdedbbc9c2f703983acdac4e58ba413eaed1b1a7d9e",
     "weaveprof/pipeline/capture/build_rocprof_sw_hw.py": "bb391b55c8d950a1a705950f320a6daf67c23b4b7733cb3cfb5e13ba97ed5aa7",
     "weaveprof/pipeline/capture/build_rocprof_sys_sw_hw.py": "6cdd1b56d1af327b01410777c8e17f90f78e7e9b49cf91d3db66ae73c88293ef",
     "weaveprof/pipeline/capture/capture_nsys.py": "0938e773525f87ba5e2a4241d4e26cad0174f1f0f7cf79847114f4ca4f264a25",
     "weaveprof/pipeline/capture/capture_rocm.py": "400f07c1ecbd4275635bf674fa37f851b4f2a3192184fc5f950ef9a61e3341f9",
-    "weaveprof/pipeline/capture/capture_scope.py": "82cc015c5001cdc433701ffff19edf497422ac5be8ffcebc0e23b5b9170cd61b",
-    "weaveprof/pipeline/capture/export_perfetto_native.py": "3c0fe1c9be6134bac277c817bc3eeef42b09abdbfdca01b2402a650f0531ef04",
     "weaveprof/pipeline/capture/extract_gpu_metrics.py": "90c98817df5c24746ba52ab3fb044153cd12dc0da9147815b53e7d7845853873",
     "weaveprof/pipeline/capture/gemm_probe.py": "b3c046664b76ce7567d7c80f8a6a7eac68f292b270f733e514bf05b7c9770501",
     "weaveprof/pipeline/capture/hardware_utilization.py": "4c4266f88ae1d7af21eca3aedc0b5036268b8d807aa46ca7c6c1ba69ae6b7107",
@@ -302,7 +298,7 @@
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
   "generated_at_utc": "2026-11-25T14:01:33.962168Z",
-  "root_sha256": "450206696fc431951f75bca4207f46d3ee91c044a8f9fb646693b0e426121068",
+  "root_sha256": "a86cfb96a946b99eaa63dc5bc96983711ec7cf01201b7c84892331e7dd255600",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }
