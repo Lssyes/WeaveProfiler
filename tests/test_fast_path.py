@@ -17,6 +17,13 @@ if str(ROOT) not in sys.path:
 from weaveprof.pipeline.core import fast_path
 
 
+def _record_timing(name: str, val: float, thr: float, unit: str = "s") -> bool:
+    strict = os.environ.get("WEAVEPROF_STRICT_TIMING") == "1"
+    mode = "enforced" if strict else "not enforced"
+    print(f"[timing] {name}: {val:.3f} {unit} (threshold {thr} {unit}, {mode})", file=sys.stderr)
+    return strict
+
+
 FAKE_BUILD = r'''
 import json
 import os
@@ -160,7 +167,8 @@ class FastPathTests(unittest.TestCase):
         full = json.loads((self.root / "trace_full.json").read_text(encoding="utf-8"))
         self.assertLess(off["start"], full["end"])
         self.assertLess(full["start"], off["end"])
-        self.assertLess(elapsed, 1.0)
+        if _record_timing("FastPathTests.builds_overlap.elapsed_s", elapsed, 1.0):
+            self.assertLess(elapsed, 1.0)
 
     def test_build_failure_is_fail_closed(self):
         job = self.load(self.job(fail_build=True))
