@@ -1,5 +1,5 @@
 {
-  "file_count": 312,
+  "file_count": 307,
   "files": {
     "README.md": "4839209f0fc3ac55427b3947c128d4fc4258e3c61ecb960b71bc3fa803b08707",
     "README_EN.md": "ae5b195a2d4625e90f59d971ef50449eb46e7496106de50af9a018b508b65b51",
@@ -190,7 +190,6 @@
     "tests/quick_scan_registry_test.py": "6aa26d710c93c90d193a0f65989ce57ce531ef6b5716f51d38d7624e9a283fcc",
     "tests/run_all.sh": "5b7eac3453f2290931b0ac8e1b00a37dc943387eed228d91f6086ad3fd44a3b0",
     "tests/semantic_kb_test.py": "17e750eb79b079af71f2703c92cd88582f85540804a2fda24cf60ba0d7c07881",
-    "tests/test_apply_plan.py": "e5e8671dbef8a7f0b54cd9a56c1939ff78dddf72320089a01db075757d2ef3a2",
     "tests/test_build_rocprof_sw_hw.py": "2d1f82ba2fed9e4fcfb617bb4a950265324ba75ac258de71619d681cd78eb6d0",
     "tests/test_build_rocprof_sys_sw_hw.py": "09c3d034b67152fc31d0bc16b125d84aecc89b9be564c0ce9150c8a55bce0008",
     "tests/test_capture_nsys_contract.py": "da20341b3fc89a7f7443e9fb4f8ce262a48693ee8c8e5a08b38e579e9db44517",
@@ -205,7 +204,6 @@
     "tests/test_fi_delivery_gate.py": "87c622684be3042dd21777a55677eec3d4d3247dd4805afcea8777a1cbebbba8",
     "tests/test_fidelity_gates_and_causal.py": "50b6cd2970a7920bc97dc05d4afb456575a216fdae08122f3005d933dff8a8c9",
     "tests/test_gemm_probe_unit.py": "5ff5bf8f456541fddb1b69b7e10ded398af706808c875624c88b0f344da570e4",
-    "tests/test_generate_edits.py": "8100739c79387498450cb96d0813fe28122b6ca765e7f0dbc4cbca96e08fbbdd",
     "tests/test_hardware_utilization.py": "0171c64386fa639673169f5035618532932bc16cf8ae666d7e314de7b1b54405",
     "tests/test_harness_manifest.py": "09dec0238dd1c01b36fedac0b26134750d79665ea6e86675f8bbdfff0a2d2b55",
     "tests/test_hip_recorder.py": "780736af29c61ac2ab77c8b5ef504977e3ed8a7e270db72c649040d89be17640",
@@ -216,7 +214,6 @@
     "tests/test_rocprof_sys_adapter.py": "ae1ff94ffca94b48dcecbd4b69f8472e1c48f3486a2a2b9c4a29d1006a80a415",
     "tests/test_run_cli.py": "36feaeb1903f9d297ab811f90ffa2482cbe20184e33df29c870a8d72b620bf98",
     "tests/test_scan_contract.py": "87d8d189faf1581814bcb6b00b41fbf62792a3c72440f5fcb6efa6161f956473",
-    "tests/test_selection_roundtrip.py": "fd7c700c122c49aff248fed3bc9d143561224a65eec70ef959c2ef82fe8c5d49",
     "tests/test_trace_processor_fallback.py": "84db9018f3ed4d3f81a3386219af210d3c9904b72cc6a905634c909e89b0bde8",
     "tests/test_triton_amdgcn_async.py": "04a512ddcac1bdbd21bc186b19c3393223fa9e5b08178d16feaa7551f7eaed1a",
     "tests/test_triton_recorder.py": "db0057f15b8573e038ada7efd83348555055c1e99219913d558bdd0de682c0ab",
@@ -266,8 +263,6 @@
     "weaveprof/pipeline/core/semantics.py": "5912463c17a488564016165455e0bef2ffc502e045a68b15c14e7da0a5362a78",
     "weaveprof/pipeline/core/verify.py": "b510d2c3a4d8636c608a2fa34342f408eea71aee177e879c0baaa9be1e773038",
     "weaveprof/pipeline/instrument/__init__.py": "c3c6ed80cacc23c12d3ab161f2c7e9bed0de33f949cfed68f4f8c72887f03f08",
-    "weaveprof/pipeline/instrument/apply_plan.py": "76157466fa7f4fedf9ab6b62fec03cf3d31d30e63aafae31c6080fed548c1ec9",
-    "weaveprof/pipeline/instrument/generate_edits.py": "984f940a49d38b0d75eed8492ee86afce2a1ec97d1dc945e9336653a49ee69b3",
     "weaveprof/pipeline/instrument/incremental_reuse.py": "c240495370609138fc6436e3885d356dbb8d97cea0f0e1a387c06ecfec24be57",
     "weaveprof/pipeline/instrument/rule_engine.py": "abd02eedeac6d2fc303aa6d0f0af4a3d944ec5983deb4df064ec6144397a90a6",
     "weaveprof/pipeline/instrument/triton_amdgcn_async.py": "c014015e5cec9c57eda6a620026d81d71454df74a355bc397f73eb0a9cfdbbbd",
@@ -315,7 +310,7 @@
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
   "generated_at_utc": "2026-11-25T14:01:33.962168Z",
-  "root_sha256": "eb8cf2fec46e4fccb3b98eb444ba2931eef693cb11f97a097518250ae90ac47d",
+  "root_sha256": "2467406cdfb52a693f83c166c58fe45e5f89ca6e35f631086b85f148907618ee",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }

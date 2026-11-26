@@ -30,7 +30,6 @@ REQUIRED_FILES = [
     "weaveprof/__init__.py", "weaveprof/__main__.py", "weaveprof/replay.py",
     "run.py", "weaveprof/pipeline/core/registry.py", "weaveprof/pipeline/core/semantics.py",
     "weaveprof/pipeline/scan/quick_scan.py",
-    "weaveprof/pipeline/instrument/apply_plan.py", "weaveprof/pipeline/instrument/generate_edits.py",
     "recorders/cuda_cpp/wp_lite.cuh",
     "recorders/hip_cpp/wp_lite_hip.h",
     "recorders/triton/wp_triton.py",
@@ -74,7 +73,7 @@ LANGUAGE_FILES = [
 CURVES = {"compute_util", "memory_util", "communication_util", "sm_active"}
 CHECKS = {"correctness", "overhead", "assembly_change_rate", "alignment",
           "buffer_completeness", "overflow"}
-REQUIRED_COMMANDS = {"instrument", "capture", "gemm-probe"}
+REQUIRED_COMMANDS = {"capture", "gemm-probe"}
 LINK_RX = re.compile(r"\[[^\]]+\]\(([^)#]+)(?:#[^)]+)?\)")
 PATH_REF_RX = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|cuh|h|cpp|cu|json|sh|md|config))`")
 

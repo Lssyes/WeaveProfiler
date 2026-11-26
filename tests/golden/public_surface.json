@@ -282,7 +282,6 @@
  "run_py_commands": [
   "agent-status",
   "auto-gemm",
-  "auto-profile",
   "capture",
   "causal",
   "doctor",
@@ -290,7 +289,6 @@
   "guard-exec",
   "identify",
   "install-agent",
-  "instrument",
   "locate",
   "mcp-server",
   "probe-inject",
