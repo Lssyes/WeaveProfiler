@@ -33,3 +33,22 @@ jobs:
         run: python -B -m unittest -v tests/golden/test_wpprofile_replay.py
       - name: legacy offline suite (known failures allowed)
         run: PYTHON=python bash tests/ci_offline.sh
+  characterization:
+    name: characterization (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: install
+        run: python -m pip install "numpy>=1.24" "matplotlib>=3.7" "perfetto>=0.59,<1" "coverage>=7"
+      - name: characterization tests
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/charz-mpl
+          XDG_CACHE_HOME: ${{ runner.temp }}/charz-xdg
+        run: python -B -m unittest discover -s tests/characterization -v
