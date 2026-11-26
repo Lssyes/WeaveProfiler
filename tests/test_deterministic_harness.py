@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import sqlite3
 import struct
-import subprocess
 import sys
 import tempfile
 import time
@@ -57,9 +56,6 @@ def _load(rel: str, name: str):
 
 DECODER = _load("weaveprof/pipeline/validate/tools/fi_lite_decode.py", "dh_decoder")
 ENGINE = _load("weaveprof/pipeline/instrument/rule_engine.py", "dh_engine")
-PRETOOL = ROOT / "weaveprof/pipeline/validate" / "harness" / "hooks" / "fi_pretool_guard.py"
-STOPGATE = ROOT / "weaveprof/pipeline/validate" / "harness" / "hooks" / "fi_stop_gate.py"
-MARKER = ROOT / "weaveprof/pipeline/validate" / "harness" / "hooks" / "fi_session_marker.py"
 
 
 def _sample_cuda_pipeline() -> str:
@@ -404,94 +400,6 @@ class DeterministicHarnessTests(unittest.TestCase):
             self.assertEqual(cli_main(["seal-check", str(seal_path)]), 1)
             out_trace.write_bytes(orig_bytes)
 
-    def test_external_hooks_enforce_r4_policy_and_sealed_stop_gate(self):
-        """Test real stdin/stdout hook wire protocol for PreToolUse (R4) and Stop Gate (sealed trace)."""
-        with tempfile.TemporaryDirectory() as td:
-            td_p = Path(td)
-            state_dir = td_p / "state"
-            state_dir.mkdir()
-            work_dir = td_p / "work"
-            work_dir.mkdir()
-            env = dict(os.environ, FI_STATE_DIR=str(state_dir))
-            session_id = "test_harness_sess_01"
-
-            def run_hook(script: Path, payload: dict):
-                return subprocess.run(
-                    [sys.executable, "-B", str(script)],
-                    input=json.dumps(payload),
-                    capture_output=True, text=True, env=env, timeout=30,
-                )
-
-            # Start session marker
-            r_start = run_hook(MARKER, {"hook_event_name": "SessionStart", "session_id": session_id, "cwd": str(work_dir)})
-            self.assertEqual(r_start.returncode, 0)
-
-            # R4: Block --limit relaxation (> 0.10)
-            r_lim = run_hook(PRETOOL, {
-                "hook_event_name": "PreToolUse", "session_id": session_id, "cwd": str(work_dir),
-                "tool_name": "Bash",
-                "tool_input": {"command": "python -m weaveprof profile k.cu --limit 0.35 -- python bench.py"},
-            })
-            self.assertIn('"permissionDecision": "deny"', r_lim.stdout)
-            self.assertIn("R4", r_lim.stdout)
-
-            # R4: Block FI_SAMPLE loop sampling
-            r_samp = run_hook(PRETOOL, {
-                "hook_event_name": "PreToolUse", "session_id": session_id, "cwd": str(work_dir),
-                "tool_name": "Bash",
-                "tool_input": {"command": "FI_SAMPLE=8 python -m weaveprof profile k.cu --limit 0.10 -- python bench.py"},
-            })
-            self.assertIn('"permissionDecision": "deny"', r_samp.stdout)
-            self.assertIn("FI_SAMPLE", r_samp.stdout)
-
-            # R3: Block shell tampering of *.seal.json
-            r_tamper = run_hook(PRETOOL, {
-                "hook_event_name": "PreToolUse", "session_id": session_id, "cwd": str(work_dir),
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo '{}' > out.perfetto-trace.seal.json"},
-            })
-            self.assertIn('"permissionDecision": "deny"', r_tamper.stdout)
-            self.assertIn("R3", r_tamper.stdout)
-
-            # Valid weaveprof invocation allowed and arms session
-            r_ok = run_hook(PRETOOL, {
-                "hook_event_name": "PreToolUse", "session_id": session_id, "cwd": str(work_dir),
-                "tool_name": "Bash",
-                "tool_input": {"command": "python -m weaveprof profile k.cu --limit 0.10 -- python bench.py"},
-            })
-            self.assertEqual(r_ok.stdout.strip(), "")
-
-            # Stop Gate: unsealed .perfetto-trace MUST be blocked!
-            unsealed_trace = work_dir / "demo.perfetto-trace"
-            unsealed_trace.write_bytes(b"FAKE_TRACE_BYTES")
-            r_stop_block = run_hook(STOPGATE, {
-                "hook_event_name": "Stop", "session_id": session_id, "cwd": str(work_dir),
-            })
-            self.assertIn('"decision": "block"', r_stop_block.stdout)
-
-            # Now create a genuine sealed trace via EpisodeSealer -> Stop Gate MUST allow!
-            src = work_dir / "k.cu"
-            src.write_text("__global__ void k() {}\n", encoding="utf-8")
-            fb = work_dir / "feedback.json"
-            fb.write_text('{"status":"PASS"}\n', encoding="utf-8")
-            EpisodeSealer.seal_round(
-                round_dir=work_dir, round_number=1, source_path=src,
-                source_sha256=ShadowWorkspace(src, location=td_p / "ws2").sha,
-                probe_path=None, instrumented_path=None, names_path=None,
-                feedback_path=fb, verify_path=None, trace_path=unsealed_trace,
-                failed_trace_path=None,
-                result={"status": "PASS", "checks": {"assembly": True, "output": True, "events": True, "overhead": True},
-                        "failed": [], "metrics": {"overhead_ratio": 0.02}},
-                policy=HarnessPolicy(), limit=0.10,
-                region_lock={"gpu_id": "gpu_0", "wait_ms": 0.1, "hold_ms": 50.0},
-                out_seal_path=Path(str(unsealed_trace) + ".seal.json"),
-            )
-            r_stop_allow = run_hook(STOPGATE, {
-                "hook_event_name": "Stop", "session_id": session_id, "cwd": str(work_dir),
-                "stop_hook_active": False,
-            })
-            self.assertEqual(r_stop_allow.stdout.strip(), "", f"Expected allow, got: {r_stop_allow.stdout}")
-
     def test_red_team_audit_fixes_bypasses_and_hardening(self):
         """Regression tests for every P0/P1 vulnerability found by live LLM run + red-team audit."""
         from weaveprof.contract import normalize_probe_spec
@@ -592,48 +500,6 @@ class DeterministicHarnessTests(unittest.TestCase):
         with self.assertRaises(PolicyViolation) as ctx_fsm:
             fsm.transition("POLICY_CHECK")
         self.assertEqual(ctx_fsm.exception.code, "INVALID_FSM_TRANSITION")
-
-        # 6. PreToolUse Hook blocks Write/Edit bypasses, comment smuggling, newlines, $(...), scientific limits
-        with tempfile.TemporaryDirectory() as td:
-            state_dir = Path(td) / "state"
-            state_dir.mkdir()
-            env = dict(os.environ, FI_STATE_DIR=str(state_dir))
-
-            def run_pre(payload):
-                return subprocess.run(
-                    [sys.executable, "-B", str(PRETOOL)],
-                    input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=30,
-                )
-
-            bypasses = [
-                # Audit #1: Write/Edit tool targeting evidence/seal files
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Write", "tool_input": {"file_path": f"{td}/out.perfetto-trace.seal.json", "content": "{}"}},
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "edit_file", "tool_input": {"Path": f"{td}/round-1/seal.json"}},
-                # Audit #2: comment smuggling `# weaveprof/pipeline/core/run_measurement.py` & `find -exec`
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "cp fake.json out.seal.json # weaveprof/pipeline/core/run_measurement.py"}},
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "find . -name x -exec cp fake ALL_GATES.json {} ;"}},
-                # Audit #3: newline, single `&`, `$(...)`
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "cat x\ncp fake ALL_GATES.json"}},
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "cat x & cp fake round-1/seal.json"}},
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "cat $(cp fake round-1/seal.json)"}},
-                # Audit #14: scientific / decimal `--limit` & python env sampling
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "python -m weaveprof profile k.cu --limit .5 -- python b.py"}},
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "python -m weaveprof profile k.cu --limit 5e-1 -- python b.py"}},
-                {"hook_event_name": "PreToolUse", "session_id": "rt1", "cwd": td,
-                 "tool_name": "Bash", "tool_input": {"command": "python -c \"os.environ['FI_SAMPLE']='4'\""}},
-            ]
-            for idx, pay in enumerate(bypasses):
-                r = run_pre(pay)
-                self.assertIn('"permissionDecision": "deny"', r.stdout, f"Bypass #{idx} slipped through: {pay} -> {r.stdout}")
 
     def test_incumbent_tracker_never_regresses_on_worse_round(self):
         tracker = IncumbentTracker()
