@@ -339,8 +339,6 @@ run_item "CAPTURE tests/test_capture_rocm_paths_heartbeat.py" \
 # Capture, correctness, and delivery contracts.
 run_item "VALIDATE tests/test_correctness_contract.py" \
   "${PY_RUN[@]}" tests/test_correctness_contract.py
-run_item "VALIDATE tests/test_fi_delivery_gate.py" \
-  "${PY_RUN[@]}" tests/test_fi_delivery_gate.py
 run_item "CAPTURE tests/test_hardware_utilization.py" \
   "${PY_RUN[@]}" tests/test_hardware_utilization.py
 run_item "CAPTURE tests/test_export_perfetto_native.py" \
@@ -361,21 +359,12 @@ run_item "ALIGN weaveprof/pipeline/validate/tools/fi_align_nsys.py --selftest" \
   "${PY_RUN[@]}" weaveprof/pipeline/validate/tools/fi_align_nsys.py --selftest
 run_item "GATE weaveprof/pipeline/validate/tools/fi_trace_gate.py --selftest" \
   "${PY_RUN[@]}" weaveprof/pipeline/validate/tools/fi_trace_gate.py --selftest
-run_item "ANALYSIS tests/amd_c1_regression.py" \
-  "${PY_RUN[@]}" tests/amd_c1_regression.py
 run_item "RECORDER tests/frontend_api_check.py" \
   "${PY_RUN[@]}" tests/frontend_api_check.py
 run_item "RECORDER tests/test_hip_recorder.py --compile-only" \
   "${PY_RUN[@]}" tests/test_hip_recorder.py --compile-only
 run_item "ROUTE tests/quick_scan_registry_test.py" \
   "${PY_RUN[@]}" tests/quick_scan_registry_test.py
-
-if [ -n "$PY_NUM" ]; then
-  run_item "VALIDATE tests/c2_compare_check.py" \
-    "$PY_NUM_LAUNCH" -I -B tests/c2_compare_check.py
-else
-  skip_item "VALIDATE tests/c2_compare_check.py（缺 numpy）"
-fi
 
 # Harness is hermetic and builds its fixture in a temporary directory.
 run_item "HARNESS tests/test_harness_manifest.py" \

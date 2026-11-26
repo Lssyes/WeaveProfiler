@@ -1,5 +1,5 @@
 {
-  "file_count": 307,
+  "file_count": 299,
   "files": {
     "README.md": "4839209f0fc3ac55427b3947c128d4fc4258e3c61ecb960b71bc3fa803b08707",
     "README_EN.md": "ae5b195a2d4625e90f59d971ef50449eb46e7496106de50af9a018b508b65b51",
@@ -175,8 +175,6 @@
     "recorders/triton/wp_triton.py": "3b6473f01f8ba4d0604c9f4229a651d09554bb5c1d76f5081c3d6d7b45c98093",
     "recorders/triton/wp_triton_amd.py": "6181f884ebbb3d638768cfeb4bf7323b84bd18aa99426163fae4a81d181d0e1e",
     "run.py": "2756f0fbc8731fa959d4e9c0a940405406792db1b10db1180225867ae54755b9",
-    "tests/amd_c1_regression.py": "5f12b6f75959235fdf3f79c8cf87ef364df5baf55baca1537eca1a49b86f3966",
-    "tests/c2_compare_check.py": "1187188aefa5de8f3bcda05441d84d9cb9a312ec2e13983180ccb28155161930",
     "tests/cases/amd_mi308x_resource_profiles.json": "b4e55673873c6fbaf5e6b9ebe2050fe788d24d509ed1af03dbe675dc684da21e",
     "tests/decode_roundtrip.py": "6f5873ac8d2818beddab2eae93dd1d6375293aeaea3f7ea84f5ec04e47351298",
     "tests/fixtures/paper_v3_h20/cuda_bench.py": "4d7d1f68ce253549477e6b9a9372c1e2646ca7025238ae37d4e9154d9dd3501f",
@@ -201,7 +199,6 @@
     "tests/test_cute_recorder.py": "231a5901baa199af182c872463db69aca36f8ee659669c41dbb3583f57b606b0",
     "tests/test_deterministic_harness.py": "4f074f0e3f51b39b17f111b9d155579ed728d211af09f45f5366f849b9657418",
     "tests/test_export_perfetto_native.py": "602ea2d2a03005ed2845a285e56899c8c614caa1c8d5aaa1840f4ff748d4aa1f",
-    "tests/test_fi_delivery_gate.py": "87c622684be3042dd21777a55677eec3d4d3247dd4805afcea8777a1cbebbba8",
     "tests/test_fidelity_gates_and_causal.py": "50b6cd2970a7920bc97dc05d4afb456575a216fdae08122f3005d933dff8a8c9",
     "tests/test_gemm_probe_unit.py": "5ff5bf8f456541fddb1b69b7e10ded398af706808c875624c88b0f344da570e4",
     "tests/test_hardware_utilization.py": "0171c64386fa639673169f5035618532932bc16cf8ae666d7e314de7b1b54405",
@@ -289,18 +286,13 @@
     "weaveprof/pipeline/validate/harness/verify_receipt.py": "18bb9ec90c229a56a5328a75f5f1e2200f5e7635b9131bbe043cf36315a47d54",
     "weaveprof/pipeline/validate/tools/__init__.py": "c3c6ed80cacc23c12d3ab161f2c7e9bed0de33f949cfed68f4f8c72887f03f08",
     "weaveprof/pipeline/validate/tools/fi_align_nsys.py": "749cf965d1c8f8a102cc0ce593bd46eae30f9305d54b79b58b9452f3a05e13cd",
-    "weaveprof/pipeline/validate/tools/fi_align_rocprof.py": "3920aeeca91b479586749a5deb2710e60c7ebf2cfbcab1d16e4093d2e7ce7f1b",
     "weaveprof/pipeline/validate/tools/fi_attrib.py": "4ee71569ab93388edb0ce11a91b19c1b3aad4fa803aace49c6268530ac809153",
     "weaveprof/pipeline/validate/tools/fi_binsim.py": "27b9ed22841668c989e6c8502b293cd63d30e749a2927dd106cc3aed9e855998",
     "weaveprof/pipeline/validate/tools/fi_binsim_hip.py": "5f90ceb2d06b20065db06b0d8eadca0ece80ef8dff9db8a5fbb6691d4886ddd2",
-    "weaveprof/pipeline/validate/tools/fi_binsim_triton.py": "8447e20f59721d985d5578c7c8116ac5514460423e9242be8e46037f15eae033",
-    "weaveprof/pipeline/validate/tools/fi_check.py": "7a4894028d8f7004d7c22c224d9fa17100e752c19dc9194b823e4e8511454c0c",
     "weaveprof/pipeline/validate/tools/fi_lite_decode.py": "7cab1861f2e3917b84a5014c08ea1c3f397802bf5aa248a9a674892e4e34804c",
-    "weaveprof/pipeline/validate/tools/fi_logcheck.py": "901809890140fa44ee486ea951a17363715d38b0dbbbadf3d2711f87aa12aa00",
     "weaveprof/pipeline/validate/tools/fi_merge_perfetto.py": "3ab480ef5098fd6e8cd3f32c8b06e59b3448134489aa87eaebde9556c04e7ae6",
     "weaveprof/pipeline/validate/tools/fi_metric_map.py": "6e23a64b97cb9c72f1a53c1478938b2edce9f3734398ceaae566b919c338c5e3",
     "weaveprof/pipeline/validate/tools/fi_perfetto_proto.py": "13f74d6cedb9740a23deb82b2cfc80bf812f9383d7152deb4e0dbf7cc64af4d6",
-    "weaveprof/pipeline/validate/tools/fi_preflight.py": "35a8e5540014a7ff96edd0326a9d4a96ce640daa4d26aa59f7cd7659eac09b8e",
     "weaveprof/pipeline/validate/tools/fi_trace_gate.py": "08576b8705c61ffb9e2267c2a0496e68750168f3691666d2ce8ceb3e76939ce8",
     "weaveprof/pipeline/validate/tools/wp_decode.py": "fe93dec2b9c237b7380d60f38806fcda393a375b0b780323d249b89fd57bd1e6",
     "weaveprof/pipeline/validate/validate_capability.py": "4f79d319d9210cb615d409e4b54f36743554636619d298b1f34681b87ffa5214",
@@ -310,7 +302,7 @@
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
   "generated_at_utc": "2026-11-25T14:01:33.962168Z",
-  "root_sha256": "2467406cdfb52a693f83c166c58fe45e5f89ca6e35f631086b85f148907618ee",
+  "root_sha256": "450206696fc431951f75bca4207f46d3ee91c044a8f9fb646693b0e426121068",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }
