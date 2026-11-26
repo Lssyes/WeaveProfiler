@@ -1,5 +1,5 @@
 {
-  "file_count": 322,
+  "file_count": 320,
   "files": {
     "README.md": "4839209f0fc3ac55427b3947c128d4fc4258e3c61ecb960b71bc3fa803b08707",
     "README_EN.md": "ae5b195a2d4625e90f59d971ef50449eb46e7496106de50af9a018b508b65b51",
@@ -202,7 +202,6 @@
     "tests/test_cute_recorder.py": "231a5901baa199af182c872463db69aca36f8ee659669c41dbb3583f57b606b0",
     "tests/test_deterministic_harness.py": "4f074f0e3f51b39b17f111b9d155579ed728d211af09f45f5366f849b9657418",
     "tests/test_export_perfetto_native.py": "602ea2d2a03005ed2845a285e56899c8c614caa1c8d5aaa1840f4ff748d4aa1f",
-    "tests/test_fast_path.py": "149f5f0a30e0fa0181c7eae526fe863148a434cb3b66b60af4b9e79d8b9f68b9",
     "tests/test_fast_scan.py": "497387a5cb173d359eb23ab20d7db17bf4b968eaf738c66e1e28117f0c956fae",
     "tests/test_fi_delivery_gate.py": "87c622684be3042dd21777a55677eec3d4d3247dd4805afcea8777a1cbebbba8",
     "tests/test_fidelity_gates_and_causal.py": "50b6cd2970a7920bc97dc05d4afb456575a216fdae08122f3005d933dff8a8c9",
@@ -265,7 +264,6 @@
     "weaveprof/pipeline/capture/merge_hw_into_perfetto.py": "388330f532c1755f2623ad3bbf9dde00e4926b6403aa92adbef81ad088831206",
     "weaveprof/pipeline/capture/rocprof_sys_adapter.py": "71e5417265dd2475a92aea02c03a54d11ebc3ca5e897939cd8f76c961d2dfdfe",
     "weaveprof/pipeline/core/__init__.py": "b6c525b2b0b00397a23d568f3a15921cbd27fff971d33249ffd6fb30927da995",
-    "weaveprof/pipeline/core/fast_path.py": "008e23e2a58325071bd1f156beeff825bf6c449ba4e6ff023c811a40e316c030",
     "weaveprof/pipeline/core/registry.py": "09e559da6c6fba592d0f6eb297b827f8e50b95606a50f3d53c8455702fbfcb42",
     "weaveprof/pipeline/core/run_measurement.py": "4719bd6b6e286636138fbfd5c9b8fe9f1adef727e5686e7940e67c249d542b8f",
     "weaveprof/pipeline/core/semantics.py": "5912463c17a488564016165455e0bef2ffc502e045a68b15c14e7da0a5362a78",
@@ -325,7 +323,7 @@
     "weaveprof/workspace.py": "b731f740eaecf6b20b391546987afb8bd9beb3eaaa9039cfbaf3a2f421b69f7e"
   },
   "generated_at_utc": "2026-11-25T14:01:33.962168Z",
-  "root_sha256": "5c1ce0229da8497967eb1b3bd7547d833bd48f484813c8836b4f02cf3ad0211e",
+  "root_sha256": "d9d3215e312f7a383cf583825a6453f084e9a9c7bb9978743024c40d1f68bcc1",
   "schema_version": "skill_manifest.v1",
   "skill_root": "."
 }

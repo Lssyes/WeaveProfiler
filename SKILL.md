@@ -110,13 +110,11 @@ python3 -B run.py instrument --scan SCAN --selection SELECTION --plan EDITS [--a
 python3 -B run.py capture --card h20|b300|mi308x|sm86 [--arch A] --project P --out RUN [--collector auto|nsys|rocprof-sys|rocprofv3] [--deadline ISO8601_UTC] [--heartbeat PATH] --payload CMD [ARG...]
 python3 -B run.py validate --run-dir RUN [--trace TRACE]
 python3 -B run.py check --run-dir RUN
-python3 -B run.py fast --job JOB [--out FAST] [--no-smoke]
 python3 -B run.py deliver --contract CONTRACT --run-dir RUN --trace-processor TRACE_PROCESSOR [--resume] [--inherit OLD_RUN]
 python3 -B run.py gemm-probe --card h20 --arch sm_90 --profile full|quick [--shape MxNxK] --gpu auto --out RUN --deadline-sec 1800 [--trace-processor PATH]
-python3 -B run.py template
 ```
 
-B300 commands must pass the exact `--arch`; H20 and MI308X may omit it when `--card` resolves one architecture. Repeat `--source`/`--glob` to select multiple inputs. All staged and agent commands route through `run.py` (18 registered subcommands); without `--apply`, `instrument` emits and checks a SHA-bound plan without changing source. `template` returns starter JSON for every public mode, with `fast` as the default. `check` is only a quick check and never issues a receipt; only `deliver` can complete delivery evidence.
+B300 commands must pass the exact `--arch`; H20 and MI308X may omit it when `--card` resolves one architecture. Repeat `--source`/`--glob` to select multiple inputs. All staged and agent commands route through `run.py` (24 registered subcommands); without `--apply`, `instrument` emits and checks a SHA-bound plan without changing source. `check` is only a quick check and never issues a receipt; only `deliver` can complete delivery evidence.
 
 ## GEMM probe fast path
 

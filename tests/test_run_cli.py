@@ -18,8 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / "run.py"
 SEMANTICS = ROOT / "weaveprof/pipeline/core/semantics.py"
 
-TEMPLATE_MODES = ("scan", "instrument", "capture", "validate", "check", "deliver", "gemm-probe")
-
 KERNEL_SOURCE = '''import triton
 import triton.language as tl
 
@@ -93,22 +91,6 @@ class RunCliTest(unittest.TestCase):
 
     def assert_success(self, completed: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(0, completed.returncode, self.command_diagnostic(completed))
-
-    def test_template_modes_emit_parseable_json(self) -> None:
-        for mode in TEMPLATE_MODES:
-            with self.subTest(mode=mode):
-                completed = self.run_cli(("template", "--mode", mode))
-                self.assert_success(completed)
-                document = json.loads(completed.stdout)
-                self.assertEqual("weaveprofiler-template/v1", document["schema"])
-                self.assertEqual(mode, document["mode"])
-                self.assertIsInstance(document["argv"], list)
-                self.assertGreaterEqual(len(document["argv"]), 4)
-                self.assertEqual(mode, document["argv"][3])
-                if mode == "gemm-probe":
-                    self.assertEqual(
-                        "/opt/venv/python3.14.4/bin/python3", document["argv"][0]
-                    )
 
     def test_gemm_probe_dispatches_to_the_packaged_probe(self) -> None:
         completed = self.run_cli(("gemm-probe", "--help"))
