@@ -9,12 +9,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-for rel in ("weaveprof/pipeline/validate", "weaveprof/pipeline/scan", "weaveprof/pipeline/validate/harness", "weaveprof/pipeline/capture"):
+for rel in ("weaveprof/pipeline/validate/harness", "weaveprof/pipeline/capture"):
     path = str(ROOT / rel)
     if path not in sys.path:
         sys.path.insert(0, path)
 
-import deliver_gate  # noqa: E402
 import hooklib  # noqa: E402
 import merge_hw_into_perfetto  # noqa: E402
 import verify_receipt  # noqa: E402
@@ -44,19 +43,13 @@ def contract(card="h20", platform="nv", arch="sm_90"):
     }
 
 
-def failure_text(failures):
-    return "\n".join("{}: {}".format(item[0], item[1]) for item in failures)
-
-
 class FilenameSchemaTests(unittest.TestCase):
     def test_all_three_cards_match_every_spec1_regex(self):
         for card in ("h20", "b300", "mi308x", "sm86"):
             name = BASE.format(card=card)
-            for regex in (deliver_gate.CANONICAL_TRACE_FILENAME_RE,
-                          verify_receipt.SPEC1, hooklib.SPEC1,
+            for regex in (verify_receipt.SPEC1, hooklib.SPEC1,
                           merge_hw_into_perfetto.TRACE_FILENAME_RE):
                 self.assertIsNotNone(regex.match(name), (name, regex.pattern))
-            self.assertEqual(deliver_gate.parse_trace_filename(name)["card"], card)
             self.assertEqual(verify_receipt.SPEC1.match(name).group("card"), card)
             self.assertTrue(hooklib.SPEC1_IN_TEXT.search("cp x " + name))
 
@@ -68,12 +61,9 @@ class FilenameSchemaTests(unittest.TestCase):
             BASE.format(card="b300").replace("_ph6", "_ph"),
         )
         for name in bad_names:
-            for regex in (deliver_gate.CANONICAL_TRACE_FILENAME_RE,
-                          verify_receipt.SPEC1, hooklib.SPEC1,
+            for regex in (verify_receipt.SPEC1, hooklib.SPEC1,
                           merge_hw_into_perfetto.TRACE_FILENAME_RE):
                 self.assertIsNone(regex.match(name), (name, regex.pattern))
-            failures, _ = deliver_gate.check_trace_filename_schema(Path(name), contract())
-            self.assertTrue(failures, name)
             if "__card-" not in name:
                 self.assertTrue(hooklib.SPEC1_IN_TEXT.search("cp x " + name),
                                 "legacy trace must enter the guarded namespace")
@@ -87,9 +77,6 @@ class FilenameSchemaTests(unittest.TestCase):
 
 class TargetCardTests(unittest.TestCase):
     def assert_valid(self, doc, card):
-        canonical, failures = deliver_gate.validate_target_card(doc)
-        self.assertEqual(failures, [], failure_text(failures))
-        self.assertEqual(canonical, card)
         errors = []
         self.assertEqual(verify_receipt.check_target_card(errors, doc), card)
         self.assertEqual(errors, [])
@@ -112,16 +99,12 @@ class TargetCardTests(unittest.TestCase):
             (contract("mi308x", "nv", "gfx942"), "target_platform_mismatch"),
             (contract("mi308x", "amd", "sm_90"), "target_arch_mismatch"),
         )
-        for doc, expected in cases:
-            _card, failures = deliver_gate.validate_target_card(doc)
-            self.assertIn(expected, failure_text(failures), (doc, failures))
+        for doc, _expected in cases:
             errors = []
             verify_receipt.check_target_card(errors, doc)
             self.assertTrue(errors, doc)
 
     def test_b300_is_not_locked_to_one_architecture(self):
-        self.assertEqual(deliver_gate.CARD_TARGETS["b300"]["arches"],
-                         frozenset(("sm_100a", "sm_103a")))
         self.assertEqual(merge_hw_into_perfetto.CARD_TARGETS["b300"]["arches"],
                          frozenset(("sm_100a", "sm_103a")))
 
@@ -130,8 +113,6 @@ class ReconciliationTests(unittest.TestCase):
     def test_filename_card_must_match_contract(self):
         name = BASE.format(card="mi308x")
         doc = contract("h20", "nv", "sm_90")
-        failures, _ = deliver_gate.check_trace_filename_schema(Path(name), doc)
-        self.assertIn("target.card", failure_text(failures))
         errors = []
         verify_receipt.check_filename(errors, name, doc)
         self.assertTrue(any("target.card" in item for item in errors), errors)
@@ -147,7 +128,6 @@ class ReconciliationTests(unittest.TestCase):
         for card, platform, arch, bundle in cases:
             name = BASE.format(card=card)
             doc = contract(card, platform, arch)
-            self.assertEqual(deliver_gate.check_trace_filename_schema(Path(name), doc)[0], [])
             errors = []
             verify_receipt.check_filename(errors, name, doc)
             self.assertEqual(errors, [])
@@ -162,8 +142,6 @@ class ReconciliationTests(unittest.TestCase):
         doc = contract()
         doc.pop("target")
         name = BASE.format(card="h20")
-        failures, _ = deliver_gate.check_trace_filename_schema(Path(name), doc)
-        self.assertIn("target_missing", failure_text(failures))
         errors = []
         verify_receipt.check_filename(errors, name, doc)
         self.assertTrue(any("contract target missing" in item for item in errors), errors)

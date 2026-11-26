@@ -361,8 +361,6 @@ run_item "RECORDER tests/frontend_api_check.py" \
   "${PY_RUN[@]}" tests/frontend_api_check.py
 run_item "RECORDER tests/test_hip_recorder.py --compile-only" \
   "${PY_RUN[@]}" tests/test_hip_recorder.py --compile-only
-run_item "ROUTE tests/quick_scan_registry_test.py" \
-  "${PY_RUN[@]}" tests/quick_scan_registry_test.py
 
 # Harness is hermetic and builds its fixture in a temporary directory.
 run_item "HARNESS tests/test_harness_manifest.py" \

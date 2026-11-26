@@ -1,10 +1,10 @@
 {
  "broad_except": 66,
- "core_code_lines": 53565,
- "core_files": 76,
- "print_calls": 355,
- "py_functions": 1496,
- "py_functions_over_100_lines": 108,
- "py_functions_over_300_lines": 17,
- "swallowed_except": 104
+ "core_code_lines": 47556,
+ "core_files": 71,
+ "print_calls": 309,
+ "py_functions": 1315,
+ "py_functions_over_100_lines": 95,
+ "py_functions_over_300_lines": 16,
+ "swallowed_except": 98
 }
