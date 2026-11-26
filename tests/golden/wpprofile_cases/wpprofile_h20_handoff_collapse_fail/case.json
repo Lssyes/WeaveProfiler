@@ -1,0 +1,42 @@
+{
+  "arch": "sm_90a",
+  "capture_bench": "cuda_bench.py",
+  "card": "h20",
+  "case": "wpprofile_h20_handoff_collapse_fail",
+  "description": "Hoisted mma probe (L22..27) at K=8192: FAIL on pairing check via granularity gate SINGLE_STAGE_LOOP_COLLAPSE",
+  "entry_source": "handoff.cu",
+  "inputs_sha256": {
+    "baseline.bin": "460ac780390fca630718ea986658ef2f3dbfe93a28e5af2e08505b61b7d90ccf",
+    "baseline_source": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+    "capture.fi02.bin": "63d6bffab9afaaca07952b6eb3a00118353a2f1dbb30585996f0121e428662b1",
+    "capture.sqlite(sanitized)": "d630d6b6f374e02c186ef185cac00cd238bb4f7d6c4a90eadd818bf11b56211c",
+    "capture_bench": "4d7d1f68ce253549477e6b9a9372c1e2646ca7025238ae37d4e9154d9dd3501f",
+    "entry_source": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+    "inst.sass": "4c6b2af59eaf5ec10b55e7b7409c3d6f31374e34dca09b0c927038309fba1db8",
+    "instrumented.bin": "460ac780390fca630718ea986658ef2f3dbfe93a28e5af2e08505b61b7d90ccf",
+    "instrumented_source": "d7a8538f0739b66e3056cb5e0c2e3331c89fcd93c953e905945c58e74872dd45",
+    "l0.sass": "2a0f9de7f750d5ebe215a9e6aee517caf5fd51e36ae4cfa7ac507cea1ccd504d",
+    "probe.json(source)": "18f6674ea9773c635819e6bd723c8526a1d7185c3bd781f1117d5348d2f35d27",
+    "runtime.json(sanitized)": "857234ef509501083ebef8a2d71bb418bee926bb388cddaa8a5d4a3347dbb739"
+  },
+  "k_steps": 8192,
+  "limit": 0.1,
+  "max_rounds": 1,
+  "out_name": "overview.png",
+  "probe": "probe.json",
+  "provenance": {
+    "base_commit": "2933fb1548806549ba934844b758d58cd565c7ad",
+    "capture_host": "<CAPTURE_HOST>",
+    "capture_run_dir": "<REMOTE_RUN_DIR>/runs/A1p",
+    "gpu_model": "NVIDIA H20",
+    "hw_counters_enabled": false,
+    "run_tag": "A1p"
+  },
+  "sizes": {
+    "capture_fi02_raw_bytes": 832,
+    "capture_fi02_xz_bytes": 220,
+    "capture_sqlite_sanitized_bytes": 24576,
+    "capture_sqlite_xz_bytes": 2288
+  },
+  "suspected_bugs_pinned": []
+}

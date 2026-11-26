@@ -1,0 +1,42 @@
+{
+  "arch": "sm_90a",
+  "capture_bench": "cuda_bench_hw.py",
+  "card": "h20",
+  "case": "wpprofile_h20_handoff_round2_pass",
+  "description": "Hoisted mma probe (L22..27) at K=4096 with 360 in-window 200 kHz GPU_METRICS samples: PASS with 4-panel viz.py overview",
+  "entry_source": "handoff.cu",
+  "inputs_sha256": {
+    "baseline.bin": "b11ecb7901f1cd115f36f6e4f9ba170bc9a3783bb0949a93a5b0c2e4c488f6ed",
+    "baseline_source": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+    "capture.fi02.bin": "bea0521f4b1a54fda002503630a478bb8d24ef043ec0a30854d448dfebbf7bdf",
+    "capture.sqlite(sanitized)": "208efdb7df1671c2fc1d3e4bb40e3921077f065b735c52662f78207205304658",
+    "capture_bench": "0bb24599f7e3df4023f885307431512e74cd0f01e3e72f76edffdb03dc612a0b",
+    "entry_source": "6dc1bf0f154877e8df7ab2b433e4cd496a3db116dd3aeee2f10fceaafb6cc004",
+    "inst.sass": "4c6b2af59eaf5ec10b55e7b7409c3d6f31374e34dca09b0c927038309fba1db8",
+    "instrumented.bin": "b11ecb7901f1cd115f36f6e4f9ba170bc9a3783bb0949a93a5b0c2e4c488f6ed",
+    "instrumented_source": "d7a8538f0739b66e3056cb5e0c2e3331c89fcd93c953e905945c58e74872dd45",
+    "l0.sass": "2a0f9de7f750d5ebe215a9e6aee517caf5fd51e36ae4cfa7ac507cea1ccd504d",
+    "probe.json(source)": "18f6674ea9773c635819e6bd723c8526a1d7185c3bd781f1117d5348d2f35d27",
+    "runtime.json(sanitized)": "14931248fa56430eb46c228123ef3f26696f5a6ef2c07e5b37f93070aa48dad4"
+  },
+  "k_steps": 4096,
+  "limit": 0.1,
+  "max_rounds": 1,
+  "out_name": "overview.png",
+  "probe": "probe.json",
+  "provenance": {
+    "base_commit": "9245b14543f4ba03122ebe31510abadf3d1e9134",
+    "capture_host": "<CAPTURE_HOST>",
+    "capture_run_dir": "<REMOTE_RUN_DIR>/runs/B_9245b14_r2",
+    "gpu_model": "NVIDIA H20",
+    "hw_counters_enabled": true,
+    "run_tag": "B_9245b14_r2"
+  },
+  "sizes": {
+    "capture_fi02_raw_bytes": 832,
+    "capture_fi02_xz_bytes": 228,
+    "capture_sqlite_sanitized_bytes": 835584,
+    "capture_sqlite_xz_bytes": 51936
+  },
+  "suspected_bugs_pinned": []
+}

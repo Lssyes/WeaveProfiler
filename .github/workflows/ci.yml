@@ -29,5 +29,7 @@ jobs:
         run: python -B -m unittest -v tests/quality/test_code_metrics_ratchet.py
       - name: golden end-to-end (3 real H20 captures)
         run: python -B -m unittest -v tests/golden/test_golden_audit.py
+      - name: wp.profile replay (4 real H20 captures)
+        run: python -B -m unittest -v tests/golden/test_wpprofile_replay.py
       - name: legacy offline suite (known failures allowed)
         run: PYTHON=python bash tests/ci_offline.sh
